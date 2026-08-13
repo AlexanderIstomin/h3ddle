@@ -112,6 +112,7 @@ private let engineCapabilities = EngineCapabilities(
     ]
     if executableIsAvailable(named: "ffmpeg", override: "H3_FFMPEG") {
       features.append(.videoGeneration)
+      features.append(.standaloneAudioGeneration)
     }
     return features
   }()
@@ -227,15 +228,47 @@ private final class EngineResourceWatch: @unchecked Sendable {
   }
 }
 
-private func executableIsAvailable(named name: String, override key: String) -> Bool {
+private func resolveTool(named name: String, override key: String) -> String? {
   let environment = ProcessInfo.processInfo.environment
   if let override = environment[key], FileManager.default.isExecutableFile(atPath: override) {
-    return true
+    return override
   }
   return (environment["PATH"] ?? "")
     .split(separator: ":")
     .map { URL(fileURLWithPath: String($0)).appendingPathComponent(name).path }
-    .contains(where: FileManager.default.isExecutableFile(atPath:))
+    .first(where: FileManager.default.isExecutableFile(atPath:))
+}
+
+private func executableIsAvailable(named name: String, override key: String) -> Bool {
+  resolveTool(named: name, override: key) != nil
+}
+
+/// Community audio is the soundtrack of a joint H3 render. Lift AAC out of
+/// the throwaway 32×32 mux so the audio lane never has to keep the pictures.
+private func extractSoundtrack(from video: URL, to audio: URL) -> String? {
+  guard let ffmpeg = resolveTool(named: "ffmpeg", override: "H3_FFMPEG") else {
+    return "FFmpeg is required to extract H3 audio"
+  }
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: ffmpeg)
+  // The joint mux already encoded AAC (192k); stream-copy instead of paying
+  // a second lossy generation.
+  process.arguments = [
+    "-y", "-i", video.path, "-vn", "-c:a", "copy", audio.path,
+  ]
+  process.standardOutput = FileHandle.nullDevice
+  process.standardError = FileHandle.nullDevice
+  do {
+    try process.run()
+    process.waitUntilExit()
+  } catch {
+    return "Could not start FFmpeg to extract audio"
+  }
+  guard process.terminationStatus == 0, FileManager.default.isReadableFile(atPath: audio.path)
+  else {
+    return "FFmpeg could not extract the H3 soundtrack"
+  }
+  return nil
 }
 
 private func modelComponents(_ model: h3_model_info) -> [EngineModelComponent] {
@@ -498,8 +531,10 @@ private final class EngineRuntime: @unchecked Sendable {
     }
     switch request.kind {
     case .audio:
-      EngineOutput.fail(command, message: "h3.c does not support standalone audio generation")
-      return
+      guard engineCapabilities.supports(.standaloneAudioGeneration) else {
+        EngineOutput.fail(command, message: "FFmpeg is required to extract H3 audio")
+        return
+      }
     case .video:
       guard engineCapabilities.supports(.videoGeneration) else {
         EngineOutput.fail(command, message: "FFmpeg is required for H3 video output")
@@ -596,12 +631,15 @@ private final class EngineRuntime: @unchecked Sendable {
       var parameters = h3ddle_h3_default_params()
       // Community stills are a short H3 clip plus one decoded frame. h3.c
       // rejects anything below one trained 22-frame VAE chunk.
+      // Community audio is the same joint model at 32×32; soundtrack only.
       let stillRequested = request.kind == .image
+      let audioRequested = request.kind == .audio
       parameters.frames =
         stillRequested ? 22 : h3ddle_h3_frames_for_seconds(request.duration)
-      parameters.preview_denoise = request.previewDenoise ? 1 : 0
+      parameters.preview_denoise = request.previewDenoise && !audioRequested ? 1 : 0
       parameters.on_frame =
-        request.previewDenoise || stillRequested ? generationFrameCallback : nil
+        (request.previewDenoise && !audioRequested) || stillRequested
+        ? generationFrameCallback : nil
       parameters.on_progress = generationProgressCallback
       // Every request carries a validated preset; without this the engine
       // falls back to its 864x480 close-reference defaults regardless of
@@ -619,8 +657,9 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.use_reference_rope = 1
       }
       let quality = request.quality
-      parameters.width = Int32(quality.canvasSize)
-      parameters.height = Int32(quality.canvasSize)
+      let canvas = audioRequested ? 32 : quality.canvasSize
+      parameters.width = Int32(canvas)
+      parameters.height = Int32(canvas)
       parameters.render_width = 0
       parameters.render_height = 0
       parameters.steps = Int32(quality.denoisingSteps)
@@ -647,9 +686,19 @@ private final class EngineRuntime: @unchecked Sendable {
       parameters.callback_opaque = opaque
       defer { Unmanaged<GenerationCallbackContext>.fromOpaque(opaque).release() }
 
+      let scratchURL =
+        request.outputURL
+        .deletingPathExtension()
+        .appendingPathExtension("scratch.mp4")
       request.prompt.withCString { prompt in
-        request.outputURL.path.withCString { outputPath in
-          // Skip FFmpeg mux for stills; the last decoded frame is written as PNG.
+        (audioRequested ? scratchURL : request.outputURL).path.withCString { outputPath in
+          defer {
+            if audioRequested {
+              try? FileManager.default.removeItem(at: scratchURL)
+            }
+          }
+          // Stills skip mux and keep a PNG. Audio muxes a tiny 32×32 clip
+          // only so the soundtrack can be lifted out.
           parameters.output_path = stillRequested ? nil : outputPath
           guard let result = h3_generate(context, prompt, &parameters) else {
             if callbackContext.isCancelled {
@@ -690,6 +739,15 @@ private final class EngineRuntime: @unchecked Sendable {
                 command,
                 message: "H3 finished without a decodable still frame"
               )
+              return
+            }
+          }
+
+          if audioRequested {
+            if let extractError = extractSoundtrack(
+              from: scratchURL, to: request.outputURL
+            ) {
+              EngineOutput.fail(command, message: extractError)
               return
             }
           }

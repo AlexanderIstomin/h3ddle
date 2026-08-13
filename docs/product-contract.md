@@ -9,6 +9,8 @@
 - Visual generation appends video or image media to the visual end.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
+- Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
+  audio model. Duration follows the same 22+17n frame shapes as video.
 - Audio generation appends audio to the current audio end.
 - Disabling keeps an item recoverable. Removing audio does not shift later audio.
 - Each visual video can include or mute its native soundtrack.

@@ -87,14 +87,14 @@ struct GenerationStudioView: View {
             .font(.system(size: 12, weight: .semibold))
           Spacer()
           Text(
-            kind == .video && model.nativeVideoGenerationIsReady
+            usesAlignedH3Duration
               ? String(format: "%.1f s · %d frames", alignedSeconds, alignedFrames)
               : String(format: "%.0f seconds", duration)
           )
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundStyle(H3Color.textSecondary)
         }
-        if kind == .video, model.nativeVideoGenerationIsReady {
+        if usesAlignedH3Duration {
           // H3 only produces 22 + 17n frame clips; snapping the slider to
           // those shapes keeps the shortest (cheapest) clip reachable and
           // makes the shown duration the real one.
@@ -112,6 +112,14 @@ struct GenerationStudioView: View {
           .foregroundStyle(H3Color.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
         }
+        if kind == .audio, model.nativeAudioGenerationIsReady {
+          Text(
+            "H3 has no audio-only model. It generates a 32×32 clip and keeps the soundtrack, the community audio recipe."
+          )
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
         if kind == .video, model.nativeVideoGenerationIsReady, alignedSeconds > 3 {
           Text(
             "Long H3 clips increase transformer work sharply. Start with the shortest clip on M1-class Macs."
@@ -123,26 +131,28 @@ struct GenerationStudioView: View {
       }
 
       if usesNativeVisualSettings {
-        VStack(alignment: .leading, spacing: H3Spacing.small) {
-          Text("Quality")
-            .font(.system(size: 12, weight: .semibold))
-          Picker("Quality", selection: $quality) {
-            ForEach(EngineGenerationQuality.allCases, id: \.self) { tier in
-              Text(tier.displayName).tag(tier)
+        if kind != .audio {
+          VStack(alignment: .leading, spacing: H3Spacing.small) {
+            Text("Quality")
+              .font(.system(size: 12, weight: .semibold))
+            Picker("Quality", selection: $quality) {
+              ForEach(EngineGenerationQuality.allCases, id: \.self) { tier in
+                Text(tier.displayName).tag(tier)
+              }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("generation-quality")
+            Text(quality.guidance)
+              .font(.system(size: 10))
+              .foregroundStyle(H3Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .accessibilityIdentifier("generation-quality")
-          Text(quality.guidance)
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .onChange(of: quality) { _, changed in
-          denoisingSteps = Double(changed.denoisingSteps)
-          activeDiTLayers = changed.activeDiTLayers
-          coreReuse = 1
+          .onChange(of: quality) { _, changed in
+            denoisingSteps = Double(changed.denoisingSteps)
+            activeDiTLayers = changed.activeDiTLayers
+            coreReuse = 1
+          }
         }
 
         VStack(alignment: .leading, spacing: H3Spacing.small) {
@@ -213,22 +223,24 @@ struct GenerationStudioView: View {
           .fixedSize(horizontal: false, vertical: true)
         }
 
-        Toggle(isOn: $model.previewDenoise) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Denoising preview")
-              .font(.system(size: 12, weight: .semibold))
-            Text(
-              "Decode a still after every pass so you can cancel early. "
-                + "Each still is a full VideoVAE pass and does not change the final video."
-            )
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
+        if kind != .audio {
+          Toggle(isOn: $model.previewDenoise) {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Denoising preview")
+                .font(.system(size: 12, weight: .semibold))
+              Text(
+                "Decode a still after every pass so you can cancel early. "
+                  + "Each still is a full VideoVAE pass and does not change the final video."
+              )
+              .font(.system(size: 10))
+              .foregroundStyle(H3Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+            }
           }
+          .toggleStyle(.switch)
+          .tint(H3Color.accent)
+          .accessibilityIdentifier("generation-preview-toggle")
         }
-        .toggleStyle(.switch)
-        .tint(H3Color.accent)
-        .accessibilityIdentifier("generation-preview-toggle")
       }
 
       if model.isGenerating {
@@ -338,12 +350,16 @@ struct GenerationStudioView: View {
   }
 
   private var usesNativeVisualSettings: Bool {
+    model.usesNativeEngine(for: kind)
+  }
+
+  private var usesAlignedH3Duration: Bool {
     (kind == .video && model.nativeVideoGenerationIsReady)
-      || (kind == .image && model.nativeImageGenerationIsReady)
+      || (kind == .audio && model.nativeAudioGenerationIsReady)
   }
 
   private var requestedDuration: Double {
-    guard kind == .video, model.nativeVideoGenerationIsReady else { return duration }
+    guard usesAlignedH3Duration else { return duration }
     // The engine rounds seconds up to the next legal frame shape; asking for
     // half a frame less than the target keeps float error from tipping the
     // request into the next 17-frame chunk.

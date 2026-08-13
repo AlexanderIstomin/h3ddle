@@ -19,15 +19,9 @@ case "$engine_handshake" in
         ;;
 esac
 case "$engine_handshake" in
-    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*) ;;
+    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"standaloneAudioGeneration"'*) ;;
     *)
         echo "Engine generation capabilities are incomplete." >&2
-        exit 1
-        ;;
-esac
-case "$engine_handshake" in
-    *'standaloneAudioGeneration'*)
-        echo "Engine incorrectly advertised standalone audio generation." >&2
         exit 1
         ;;
 esac

@@ -27,15 +27,15 @@ struct EngineClientTests {
     )
   }
 
-  @Test("The H3 provider rejects standalone audio before launching")
-  func standaloneAudioIsUnsupported() async {
+  @Test("A missing helper fails the same way for audio as for video")
+  func audioUsesTheNativeHelper() async {
     let provider = EngineGenerationProvider(
-      executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+      executableURL: URL(fileURLWithPath: "/path/that/does/not/exist"),
       modelDirectory: URL(fileURLWithPath: "/tmp/model", isDirectory: true)
     )
     let request = GenerationRequest(kind: .audio, prompt: "Soft room tone", duration: 4)
 
-    await #expect(throws: EngineGenerationProviderError.self) {
+    await #expect(throws: EngineClientError.self) {
       for try await _ in provider.events(for: request) {}
     }
   }

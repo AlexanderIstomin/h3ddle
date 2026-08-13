@@ -53,12 +53,18 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
     for request: GenerationRequest
   ) -> AsyncThrowingStream<GenerationEvent, any Error> {
     AsyncThrowingStream { continuation in
-      guard request.kind == .video || request.kind == .image else {
-        continuation.finish(
-          throwing: EngineGenerationProviderError.unsupportedKind(request.kind)
-        )
-        return
-      }
+      let outputExtension =
+        switch request.kind {
+        case .image: "png"
+        case .audio: "m4a"
+        case .video: "mp4"
+        }
+      let engineKind: EngineGenerationKind =
+        switch request.kind {
+        case .image: .image
+        case .audio: .audio
+        case .video: .video
+        }
       guard !request.prompt.isEmpty else {
         continuation.finish(throwing: GenerationError.emptyPrompt)
         return
@@ -68,12 +74,12 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
       let outputURL =
         outputDirectory
         .appendingPathComponent(jobID.uuidString)
-        .appendingPathExtension(request.kind == .image ? "png" : "mp4")
+        .appendingPathExtension(outputExtension)
       let command = EngineCommand(
         jobID: jobID,
         kind: .generate,
         generation: EngineGenerationRequest(
-          kind: request.kind == .image ? .image : .video,
+          kind: engineKind,
           prompt: request.prompt,
           duration: request.duration,
           quality: request.quality,
@@ -112,13 +118,17 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
                 continuation.finish(throwing: EngineGenerationProviderError.missingOutput)
                 return true
               }
+              let displayName =
+                switch request.kind {
+                case .image: "Generated H3 Image"
+                case .audio: "Generated H3 Audio"
+                case .video: "Generated H3 Video"
+                }
               continuation.yield(
                 .completed(
                   AssetReference(
                     kind: request.kind.mediaKind,
-                    displayName: request.kind == .image
-                      ? "Generated H3 Image"
-                      : "Generated H3 Video",
+                    displayName: displayName,
                     url: completedURL,
                     duration: event.outputDuration ?? request.duration
                   )

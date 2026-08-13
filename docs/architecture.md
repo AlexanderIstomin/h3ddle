@@ -41,7 +41,9 @@ generation kinds use a fake provider. `EngineGenerationProvider` translates
 validated video and still requests into engine commands and consumes progress,
 completion, failure, and cancellation events without loading weights in the app
 process. Stills follow the community recipe: one 22-frame H3 chunk, keep the
-last decoded frame, skip FFmpeg mux.
+last decoded frame, skip FFmpeg mux. Audio follows the community 32×32
+soundtrack recipe: run the joint model at the mechanical minimum canvas,
+mux a throwaway clip, keep only the AAC.
 
 The engine service is deliberately single-job. Keeping `h3_ctx` in that process
 allows later interactive cache reuse while still permitting the app to reclaim

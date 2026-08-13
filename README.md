@@ -25,9 +25,9 @@ The first scaffold includes:
 
 Generated video plays with native macOS controls in the editor and can be copied
 to a user-selected location. Export composition is still a placeholder.
-Standalone audio still uses the prototype provider; `h3.c` does not expose
-audio-only output. Image generation uses the community still recipe: the
-shortest trained 22-frame H3 chunk, then the last decoded frame as a PNG.
+Image generation uses the community still recipe: the shortest trained
+22-frame H3 chunk, then the last decoded frame as a PNG. Audio uses the
+community soundtrack recipe: a 32×32 joint clip, then the AAC track only.
 
 ## Requirements
 

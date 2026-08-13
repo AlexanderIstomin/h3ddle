@@ -133,6 +133,21 @@ struct EngineProtocolTests {
     }
   }
 
+  @Test("Audio generation requests round trip as soundtrack jobs")
+  func audioGenerationRequest() throws {
+    let request = EngineGenerationRequest(
+      kind: .audio,
+      prompt: "Soft rain",
+      duration: 2,
+      outputURL: URL(fileURLWithPath: "/tmp/rain.m4a")
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(request)
+    )
+    #expect(decoded.kind == .audio)
+  }
+
   @Test("Image generation requests round trip as stills")
   func imageGenerationRequest() throws {
     let request = EngineGenerationRequest(

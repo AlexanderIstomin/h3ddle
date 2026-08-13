@@ -141,14 +141,15 @@ final class AppModel {
     coreReuse: Int? = nil,
     previewDenoise: Bool = false
   ) -> String {
-    if (kind == .video && nativeVideoGenerationIsReady)
-      || (kind == .image && nativeImageGenerationIsReady)
-    {
-      let canvas = "\(quality.canvasSize)×\(quality.canvasSize)"
+    if usesNativeEngine(for: kind) {
+      let canvas = kind == .audio ? "32×32" : "\(quality.canvasSize)×\(quality.canvasSize)"
       let steps = denoisingSteps ?? quality.denoisingSteps
       var parts = ["Local h3.c"]
       if kind == .image {
         parts.append("22-frame still")
+      }
+      if kind == .audio {
+        parts.append("soundtrack only")
       }
       parts.append(contentsOf: [canvas, "\(steps) denoising passes"])
       let layers = activeDiTLayers ?? quality.activeDiTLayers
@@ -234,10 +235,7 @@ final class AppModel {
       coreReuse: coreReuse,
       previewDenoise: previewDenoise
     )
-    let nativeModelDirectory =
-      ((kind == .video && nativeVideoGenerationIsReady)
-        || (kind == .image && nativeImageGenerationIsReady))
-      ? modelDirectory : nil
+    let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
         EngineGenerationProvider(
@@ -310,6 +308,20 @@ final class AppModel {
     modelValidationState == .ready
       && engineCapabilities?.supports(.imageGeneration) == true
       && modelReport?.supportsGeneration == true
+  }
+
+  var nativeAudioGenerationIsReady: Bool {
+    modelValidationState == .ready
+      && engineCapabilities?.supports(.standaloneAudioGeneration) == true
+      && modelReport?.supportsGeneration == true
+  }
+
+  func usesNativeEngine(for kind: GenerationKind) -> Bool {
+    switch kind {
+    case .video: nativeVideoGenerationIsReady
+    case .image: nativeImageGenerationIsReady
+    case .audio: nativeAudioGenerationIsReady
+    }
   }
 
   func cancelGeneration() {
@@ -591,10 +603,11 @@ final class AppModel {
     coreReuse: Int?,
     previewDenoise: Bool
   ) -> String {
-    guard kind == .video || kind == .image else {
+    guard kind == .video || kind == .image || kind == .audio else {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)
     }
-    let canvas = "\(quality.canvasSize)×\(quality.canvasSize)"
+    let canvas =
+      kind == .audio ? "32×32" : "\(quality.canvasSize)×\(quality.canvasSize)"
     let steps = denoisingSteps ?? quality.denoisingSteps
     let layers = activeDiTLayers ?? quality.activeDiTLayers
     let core = coreReuse ?? 1

@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted for the initial scaffold.
+Superseded for local H3 audio: the engine now derives a standalone soundtrack
+from a 32×32 joint render (community recipe). Dedicated audio models remain
+allowed later.
 
 ## Context
 

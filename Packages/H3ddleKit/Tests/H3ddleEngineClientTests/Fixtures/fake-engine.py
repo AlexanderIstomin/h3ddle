@@ -14,6 +14,7 @@ CAPABILITIES = {
         "modelInspection",
         "videoGeneration",
         "imageGeneration",
+        "standaloneAudioGeneration",
         "embeddedAudio",
         "cancellation",
         "denoisingPreviews",
