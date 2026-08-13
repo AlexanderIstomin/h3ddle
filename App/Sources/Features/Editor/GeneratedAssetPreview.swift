@@ -67,7 +67,7 @@ struct GeneratedAssetPreview: View {
         unavailableMedia
       }
     case .audio:
-      unavailableMedia
+      AudioPreviewPlayer(url: asset.url, duration: asset.duration)
     }
   }
 
@@ -96,7 +96,7 @@ struct GeneratedAssetPreview: View {
   }
 }
 
-private struct NativeVideoPlayer: NSViewRepresentable {
+struct NativeVideoPlayer: NSViewRepresentable {
   let url: URL
 
   func makeNSView(context: Context) -> AVPlayerView {

@@ -18,10 +18,8 @@ public struct ProgramCompositionPlan: Hashable, Sendable {
   public var trailingAudioDuration: TimeInterval
 
   public init(project: H3ddleProject) {
-    var cursor: TimeInterval = 0
-    visualSegments = project.timeline.visualItems.map { item in
-      defer { cursor += item.duration }
-      return PlannedVisualSegment(item: item, startTime: cursor)
+    visualSegments = project.timeline.visualPlacements.map { placement in
+      PlannedVisualSegment(item: placement.item, startTime: placement.startTime)
     }
     audioItems = project.timeline.audioItems
     duration = project.timeline.visualDuration

@@ -11,7 +11,7 @@ not stored in this repository or bundled by the scaffold.
 
 The first scaffold includes:
 
-- a native macOS editor shell;
+- a native macOS editor shell with a Project settings panel;
 - ordered visual items and explicitly timed audio items;
 - append, disable, and remove domain behavior;
 - a provider-neutral Generate Studio with explicit prototype fallbacks;
@@ -23,8 +23,8 @@ The first scaffold includes:
 - reserved AVFoundation export boundaries; and
 - public-boundary, unit, engine, and Xcode build checks.
 
-Generated video plays with native macOS controls in the editor and can be copied
-to a user-selected location. Export composition is still a placeholder.
+Generated video plays on the program canvas at the shared playhead. Export
+composition is still a placeholder.
 Image generation uses the community still recipe: the shortest trained
 22-frame H3 chunk, then the last decoded frame as a PNG. Audio uses the
 community soundtrack recipe: a 32×32 joint clip, then the AAC track only.

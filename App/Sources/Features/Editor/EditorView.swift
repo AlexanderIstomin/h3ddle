@@ -1,26 +1,44 @@
-import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleGeneration
 import SwiftUI
 
 struct EditorView: View {
   @Bindable var model: AppModel
+  @State private var appendMenu: AppendMenuPlacement?
 
   var body: some View {
-    VStack(spacing: 0) {
-      toolbar
-      Divider().overlay(H3Color.line)
-      preview
-      Divider().overlay(H3Color.line)
-      ProgramTimelineView(model: model)
-        .frame(height: 244)
+    ZStack {
+      VStack(spacing: 0) {
+        toolbar
+        Divider().overlay(H3Color.line)
+        HStack(spacing: 0) {
+          if model.showsProjectSettings {
+            ProjectSettingsPanel(model: model)
+          }
+          VStack(spacing: 0) {
+            ProgramCanvasView(model: model)
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+              TransportBarView(model: model)
+              ProgramTimelineView(model: model, appendMenu: $appendMenu)
+            }
+          }
+        }
+      }
+      .background(H3Color.canvas)
+      .foregroundStyle(H3Color.textPrimary)
+      .coordinateSpace(name: editorSpace)
+      .overlay(alignment: .topLeading) {
+        appendMenuOverlay
+      }
+
+      if let kind = model.activeGenerationKind {
+        GenerationStudioView(model: model, kind: kind)
+          .transition(.opacity)
+      }
     }
-    .background(H3Color.canvas)
-    .foregroundStyle(H3Color.textPrimary)
-    .sheet(item: $model.activeGenerationKind) { kind in
-      GenerationStudioView(model: model, kind: kind)
-        .interactiveDismissDisabled(model.isGenerating)
-    }
+    .animation(.easeOut(duration: 0.16), value: model.activeGenerationKind)
+    .animation(.easeOut(duration: 0.16), value: model.showsProjectSettings)
     .sheet(isPresented: $model.showsModelSettings) {
       ModelSettingsView(model: model)
     }
@@ -30,6 +48,39 @@ struct EditorView: View {
       Text(
         "The native AVFoundation export pipeline is reserved by the scaffold but not implemented in this slice."
       )
+    }
+    .onKeyPress(.space) {
+      guard model.activeGenerationKind == nil else { return .ignored }
+      model.togglePlayback()
+      return .handled
+    }
+  }
+
+  private let editorSpace = "editor-root"
+
+  @ViewBuilder
+  private var appendMenuOverlay: some View {
+    if let appendMenu {
+      ZStack(alignment: .topLeading) {
+        Color.clear
+          .contentShape(Rectangle())
+          .onTapGesture {
+            self.appendMenu = nil
+          }
+        TimelineAppendMenu(
+          trackName: appendMenu.isVisual ? "V1" : "A1",
+          appendTime: appendMenu.isVisual
+            ? model.project.timeline.visualDuration
+            : model.project.timeline.audioTrackEnd,
+          items: appendMenu.isVisual
+            ? TimelineAppendMenu.visualItems()
+            : TimelineAppendMenu.audioItems()
+        ) { item in
+          self.appendMenu = nil
+          model.presentGeneration(item.kind)
+        }
+        .offset(x: appendMenu.origin.x, y: appendMenu.origin.y)
+      }
     }
   }
 
@@ -42,22 +93,23 @@ struct EditorView: View {
           .overlay {
             Text("H3")
               .font(.system(size: 9, weight: .black, design: .rounded))
-              .foregroundStyle(H3Color.canvas)
+              .foregroundStyle(Color.white)
           }
         Text("H3ddle")
           .font(.system(size: 15, weight: .semibold))
           .accessibilityIdentifier("editor-root")
+
+        Button {
+          model.showsProjectSettings.toggle()
+        } label: {
+          Image(systemName: "slider.vertical.3")
+        }
+        .buttonStyle(H3IconButtonStyle(isActive: model.showsProjectSettings, size: 30))
+        .help(model.showsProjectSettings ? "Close Project panel" : "Open Project panel")
+        .accessibilityIdentifier("project-settings-toggle")
       }
 
-      Divider()
-        .overlay(H3Color.line)
-        .frame(height: 20)
-
-      Text(model.project.name)
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(H3Color.textSecondary)
-
-      Spacer()
+      Spacer(minLength: 0)
 
       Button {
         model.showsModelSettings = true
@@ -71,7 +123,7 @@ struct EditorView: View {
             .foregroundStyle(H3Color.textSecondary)
         }
       }
-      .buttonStyle(.plain)
+      .buttonStyle(H3QuietButtonStyle())
       .accessibilityIdentifier("model-status")
 
       Button("Export") {
@@ -81,8 +133,8 @@ struct EditorView: View {
       .accessibilityIdentifier("export-button")
     }
     .padding(.horizontal, H3Spacing.medium)
-    .frame(height: 52)
-    .background(H3Color.surface)
+    .frame(height: 50)
+    .background(H3Color.chrome)
   }
 
   private var modelStatusColor: Color {
@@ -94,34 +146,5 @@ struct EditorView: View {
     case .notSelected:
       H3Color.textSecondary.opacity(0.45)
     }
-  }
-
-  private var preview: some View {
-    ZStack {
-      Color.black
-
-      if let asset = model.previewAsset {
-        GeneratedAssetPreview(
-          asset: asset,
-          generationDuration: model.generationDurationDescription(for: asset)
-        )
-        .id(asset.id)
-        .transition(.opacity)
-      } else {
-        VStack(spacing: 12) {
-          Image(systemName: "sparkles")
-            .font(.system(size: 24, weight: .medium))
-            .foregroundStyle(H3Color.accent)
-          Text("Generate the first visual")
-            .font(.system(size: 14, weight: .semibold))
-          Text("Generated video and audio will be playable here.")
-            .font(.system(size: 12))
-            .foregroundStyle(H3Color.textSecondary)
-        }
-      }
-    }
-    .animation(.easeOut(duration: 0.2), value: model.previewAsset?.id)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .accessibilityIdentifier("program-preview")
   }
 }

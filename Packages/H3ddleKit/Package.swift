@@ -49,6 +49,10 @@ let package = Package(
       dependencies: ["H3ddleCore", "H3ddleGeneration"]
     ),
     .testTarget(
+      name: "H3ddleMediaTests",
+      dependencies: ["H3ddleCore", "H3ddleMedia"]
+    ),
+    .testTarget(
       name: "H3ddleModelsTests",
       dependencies: ["H3ddleModels"]
     ),

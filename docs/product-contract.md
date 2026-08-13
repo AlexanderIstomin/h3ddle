@@ -2,34 +2,48 @@
 
 ## Editor
 
+- The header shows the H3ddle title on the left and the model selector plus
+  Export on the right.
 - One visual lane and one audio lane share one ruler and playhead.
 - Visual assets support video and images. Audio assets support generated or
   imported audio.
-- Both lanes begin without drag or reorder interactions.
-- Visual generation appends video or image media to the visual end.
+- Both lanes begin without move or reorder interactions. Selected video,
+  image, and audio clips expose left and right trim handles. Images can
+  extend freely; video and audio stay inside the source. A leading trim keeps
+  the out point. Audio start times stay absolute — later audio does not move.
+- Insert is append-after-last only: a visual result goes on the visual end, an
+  audio result on the current audio end. There is no insert-at-playhead or
+  replace mode.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
 - Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
   audio model. Duration follows the same 22+17n frame shapes as video.
-- Audio generation appends audio to the current audio end.
 - Disabling keeps an item recoverable. Removing audio does not shift later audio.
 - Each visual video can include or mute its native soundtrack.
+- The program canvas shows the composed visual at the playhead, letterboxed to
+  the project aspect on the project background. The viewer can pan and zoom
+  that frame; clip transforms are out of scope.
+- Project settings cover platform presets, custom aspect/resolution/frame rate,
+  background, stored tone mapping and exposure, and master gain. Live AgX/ACES
+  preview, live peak meters, and LUFS normalization are out of scope.
 
 ## Generation Studio
 
-- The initiating lane determines the available generation kinds.
-- Visual offers video and image. Audio offers audio.
+- The initiating lane determines the generation kind. Visual offers video and
+  image. Audio offers audio.
+- The studio is a 1B overlay with a prompt, aspect-ratio chips for visual
+  kinds, a Generate action, and a Results panel for the latest job. Image
+  jobs have no duration slider; inserted stills hold for 3 seconds. Completed
+  results show the wall-clock generate time.
 - Generation is cancellable and reports phase, progress, and elapsed wall time.
-- Optimized native video generation identifies its 256×256 four-pass preview
-  preset and warns that long duration requests scale transformer work sharply.
-- Denoising stills are optional and persist across launches.
+- Completing a job does not append. Insert to timeline registers the asset and
+  appends it after the last item on its lane.
+- Optimized native video generation uses the 256×256 four-pass preview preset
+  by default. Long duration requests are not exposed in this overlay slice.
 - The helper loads the model on first use and keeps it until the app closes,
   the model changes, or idle/memory-pressure eviction.
 - Cancel asks the helper to stop; if it does not acknowledge promptly the
   helper is killed so the next generate is not queued behind a dying Metal job.
-- A successful result is registered as an asset and appended to its lane.
-- The latest generated visual is playable in the editor, shows its measured
-  generation duration, and can be copied out of temporary storage.
 
 ## Export
 
