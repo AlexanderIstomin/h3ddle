@@ -135,6 +135,7 @@ private struct TicklessSlider: NSViewRepresentable {
     Coordinator(value: $value)
   }
 
+  @MainActor
   final class Coordinator: NSObject {
     var value: Binding<Double>
 
