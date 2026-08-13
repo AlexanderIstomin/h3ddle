@@ -34,6 +34,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var previewDenoise: Bool
   /// Beta(0.6, 0.6) sigma spacing; the schedule turbo checkpoints expect.
   public var useBetaSchedule: Bool
+  /// Random-stream seed; nil keeps the engine default. Same seed and
+  /// settings reproduce a generation.
+  public var seed: UInt64?
 
   public init(
     kind: GenerationKind,
@@ -44,7 +47,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
     previewDenoise: Bool = false,
-    useBetaSchedule: Bool = false
+    useBetaSchedule: Bool = false,
+    seed: UInt64? = nil
   ) {
     self.kind = kind
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,6 +59,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.coreReuse = coreReuse
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
+    self.seed = seed
   }
 }
 

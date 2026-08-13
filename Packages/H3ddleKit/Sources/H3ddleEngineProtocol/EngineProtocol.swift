@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 9
+  public static let currentVersion = 10
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -228,6 +228,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Space sigmas at Beta(0.6, 0.6) quantiles instead of the released linear
   /// grid. Step-distilled turbo checkpoints are trained against this spacing.
   public var useBetaSchedule: Bool
+  /// Random-stream seed for the native generators; nil keeps the engine
+  /// default (42). Identical seed + settings reproduce a generation.
+  public var seed: UInt64?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -241,6 +244,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     coreReuse: Int? = nil,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
+    seed: UInt64? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -253,6 +257,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.coreReuse = coreReuse.map { Self.coreReuseRange.clamping($0) }
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
+    self.seed = seed
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -267,6 +272,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case coreReuse
     case previewDenoise
     case useBetaSchedule
+    case seed
     case modelDirectory
     case outputURL
   }
@@ -287,6 +293,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     previewDenoise = try container.decodeIfPresent(Bool.self, forKey: .previewDenoise) ?? false
     useBetaSchedule =
       try container.decodeIfPresent(Bool.self, forKey: .useBetaSchedule) ?? false
+    seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -302,6 +309,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encodeIfPresent(coreReuse, forKey: .coreReuse)
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)
+    try container.encodeIfPresent(seed, forKey: .seed)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

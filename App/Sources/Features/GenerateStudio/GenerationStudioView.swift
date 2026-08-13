@@ -20,6 +20,7 @@ struct GenerationStudioView: View {
   @State private var activeDiTLayers = EngineGenerationQuality.preview.activeDiTLayers
   @State private var coreReuse = 1
   @State private var showsAdvanced = true
+  @State private var seed = UInt64.random(in: 1..<100_000_000)
 
   var body: some View {
     ZStack {
@@ -141,46 +142,113 @@ struct GenerationStudioView: View {
       }
 
       VStack(alignment: .leading, spacing: 10) {
-        Text(
-          model.generationBackendDescription(
-            for: kind,
-            quality: quality,
-            denoisingSteps: Int(denoisingSteps),
-            activeDiTLayers: activeDiTLayers,
-            coreReuse: coreReuse,
-            previewDenoise: model.previewDenoise
+        HStack(alignment: .firstTextBaseline) {
+          Text(
+            model.generationBackendDescription(
+              for: kind,
+              quality: quality,
+              denoisingSteps: Int(denoisingSteps),
+              activeDiTLayers: activeDiTLayers,
+              coreReuse: coreReuse,
+              previewDenoise: model.previewDenoise
+            )
           )
-        )
-        .font(.system(size: 10))
-        .foregroundStyle(H3Color.textSecondary)
-        .fixedSize(horizontal: false, vertical: true)
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
 
-        Button {
-          model.generate(
-            prompt: model.generationPrompt,
-            duration: requestedDuration,
-            quality: quality,
-            denoisingSteps: Int(denoisingSteps),
-            activeDiTLayers: activeDiTLayers,
-            coreReuse: coreReuse,
-            previewDenoise: model.previewDenoise
-          )
-        } label: {
-          HStack(spacing: 10) {
-            Image(systemName: "sparkle")
-            Text(generateLabel)
+          Spacer(minLength: 12)
+
+          if usesNativeSettings {
+            Button {
+              seed = UInt64.random(in: 1..<100_000_000)
+            } label: {
+              HStack(spacing: 5) {
+                Image(systemName: "dice")
+                  .font(.system(size: 10, weight: .semibold))
+                Text("seed \(String(seed))")
+                  .font(.system(size: 10, weight: .medium, design: .monospaced))
+              }
+              .foregroundStyle(H3Color.textSecondary)
+              .padding(.horizontal, 8)
+              .frame(height: 24)
+              .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                  .strokeBorder(H3Color.line, lineWidth: 1)
+              }
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("The same seed with the same settings reproduces a generation. Click to reroll.")
+            .accessibilityIdentifier("generation-seed")
           }
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(Color.white)
-          .frame(maxWidth: .infinity)
-          .frame(height: 50)
-          .background(H3Color.accent.opacity(canGenerate ? 1 : 0.45))
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-          .shadow(color: H3Color.accent.opacity(canGenerate ? 0.45 : 0), radius: 14, y: 6)
         }
-        .buttonStyle(.plain)
-        .disabled(!canGenerate)
-        .accessibilityIdentifier("generate-button")
+
+        HStack(spacing: 10) {
+          if usesNativeSettings {
+            Button {
+              // A composition check: same seed, canvas, and model, minimum
+              // passes — the full render follows the same trajectory.
+              model.generate(
+                prompt: model.generationPrompt,
+                duration: requestedDuration,
+                quality: quality,
+                denoisingSteps: 3,
+                activeDiTLayers: activeDiTLayers,
+                coreReuse: 1,
+                previewDenoise: model.previewDenoise,
+                seed: seed
+              )
+            } label: {
+              VStack(spacing: 1) {
+                Text("Draft")
+                  .font(.system(size: 13, weight: .semibold))
+                Text("3 passes")
+                  .font(.system(size: 9))
+                  .foregroundStyle(H3Color.textSecondary)
+              }
+              .frame(width: 92)
+              .frame(height: 50)
+              .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                  .strokeBorder(H3Color.line, lineWidth: 1)
+              }
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canGenerate)
+            .help("Fast pre-check of composition and prompt adherence with the same seed.")
+            .accessibilityIdentifier("draft-button")
+          }
+
+          Button {
+            model.generate(
+              prompt: model.generationPrompt,
+              duration: requestedDuration,
+              quality: quality,
+              denoisingSteps: Int(denoisingSteps),
+              activeDiTLayers: activeDiTLayers,
+              coreReuse: coreReuse,
+              previewDenoise: model.previewDenoise,
+              seed: usesNativeSettings ? seed : nil
+            )
+          } label: {
+            HStack(spacing: 10) {
+              Image(systemName: "sparkle")
+              Text(generateLabel)
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(H3Color.accent.opacity(canGenerate ? 1 : 0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: H3Color.accent.opacity(canGenerate ? 0.45 : 0), radius: 14, y: 6)
+          }
+          .buttonStyle(.plain)
+          .disabled(!canGenerate)
+          .accessibilityIdentifier("generate-button")
+        }
       }
       .padding(20)
     }

@@ -262,7 +262,8 @@ final class AppModel {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
-    previewDenoise: Bool = false
+    previewDenoise: Bool = false,
+    seed: UInt64? = nil
   ) {
     guard let kind = activeGenerationKind else { return }
     generationTask?.cancel()
@@ -281,6 +282,7 @@ final class AppModel {
       previewDenoise: previewDenoise
     ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
       + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
+      + (seed.map { " · seed \($0)" } ?? "")
 
     let generationID = UUID()
     let clock = ContinuousClock()
@@ -309,7 +311,8 @@ final class AppModel {
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
       previewDenoise: previewDenoise,
-      useBetaSchedule: selectedGenerationProfile.usesBetaSchedule
+      useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
+      seed: seed
     )
     let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =

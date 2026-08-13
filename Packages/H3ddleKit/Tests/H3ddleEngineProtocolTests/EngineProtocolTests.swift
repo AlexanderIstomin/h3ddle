@@ -218,6 +218,23 @@ struct EngineProtocolTests {
     )
   }
 
+  @Test("Seeds default to nil and survive a round trip")
+  func seedRoundTrip() throws {
+    let output = URL(fileURLWithPath: "/tmp/output.mp4")
+    #expect(
+      EngineGenerationRequest(kind: .video, prompt: "p", duration: 1, outputURL: output)
+        .seed == nil
+    )
+    let seeded = EngineGenerationRequest(
+      kind: .video, prompt: "p", duration: 1, seed: 987_654_321, outputURL: output
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(seeded)
+    )
+    #expect(decoded.seed == 987_654_321)
+  }
+
   @Test("Progress is clamped at the protocol boundary")
   func progressClamps() {
     let event = EngineEvent(

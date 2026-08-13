@@ -682,6 +682,9 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.denoise_reuse = 1
       }
       parameters.use_beta_schedule = request.useBetaSchedule ? 1 : 0
+      if let seed = request.seed {
+        parameters.seed = seed
+      }
 
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque
