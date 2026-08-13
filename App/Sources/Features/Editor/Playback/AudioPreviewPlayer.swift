@@ -91,19 +91,25 @@ struct AudioPreviewPlayer: View {
   private func attach() {
     guard fileExists else { return }
     player.replaceCurrentItem(with: AVPlayerItem(url: url))
+    // Both callbacks are delivered on the main queue; assumeIsolated makes
+    // that visible to strict-concurrency compilers.
     observer = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
       queue: .main
     ) { time in
-      currentTime = time.seconds.isFinite ? time.seconds : 0
+      MainActor.assumeIsolated {
+        currentTime = time.seconds.isFinite ? time.seconds : 0
+      }
     }
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime,
       object: player.currentItem,
       queue: .main
     ) { _ in
-      isPlaying = false
-      currentTime = duration
+      MainActor.assumeIsolated {
+        isPlaying = false
+        currentTime = duration
+      }
     }
   }
 
