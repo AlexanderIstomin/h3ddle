@@ -6,6 +6,8 @@ public enum ModelPackageRole: String, Codable, Equatable, Sendable {
   case videoVAE
   case audioVAE
   case runtimeMetadata
+  /// A low-rank adapter applied to a base package at generation time.
+  case adapter
 }
 
 public enum ModelEngineCompatibility: String, Codable, Equatable, Sendable {
@@ -281,6 +283,44 @@ public enum ModelCatalog {
           .path
       )
     ] + sharedMinimaxH3Files
+  )
+
+  /// The turbo distillation as a runtime adapter: the same quality gain as
+  /// the merged package for 620 MB instead of 21 GB, applied to whichever
+  /// INT8 package is selected.
+  public static let minimaxH3TurboAdapter = ModelPackageManifest(
+    id: "lightx2v-minimax-h3-turbo-adapter-v4",
+    displayName: "Turbo adapter",
+    detail:
+      "Step distillation applied at generation time: markedly higher "
+      + "fidelity at 6–8 passes, for a fraction of a full model download.",
+    repository: "drbaph/MiniMax-H3-Turbo-Lora-ComfyUI",
+    revision: "781384e55ad67022bf7e3f14225574b9d1e92a46",
+    licenseName: "MiniMax H3 Community License Agreement",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    generationProfile: .turbo,
+    files: [
+      ModelPackageFile(
+        role: .adapter,
+        path: "adapters/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        byteCount: 620_285_592,
+        sha256: "7098acf3ee75028fd9fcd948f50fcc8d995057fabb76f86bd3ca2c0ffc58e409",
+        sourcePath: "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        localCandidatePath: URL.applicationSupportDirectory
+          .appendingPathComponent("H3ddle", isDirectory: true)
+          .appendingPathComponent("Conversion", isDirectory: true)
+          .appendingPathComponent(
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+            isDirectory: false
+          )
+          .path
+      )
+    ]
   )
 
   private static func officialMetadata(

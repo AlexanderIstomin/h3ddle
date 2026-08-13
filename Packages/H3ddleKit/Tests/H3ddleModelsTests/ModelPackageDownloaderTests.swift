@@ -244,6 +244,25 @@ struct ModelPackageDownloaderTests {
     #expect(sharedStandard == sharedTurbo)
   }
 
+  @Test("The turbo adapter is a single hosted file with a local fast path")
+  func turboAdapterManifest() throws {
+    let adapter = ModelCatalog.minimaxH3TurboAdapter
+    #expect(adapter.files.count == 1)
+    let file = try #require(adapter.files.first)
+    #expect(file.role == .adapter)
+    #expect(!file.requiresLocalSource)
+    #expect(file.localCandidatePath != nil)
+    // Two orders of magnitude smaller than the merged transformer it replaces.
+    #expect(file.byteCount < ModelCatalog.minimaxH3TurboInt8.totalByteCount / 30)
+    #expect(
+      adapter.downloadURL(for: file).absoluteString
+        == "https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/resolve/"
+          + "781384e55ad67022bf7e3f14225574b9d1e92a46/"
+          + "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"
+    )
+    #expect(adapter.generationProfile == .turbo)
+  }
+
   @Test("Manifests written before generation profiles decode with defaults")
   func legacyManifestDecoding() throws {
     let encoder = JSONEncoder()

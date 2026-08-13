@@ -243,6 +243,15 @@ private func executableIsAvailable(named name: String, override key: String) -> 
   resolveTool(named: name, override: key) != nil
 }
 
+/// Borrows a C string for the duration of `body`, or passes nil.
+private func withOptionalCString<Result>(
+  _ value: String?,
+  _ body: (UnsafePointer<CChar>?) -> Result
+) -> Result {
+  guard let value else { return body(nil) }
+  return value.withCString { body($0) }
+}
+
 /// Community audio is the soundtrack of a joint H3 render. Lift AAC out of
 /// the throwaway 32×32 mux so the audio lane never has to keep the pictures.
 private func extractSoundtrack(from video: URL, to audio: URL) -> String? {
@@ -628,6 +637,7 @@ private final class EngineRuntime: @unchecked Sendable {
         return
       }
 
+      var adapterPath: String?
       var parameters = h3ddle_h3_default_params()
       // Community stills are a short H3 clip plus one decoded frame. h3.c
       // rejects anything below one trained 22-frame VAE chunk.
@@ -685,6 +695,10 @@ private final class EngineRuntime: @unchecked Sendable {
       if let seed = request.seed {
         parameters.seed = seed
       }
+      if let adapter = request.adapterURL, adapter.isFileURL {
+        adapterPath = adapter.path
+        parameters.lora_strength = Float(request.adapterStrength ?? 1)
+      }
 
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque
@@ -694,6 +708,8 @@ private final class EngineRuntime: @unchecked Sendable {
         request.outputURL
         .deletingPathExtension()
         .appendingPathExtension("scratch.mp4")
+      withOptionalCString(adapterPath) { adapter in
+      parameters.lora_path = adapter
       request.prompt.withCString { prompt in
         (audioRequested ? scratchURL : request.outputURL).path.withCString { outputPath in
           defer {
@@ -766,6 +782,7 @@ private final class EngineRuntime: @unchecked Sendable {
             )
           )
         }
+      }
       }
     }
   }

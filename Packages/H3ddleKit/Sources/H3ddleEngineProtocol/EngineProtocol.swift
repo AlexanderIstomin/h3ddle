@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 10
+  public static let currentVersion = 11
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -209,6 +209,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Transformer-core reuse interval; the engine rejects anything
   /// outside [1, 6]. Values above 1 disable whole-denoiser reuse.
   public static let coreReuseRange = 1...6
+  /// Adapter contribution accepted by the engine.
+  public static let adapterStrengthRange = -2.0...2.0
 
   public var kind: EngineGenerationKind
   public var prompt: String
@@ -231,6 +233,12 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed for the native generators; nil keeps the engine
   /// default (42). Identical seed + settings reproduce a generation.
   public var seed: UInt64?
+  /// Low-rank adapter applied to the transformer at runtime, so a
+  /// distillation can ship as a small file instead of a merged checkpoint.
+  public var adapterURL: URL?
+  /// Adapter contribution; the engine accepts [-2, 2] and 1 is the
+  /// strength the published adapters are trained for.
+  public var adapterStrength: Double?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -245,6 +253,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
+    adapterURL: URL? = nil,
+    adapterStrength: Double? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -258,6 +268,11 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.adapterURL = adapterURL
+    self.adapterStrength = adapterStrength.map {
+      min(max($0, Self.adapterStrengthRange.lowerBound),
+          Self.adapterStrengthRange.upperBound)
+    }
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -273,6 +288,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case previewDenoise
     case useBetaSchedule
     case seed
+    case adapterURL
+    case adapterStrength
     case modelDirectory
     case outputURL
   }
@@ -294,6 +311,12 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     useBetaSchedule =
       try container.decodeIfPresent(Bool.self, forKey: .useBetaSchedule) ?? false
     seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
+    adapterURL = try container.decodeIfPresent(URL.self, forKey: .adapterURL)
+    adapterStrength =
+      try container.decodeIfPresent(Double.self, forKey: .adapterStrength).map {
+        min(max($0, Self.adapterStrengthRange.lowerBound),
+            Self.adapterStrengthRange.upperBound)
+      }
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -310,6 +333,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)
     try container.encodeIfPresent(seed, forKey: .seed)
+    try container.encodeIfPresent(adapterURL, forKey: .adapterURL)
+    try container.encodeIfPresent(adapterStrength, forKey: .adapterStrength)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

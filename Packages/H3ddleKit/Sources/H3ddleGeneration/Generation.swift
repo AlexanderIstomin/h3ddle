@@ -37,6 +37,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed; nil keeps the engine default. Same seed and
   /// settings reproduce a generation.
   public var seed: UInt64?
+  /// Low-rank adapter applied to the transformer at runtime.
+  public var adapterURL: URL?
+  public var adapterStrength: Double?
 
   public init(
     kind: GenerationKind,
@@ -48,7 +51,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     coreReuse: Int? = nil,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
-    seed: UInt64? = nil
+    seed: UInt64? = nil,
+    adapterURL: URL? = nil,
+    adapterStrength: Double? = nil
   ) {
     self.kind = kind
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,6 +65,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.adapterURL = adapterURL
+    self.adapterStrength = adapterStrength
   }
 }
 

@@ -87,6 +87,13 @@ final class AppModel {
   var modelReport: EngineModelReport?
   let managedModel = ModelCatalog.minimaxH3Int8
   let managedManifests = [ModelCatalog.minimaxH3Int8, ModelCatalog.minimaxH3TurboInt8]
+  let adapterManifest = ModelCatalog.minimaxH3TurboAdapter
+  var adapterEnabled = false {
+    didSet { userDefaults.set(adapterEnabled, forKey: Self.adapterEnabledKey) }
+  }
+  var adapterStrength = 1.0 {
+    didSet { userDefaults.set(adapterStrength, forKey: Self.adapterStrengthKey) }
+  }
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   var modelChoices: [ModelChoice] = []
   var selectedModelID: String? {
@@ -145,6 +152,8 @@ final class AppModel {
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
   private static let selectedModelKey = "H3ddle.selectedModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
+  private static let adapterEnabledKey = "H3ddle.adapterEnabled"
+  private static let adapterStrengthKey = "H3ddle.adapterStrength"
 
   init(
     generationProvider: any GenerationProvider = FakeGenerationProvider(),
@@ -162,6 +171,12 @@ final class AppModel {
     self.userDefaults = userDefaults
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
+    }
+    if userDefaults.object(forKey: Self.adapterEnabledKey) != nil {
+      adapterEnabled = userDefaults.bool(forKey: Self.adapterEnabledKey)
+    }
+    if userDefaults.object(forKey: Self.adapterStrengthKey) != nil {
+      adapterStrength = userDefaults.double(forKey: Self.adapterStrengthKey)
     }
     restoreModelLibrary()
     refreshManagedModelStatus()
@@ -283,6 +298,7 @@ final class AppModel {
     ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
       + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
       + (seed.map { " · seed \($0)" } ?? "")
+      + (adapterIsActive ? String(format: " · adapter %.2f", adapterStrength) : "")
 
     let generationID = UUID()
     let clock = ContinuousClock()
@@ -312,7 +328,9 @@ final class AppModel {
       coreReuse: coreReuse,
       previewDenoise: previewDenoise,
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
-      seed: seed
+      seed: seed,
+      adapterURL: adapterIsActive ? adapterFileURL : nil,
+      adapterStrength: adapterIsActive ? adapterStrength : nil
     )
     let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =
@@ -630,7 +648,7 @@ final class AppModel {
   func refreshManagedModelStatus() {
     guard !anyManagedDownloadIsActive else { return }
     modelDownloadTask?.cancel()
-    let manifests = managedManifests
+    let manifests = managedManifests + [adapterManifest]
     let downloader = modelDownloader
     for manifest in manifests where managedStatuses[manifest.id] == nil {
       managedStatuses[manifest.id] = ManagedPackageStatus()
@@ -716,6 +734,33 @@ final class AppModel {
 
   var installedModelChoices: [ModelChoice] {
     modelChoices.filter(\.isInstalled)
+  }
+
+  /// The installed adapter file, if the managed adapter package is present.
+  var adapterFileURL: URL? {
+    guard let root = managedStatuses[adapterManifest.id]?.installedURL,
+      let file = adapterManifest.files.first
+    else { return nil }
+    return root.appendingPathComponent(file.path, isDirectory: false)
+  }
+
+  /// The merged turbo model already contains the distillation, so stacking
+  /// the adapter on top would apply it twice.
+  var adapterAppliesToSelectedModel: Bool {
+    selectedModelChoice?.generationProfile != .turbo
+  }
+
+  var adapterIsAvailable: Bool {
+    adapterFileURL != nil && adapterAppliesToSelectedModel
+  }
+
+  var adapterIsActive: Bool {
+    adapterEnabled && adapterIsAvailable
+  }
+
+  /// Generation defaults follow the adapter when it is doing the work.
+  var effectiveGenerationProfile: ModelGenerationProfile {
+    adapterIsActive ? .turbo : selectedGenerationProfile
   }
 
   var selectedGenerationProfile: ModelGenerationProfile {

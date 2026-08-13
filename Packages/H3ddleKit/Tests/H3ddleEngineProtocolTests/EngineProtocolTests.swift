@@ -235,6 +235,35 @@ struct EngineProtocolTests {
     #expect(decoded.seed == 987_654_321)
   }
 
+  @Test("Adapter requests carry a path and a clamped strength")
+  func adapterRoundTrip() throws {
+    let output = URL(fileURLWithPath: "/tmp/output.mp4")
+    let plain = EngineGenerationRequest(
+      kind: .video, prompt: "p", duration: 1, outputURL: output
+    )
+    #expect(plain.adapterURL == nil)
+    #expect(plain.adapterStrength == nil)
+
+    let clamped = EngineGenerationRequest(
+      kind: .video, prompt: "p", duration: 1,
+      adapterURL: URL(fileURLWithPath: "/tmp/a.safetensors"),
+      adapterStrength: 9, outputURL: output
+    )
+    #expect(clamped.adapterStrength == 2)
+
+    let request = EngineGenerationRequest(
+      kind: .video, prompt: "p", duration: 1,
+      adapterURL: URL(fileURLWithPath: "/tmp/a.safetensors"),
+      adapterStrength: 0.8, outputURL: output
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(request)
+    )
+    #expect(decoded.adapterURL?.lastPathComponent == "a.safetensors")
+    #expect(decoded.adapterStrength == 0.8)
+  }
+
   @Test("Progress is clamped at the protocol boundary")
   func progressClamps() {
     let event = EngineEvent(
