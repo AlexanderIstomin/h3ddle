@@ -1,0 +1,20 @@
+.DS_Store
+.build/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# Local model material and generated engine artifacts never belong in Git.
+Models/
+Engine/Build/
+*.safetensors
+*.ckpt
+
+# Private visual references stay outside the public repository.
+LocalReferences/
+
+# Machine-local configuration.
+Secrets.xcconfig
+.env
+

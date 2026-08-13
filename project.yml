@@ -1,0 +1,96 @@
+name: H3ddle
+
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    macOS: "15.0"
+  groupSortPosition: top
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  H3ddleKit:
+    path: Packages/H3ddleKit
+
+settings:
+  base:
+    ARCHS: arm64
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CLANG_ENABLE_MODULES: true
+
+targets:
+  H3ddle:
+    type: application
+    platform: macOS
+    sources:
+      - path: App/Sources
+    resources:
+      - path: App/Resources
+    configFiles:
+      Debug: Config/Debug.xcconfig
+      Release: Config/Release.xcconfig
+    dependencies:
+      - package: H3ddleKit
+        product: H3ddleCore
+      - package: H3ddleKit
+        product: H3ddleDesignSystem
+      - package: H3ddleKit
+        product: H3ddleEngineClient
+      - package: H3ddleKit
+        product: H3ddleEngineProtocol
+      - package: H3ddleKit
+        product: H3ddleGeneration
+      - package: H3ddleKit
+        product: H3ddleMedia
+      - package: H3ddleKit
+        product: H3ddleModels
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.h3ddle.desktop
+        PRODUCT_NAME: H3ddle
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: H3ddle
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: Config/H3ddle.entitlements
+        ENABLE_HARDENED_RUNTIME: true
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+    preBuildScripts:
+      - name: Build and embed H3 engine helper
+        path: Scripts/build-engine-helper.sh
+        basedOnDependencyAnalysis: false
+
+  H3ddleUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/H3ddleUITests
+    dependencies:
+      - target: H3ddle
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.h3ddle.desktop-uitests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: H3ddle
+
+schemes:
+  H3ddle:
+    build:
+      targets:
+        H3ddle: all
+        H3ddleUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - H3ddleUITests
+    archive:
+      config: Release

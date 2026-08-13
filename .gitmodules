@@ -1,0 +1,4 @@
+[submodule "Engine/Vendor/h3.c"]
+	path = Engine/Vendor/h3.c
+	url = https://github.com/AlexanderIstomin/h3.c.git
+	branch = h3ddle-int8

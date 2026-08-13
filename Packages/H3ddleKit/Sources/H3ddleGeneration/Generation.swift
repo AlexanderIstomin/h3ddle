@@ -1,0 +1,76 @@
+import Foundation
+import H3ddleCore
+import H3ddleEngineProtocol
+
+public enum GenerationKind: String, CaseIterable, Codable, Identifiable, Sendable {
+  case video
+  case image
+  case audio
+
+  public var id: String { rawValue }
+
+  public var mediaKind: MediaKind {
+    switch self {
+    case .video: .video
+    case .image: .image
+    case .audio: .audio
+    }
+  }
+}
+
+public struct GenerationRequest: Hashable, Codable, Sendable {
+  public var kind: GenerationKind
+  public var prompt: String
+  public var duration: TimeInterval
+  public var quality: EngineGenerationQuality
+  /// Overrides the preset's denoising budget when set; nil keeps the preset.
+  public var denoisingSteps: Int?
+  /// Overrides the preset's retained DiT blocks when set; nil keeps the preset.
+  public var activeDiTLayers: Int?
+  /// Transformer-core reuse interval; nil or 1 keeps the exact path.
+  public var coreReuse: Int?
+  /// Decode a still after every denoising pass. Off by default; does not
+  /// change the encoded video.
+  public var previewDenoise: Bool
+
+  public init(
+    kind: GenerationKind,
+    prompt: String,
+    duration: TimeInterval,
+    quality: EngineGenerationQuality = .preview,
+    denoisingSteps: Int? = nil,
+    activeDiTLayers: Int? = nil,
+    coreReuse: Int? = nil,
+    previewDenoise: Bool = false
+  ) {
+    self.kind = kind
+    self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.duration = max(0, duration)
+    self.quality = quality
+    self.denoisingSteps = denoisingSteps
+    self.activeDiTLayers = activeDiTLayers
+    self.coreReuse = coreReuse
+    self.previewDenoise = previewDenoise
+  }
+}
+
+public enum GenerationEvent: Hashable, Sendable {
+  case progress(phase: String, fractionComplete: Double)
+  case preview(URL)
+  case completed(AssetReference)
+}
+
+public protocol GenerationProvider: Sendable {
+  func events(for request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, any Error>
+}
+
+public enum GenerationError: LocalizedError, Equatable, Sendable {
+  case emptyPrompt
+
+  public var errorDescription: String? {
+    switch self {
+    case .emptyPrompt:
+      "Describe what you want to generate."
+    }
+  }
+}
