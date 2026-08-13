@@ -1,3 +1,5 @@
+import AppKit
+import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleEngineProtocol
 import H3ddleGeneration
@@ -11,334 +13,491 @@ struct GenerationStudioView: View {
   private static let h3MinimumFrames = 22
   private static let h3FrameChunk = 17
 
-  @State private var duration: Double = 1
-  /// Index into H3's legal temporal shapes: 22 + 17n frames.
+  @State private var duration: Double = 3
   @State private var alignedDurationStep: Double = 0
   @State private var quality: EngineGenerationQuality = .preview
-  @State private var denoisingSteps: Double = Double(
-    EngineGenerationQuality.preview.denoisingSteps
-  )
+  @State private var denoisingSteps = Double(EngineGenerationQuality.preview.denoisingSteps)
   @State private var activeDiTLayers = EngineGenerationQuality.preview.activeDiTLayers
   @State private var coreReuse = 1
+  @State private var showsAdvanced = true
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      header
-        .fixedSize(horizontal: false, vertical: true)
-      Divider().overlay(H3Color.line)
-      ScrollView {
-        form
+    ZStack {
+      Color.black.opacity(0.62)
+        .ignoresSafeArea()
+        .onTapGesture {
+          if !model.isGenerating {
+            model.activeGenerationKind = nil
+          }
+        }
+
+      VStack(spacing: 0) {
+        header
+        Divider().overlay(H3Color.line.opacity(0.75))
+        HStack(spacing: 0) {
+          composer
+            .frame(width: 392)
+          Divider().overlay(H3Color.line.opacity(0.75))
+          results
+        }
       }
-      .scrollBounceBehavior(.basedOnSize)
-      Divider().overlay(H3Color.line)
-      footer
-        .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: 1_080, maxHeight: 720)
+      .background(H3Color.surface)
+      .clipShape(RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .shadow(color: .black.opacity(0.55), radius: 40, y: 18)
+      .padding(24)
     }
-    .frame(width: 600, height: 600)
-    .background(H3Color.surface)
     .foregroundStyle(H3Color.textPrimary)
   }
 
   private var header: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("GENERATE \(kind.rawValue.uppercased())")
-          .font(.system(size: 10, weight: .bold))
-          .tracking(1.1)
+    HStack(spacing: 16) {
+      HStack(spacing: 9) {
+        Image(systemName: "wand.and.stars")
+          .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(H3Color.accent)
-        Text(kind == .audio ? "Create audio for the program" : "Create the next visual")
-          .font(.system(size: 18, weight: .semibold))
+        Text("GENERATION STUDIO")
+          .font(.system(size: 11, weight: .bold, design: .monospaced))
+          .tracking(1.6)
           .accessibilityIdentifier("generation-studio")
       }
+      Text(kind.rawValue.capitalized)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(H3Color.textSecondary)
       Spacer()
       Button {
         model.activeGenerationKind = nil
       } label: {
         Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 34, height: 34)
+          .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
       }
       .buttonStyle(.plain)
       .disabled(model.isGenerating)
     }
-    .padding(H3Spacing.large)
+    .padding(.horizontal, 18)
+    .frame(height: 58)
+    .background(H3Color.chrome)
   }
 
-  private var form: some View {
-    VStack(alignment: .leading, spacing: H3Spacing.large) {
-      VStack(alignment: .leading, spacing: H3Spacing.small) {
-        Text("Prompt")
-          .font(.system(size: 12, weight: .semibold))
-        TextEditor(text: $model.generationPrompt)
-          .font(.system(size: 13))
-          .scrollContentBackground(.hidden)
-          .padding(10)
-          .background(H3Color.canvas)
-          .overlay {
-            RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
-              .stroke(H3Color.line, lineWidth: 1)
+  private var composer: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          labeled("PROMPT") {
+            TextEditor(text: $model.generationPrompt)
+              .font(.system(size: 14))
+              .scrollContentBackground(.hidden)
+              .frame(minHeight: 110)
+              .padding(14)
+              .background(H3Color.chrome)
+              .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                  .stroke(H3Color.line, lineWidth: 1)
+              }
+              .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+              .accessibilityIdentifier("generation-prompt")
           }
-          .clipShape(RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous))
-          .frame(height: 126)
-          .accessibilityIdentifier("generation-prompt")
-      }
 
-      VStack(alignment: .leading, spacing: H3Spacing.small) {
-        HStack {
-          Text(kind == .image ? "Display duration" : "Duration")
-            .font(.system(size: 12, weight: .semibold))
-          Spacer()
-          Text(
-            usesAlignedH3Duration
-              ? String(format: "%.1f s · %d frames", alignedSeconds, alignedFrames)
-              : String(format: "%.0f seconds", duration)
-          )
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(H3Color.textSecondary)
-        }
-        if usesAlignedH3Duration {
-          // H3 only produces 22 + 17n frame clips; snapping the slider to
-          // those shapes keeps the shortest (cheapest) clip reachable and
-          // makes the shown duration the real one.
-          Slider(value: $alignedDurationStep, in: 0...20, step: 1)
-            .tint(H3Color.accent)
-        } else {
-          Slider(value: $duration, in: 1...15, step: 1)
-            .tint(H3Color.accent)
-        }
-        if kind == .image, model.nativeImageGenerationIsReady {
-          Text(
-            "H3 has no native still mode. It generates one 22-frame chunk and keeps the last frame, the community still recipe."
-          )
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-        if kind == .audio, model.nativeAudioGenerationIsReady {
-          Text(
-            "H3 has no audio-only model. It generates a 32×32 clip and keeps the soundtrack, the community audio recipe."
-          )
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-        if kind == .video, model.nativeVideoGenerationIsReady, alignedSeconds > 3 {
-          Text(
-            "Long H3 clips increase transformer work sharply. Start with the shortest clip on M1-class Macs."
-          )
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-
-      if usesNativeVisualSettings {
-        if kind != .audio {
-          VStack(alignment: .leading, spacing: H3Spacing.small) {
-            Text("Quality")
-              .font(.system(size: 12, weight: .semibold))
-            Picker("Quality", selection: $quality) {
-              ForEach(EngineGenerationQuality.allCases, id: \.self) { tier in
-                Text(tier.displayName).tag(tier)
+          if kind != .audio {
+            labeled("ASPECT RATIO") {
+              HStack(spacing: 9) {
+                ForEach(ProgramAspectRatio.allCases) { ratio in
+                  aspectChip(ratio)
+                }
               }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityIdentifier("generation-quality")
-            Text(quality.guidance)
-              .font(.system(size: 10))
-              .foregroundStyle(H3Color.textSecondary)
-              .fixedSize(horizontal: false, vertical: true)
           }
-          .onChange(of: quality) { _, changed in
-            denoisingSteps = Double(changed.denoisingSteps)
-            activeDiTLayers = changed.activeDiTLayers
-            coreReuse = 1
+
+          if kind != .image {
+            durationSection
+          }
+
+          if !model.installedModelChoices.isEmpty {
+            modelSection
+              .zIndex(30)
+          }
+
+          if usesNativeSettings {
+            advancedSection
+          }
+
+          if let errorMessage = model.errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 11, weight: .medium))
+              .foregroundStyle(H3Color.danger)
           }
         }
+        .padding(20)
+      }
 
-        VStack(alignment: .leading, spacing: H3Spacing.small) {
-          HStack {
-            Text("Denoising passes")
-              .font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Text(
-              Int(denoisingSteps) == quality.denoisingSteps
-                ? "\(Int(denoisingSteps)) · preset default"
-                : "\(Int(denoisingSteps))"
-            )
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(H3Color.textSecondary)
-          }
-          Slider(value: $denoisingSteps, in: 2...30, step: 1)
-            .tint(H3Color.accent)
-            .accessibilityIdentifier("generation-denoising-passes")
-          Text(
-            "Each pass runs the full transformer once, so generation time grows "
-              + "linearly. More passes improve prompt adherence and detail; "
-              + "4–7 is the validated preview band."
+      VStack(alignment: .leading, spacing: 10) {
+        Text(
+          model.generationBackendDescription(
+            for: kind,
+            quality: quality,
+            denoisingSteps: Int(denoisingSteps),
+            activeDiTLayers: activeDiTLayers,
+            coreReuse: coreReuse,
+            previewDenoise: model.previewDenoise
           )
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
+        )
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
 
-        VStack(alignment: .leading, spacing: H3Spacing.small) {
-          HStack {
-            Text("Transformer blocks")
-              .font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Picker("Transformer blocks", selection: $activeDiTLayers) {
-              Text("All 50").tag(50)
-              Text("Fast 45").tag(45)
-              Text("Aggressive 40").tag(40)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .accessibilityIdentifier("generation-dit-layers")
-          }
-          HStack {
-            Text("Core reuse")
-              .font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Picker("Core reuse", selection: $coreReuse) {
-              Text("Off").tag(1)
-              Text("Every 4th").tag(4)
-              Text("Every 6th").tag(6)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .accessibilityIdentifier("generation-core-reuse")
-          }
-          Text(
-            coreReuse > 1
-              ? "Fewer blocks trim ~10–20% per pass. Core reuse runs the "
-                + "expensive core only every Nth pass — worthwhile from about "
-                + "10 passes up, and it disables whole-denoiser reuse."
-              : "Fewer blocks trim ~10–20% per pass with a small quality cost. "
-                + "Fast 45 is the validated setting; Aggressive 40 can drift."
+        Button {
+          model.generate(
+            prompt: model.generationPrompt,
+            duration: requestedDuration,
+            quality: quality,
+            denoisingSteps: Int(denoisingSteps),
+            activeDiTLayers: activeDiTLayers,
+            coreReuse: coreReuse,
+            previewDenoise: model.previewDenoise
           )
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if kind != .audio {
-          Toggle(isOn: $model.previewDenoise) {
-            VStack(alignment: .leading, spacing: 4) {
-              Text("Denoising preview")
-                .font(.system(size: 12, weight: .semibold))
-              Text(
-                "Decode a still after every pass so you can cancel early. "
-                  + "Each still is a full VideoVAE pass and does not change the final video."
-              )
-              .font(.system(size: 10))
-              .foregroundStyle(H3Color.textSecondary)
-              .fixedSize(horizontal: false, vertical: true)
-            }
+        } label: {
+          HStack(spacing: 10) {
+            Image(systemName: "sparkle")
+            Text(generateLabel)
           }
-          .toggleStyle(.switch)
-          .tint(H3Color.accent)
-          .accessibilityIdentifier("generation-preview-toggle")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(Color.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 50)
+          .background(H3Color.accent.opacity(canGenerate ? 1 : 0.45))
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .shadow(color: H3Color.accent.opacity(canGenerate ? 0.45 : 0), radius: 14, y: 6)
         }
+        .buttonStyle(.plain)
+        .disabled(!canGenerate)
+        .accessibilityIdentifier("generate-button")
       }
-
-      if model.isGenerating {
-        VStack(alignment: .leading, spacing: 7) {
-          if let preview = model.generationPreviewImage {
-            VStack(alignment: .leading, spacing: H3Spacing.small) {
-              Text("Denoising preview")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(H3Color.textSecondary)
-              Image(decorative: preview, scale: 1)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .frame(maxHeight: 220)
-                .clipShape(
-                  RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
-                )
-                .overlay {
-                  RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
-                    .stroke(H3Color.line, lineWidth: 1)
-                }
-                .accessibilityIdentifier("generation-denoise-preview")
-            }
-          }
-          HStack {
-            Text(model.generationPhase)
-            Spacer()
-            Text(
-              "\(model.generationElapsedDescription) · \(Int(model.generationProgress * 100))%"
-            )
-            .accessibilityIdentifier("generation-elapsed")
-          }
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(H3Color.textSecondary)
-          ProgressView(value: model.generationProgress)
-            .tint(H3Color.accent)
-        }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
-      }
-
-      if let errorMessage = model.errorMessage {
-        Text(errorMessage)
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(H3Color.danger)
-      }
+      .padding(20)
     }
-    .padding(H3Spacing.large)
-    .frame(maxWidth: .infinity, alignment: .topLeading)
-    .animation(.easeOut(duration: 0.18), value: model.isGenerating)
+    .background(H3Color.surface)
   }
 
-  private var footer: some View {
-    HStack {
-      Text(
-        model.generationBackendDescription(
-          for: kind,
-          quality: quality,
-          denoisingSteps: Int(denoisingSteps),
-          activeDiTLayers: activeDiTLayers,
-          coreReuse: coreReuse,
-          previewDenoise: model.previewDenoise
+  private var durationSection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text(kind == .image ? "DISPLAY DURATION" : "DURATION")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text(
+          usesAlignedH3Duration
+            ? String(format: "%.1f s · %d frames", alignedSeconds, alignedFrames)
+            : String(format: "%.0f seconds", duration)
         )
-      )
-        .font(.system(size: 11))
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
         .foregroundStyle(H3Color.textSecondary)
-        .lineLimit(2)
-        .fixedSize(horizontal: false, vertical: true)
-      Spacer()
+      }
+      if usesAlignedH3Duration {
+        Slider(value: $alignedDurationStep, in: 0...20, step: 1)
+          .tint(H3Color.accent)
+      } else {
+        Slider(value: $duration, in: 1...15, step: 1)
+          .tint(H3Color.accent)
+      }
+      if kind == .audio, model.nativeAudioGenerationIsReady {
+        Text(
+          "H3 has no audio-only model. It generates a 32×32 clip and keeps the soundtrack."
+        )
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+      }
+      if kind == .video, model.nativeVideoGenerationIsReady, alignedSeconds > 3 {
+        Text("Long H3 clips increase transformer work sharply. Start short on M1-class Macs.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+    }
+  }
+
+  private var modelSection: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("MODEL")
+        .font(.system(size: 10, weight: .bold))
+        .tracking(1.1)
+        .foregroundStyle(H3Color.textSecondary)
+      ModelDropdown(
+        choices: model.installedModelChoices,
+        selectedID: model.selectedModelID
+      ) { choice in
+        model.selectModel(choice.id)
+        if let steps = choice.generationProfile.defaultDenoisingSteps {
+          denoisingSteps = Double(steps)
+        } else {
+          denoisingSteps = Double(quality.denoisingSteps)
+        }
+      }
+    }
+  }
+
+  private var advancedSection: some View {
+    VStack(spacing: 0) {
+      Button {
+        showsAdvanced.toggle()
+      } label: {
+        HStack {
+          Image(systemName: "slider.horizontal.3")
+            .foregroundStyle(H3Color.textSecondary)
+          Text("Advanced")
+            .font(.system(size: 12.5, weight: .semibold))
+          Spacer()
+          Text(quality.displayName)
+            .font(.system(size: 9.5, design: .monospaced))
+            .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .rotationEffect(.degrees(showsAdvanced ? 90 : 0))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+
+      if showsAdvanced {
+        VStack(alignment: .leading, spacing: 14) {
+          if kind != .audio {
+            VStack(alignment: .leading, spacing: 6) {
+              Text("Quality")
+                .font(.system(size: 12, weight: .semibold))
+              Picker("Quality", selection: $quality) {
+                ForEach(EngineGenerationQuality.allCases, id: \.self) { tier in
+                  Text(tier.displayName).tag(tier)
+                }
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .accessibilityIdentifier("generation-quality")
+              Text(quality.guidance)
+                .font(.system(size: 10))
+                .foregroundStyle(H3Color.textSecondary)
+            }
+            .onChange(of: quality) { _, changed in
+              denoisingSteps = Double(changed.denoisingSteps)
+              activeDiTLayers = changed.activeDiTLayers
+              coreReuse = 1
+            }
+          }
+
+          VStack(alignment: .leading, spacing: 6) {
+            HStack {
+              Text("Denoising passes")
+                .font(.system(size: 12, weight: .semibold))
+              Spacer()
+              Text(
+                Int(denoisingSteps) == quality.denoisingSteps
+                  ? "\(Int(denoisingSteps)) · preset default"
+                  : "\(Int(denoisingSteps))"
+              )
+              .font(.system(size: 11, weight: .medium, design: .monospaced))
+              .foregroundStyle(H3Color.textSecondary)
+            }
+            Slider(value: $denoisingSteps, in: 2...30, step: 1)
+              .tint(H3Color.accent)
+              .accessibilityIdentifier("generation-denoising-passes")
+            Text(
+              "Each pass runs the full transformer once. 4–7 is the validated preview band."
+            )
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+          }
+
+          VStack(alignment: .leading, spacing: 8) {
+            HStack {
+              Text("Transformer blocks")
+                .font(.system(size: 12, weight: .semibold))
+              Spacer()
+              Picker("Transformer blocks", selection: $activeDiTLayers) {
+                Text("All 50").tag(50)
+                Text("Fast 45").tag(45)
+                Text("Aggressive 40").tag(40)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .fixedSize()
+              .accessibilityIdentifier("generation-dit-layers")
+            }
+            HStack {
+              Text("Core reuse")
+                .font(.system(size: 12, weight: .semibold))
+              Spacer()
+              Picker("Core reuse", selection: $coreReuse) {
+                Text("Off").tag(1)
+                Text("Every 4th").tag(4)
+                Text("Every 6th").tag(6)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .fixedSize()
+              .accessibilityIdentifier("generation-core-reuse")
+            }
+          }
+
+          if kind != .audio {
+            Toggle(isOn: $model.previewDenoise) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text("Denoising preview")
+                  .font(.system(size: 12, weight: .semibold))
+                Text("Decode a still after every pass so you can cancel early.")
+                  .font(.system(size: 10))
+                  .foregroundStyle(H3Color.textSecondary)
+              }
+            }
+            .toggleStyle(.switch)
+            .tint(H3Color.accent)
+            .accessibilityIdentifier("generation-preview-toggle")
+          }
+        }
+        .padding(.horizontal, 13)
+        .padding(.bottom, 14)
+      }
+    }
+    .background(H3Color.chrome)
+    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 11, style: .continuous)
+        .stroke(H3Color.line, lineWidth: 1)
+    }
+  }
+
+  private var results: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Results")
+        .font(.system(size: 14, weight: .semibold))
+
+      ZStack {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(H3Color.chrome)
+          .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+
+        if model.isGenerating {
+          GenerationProgressCanvas(
+            verb: kind.rawValue,
+            phase: model.generationPhase,
+            elapsed: model.generationElapsedDescription,
+            progress: model.generationProgress,
+            preview: model.generationPreviewImage
+          )
+        } else if let result = model.latestStudioResult {
+          GenerationResultMedia(asset: result.asset)
+        } else {
+          Text("Generate to preview a result here.")
+            .font(.system(size: 13))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+      }
+      .aspectRatio(resultAspect, contentMode: .fit)
+      .frame(maxWidth: .infinity)
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
       if model.isGenerating {
         Button("Cancel") {
           model.cancelGeneration()
         }
         .buttonStyle(H3QuietButtonStyle())
+      } else if let result = model.latestStudioResult {
+        if let generatedIn = model.generationDurationDescription(for: result.asset) {
+          Text("Generated in \(generatedIn)")
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(H3Color.textSecondary)
+            .accessibilityIdentifier("generation-completed-duration")
+        }
+        Button {
+          model.insertToTimeline(result)
+        } label: {
+          Label("Insert to timeline", systemImage: "plus")
+        }
+        .buttonStyle(H3PrimaryButtonStyle())
+        .accessibilityIdentifier("insert-to-timeline")
       }
-      Button("Generate & append") {
-        model.generate(
-          prompt: model.generationPrompt,
-          duration: requestedDuration,
-          quality: quality,
-          denoisingSteps: Int(denoisingSteps),
-          activeDiTLayers: activeDiTLayers,
-          coreReuse: coreReuse,
-          previewDenoise: model.previewDenoise
-        )
-      }
-      .buttonStyle(H3PrimaryButtonStyle())
-      .disabled(
-        model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || model.isGenerating
-      )
-      .opacity(
-        model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1
-      )
-      .accessibilityIdentifier("generate-and-append")
+
+      Spacer(minLength: 0)
     }
-    .padding(.horizontal, H3Spacing.large)
-    .padding(.vertical, H3Spacing.medium)
-    .frame(minHeight: 62)
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(Color(red: 15 / 255, green: 18 / 255, blue: 23 / 255))
+  }
+
+  private func labeled<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.system(size: 9, weight: .bold, design: .monospaced))
+        .tracking(1.6)
+        .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+      content()
+    }
+  }
+
+  private func aspectChip(_ ratio: ProgramAspectRatio) -> some View {
+    let selected = model.studioAspect == ratio
+    return Button {
+      model.studioAspect = ratio
+    } label: {
+      VStack(spacing: 6) {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+          .stroke(selected ? H3Color.accent : H3Color.line, lineWidth: selected ? 2 : 1)
+          .frame(width: chipSize(ratio).width, height: chipSize(ratio).height)
+        Text(ratio.rawValue)
+          .font(.system(size: 10, weight: .semibold, design: .monospaced))
+          .foregroundStyle(selected ? H3Color.textPrimary : H3Color.textSecondary)
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 8)
+      .background(selected ? H3Color.accent.opacity(0.12) : Color.clear)
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(selected ? H3Color.accent : H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func chipSize(_ ratio: ProgramAspectRatio) -> CGSize {
+    let maxEdge: CGFloat = 18
+    if ratio.fraction >= 1 {
+      return CGSize(width: maxEdge, height: maxEdge / ratio.fraction)
+    }
+    return CGSize(width: maxEdge * ratio.fraction, height: maxEdge)
+  }
+
+  private var generateLabel: String {
+    switch kind {
+    case .video: "Generate video"
+    case .image: "Generate image"
+    case .audio: "Generate audio"
+    }
+  }
+
+  private var canGenerate: Bool {
+    !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !model.isGenerating
+  }
+
+  private var resultAspect: CGFloat {
+    kind == .audio ? 16 / 9 : model.studioAspect.fraction
   }
 
   private var alignedFrames: Int {
@@ -349,7 +508,7 @@ struct GenerationStudioView: View {
     Double(alignedFrames) / Self.h3FPS
   }
 
-  private var usesNativeVisualSettings: Bool {
+  private var usesNativeSettings: Bool {
     model.usesNativeEngine(for: kind)
   }
 
@@ -359,11 +518,118 @@ struct GenerationStudioView: View {
   }
 
   private var requestedDuration: Double {
+    if kind == .image { return 3 }
     guard usesAlignedH3Duration else { return duration }
-    // The engine rounds seconds up to the next legal frame shape; asking for
-    // half a frame less than the target keeps float error from tipping the
-    // request into the next 17-frame chunk.
     return (Double(alignedFrames) - 0.5) / Self.h3FPS
+  }
+}
+
+private struct GenerationProgressCanvas: View {
+  var verb: String
+  var phase: String
+  var elapsed: String
+  var progress: Double
+  var preview: CGImage?
+
+  @State private var shimmer = false
+  @State private var scan = false
+  @State private var spin = false
+
+  var body: some View {
+    ZStack {
+      LinearGradient(
+        colors: [
+          Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255),
+          Color(red: 36 / 255, green: 42 / 255, blue: 51 / 255),
+          Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255),
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+      .scaleEffect(x: 2, y: 1, anchor: shimmer ? .trailing : .leading)
+      .animation(.linear(duration: 1.4).repeatForever(autoreverses: false), value: shimmer)
+
+      if let preview {
+        Image(decorative: preview, scale: 1)
+          .resizable()
+          .scaledToFill()
+          .opacity(0.35)
+      }
+
+      GeometryReader { proxy in
+        LinearGradient(
+          colors: [.clear, H3Color.accent, .clear],
+          startPoint: .leading,
+          endPoint: .trailing
+        )
+        .frame(height: 2)
+        .shadow(color: H3Color.accent.opacity(0.6), radius: 7)
+        .offset(y: scan ? proxy.size.height - 2 : 0)
+        .animation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true), value: scan)
+      }
+
+      VStack(spacing: 14) {
+        ZStack {
+          Circle()
+            .stroke(Color.white.opacity(0.12), lineWidth: 3)
+          Circle()
+            .trim(from: 0, to: 0.28)
+            .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            .rotationEffect(.degrees(spin ? 360 : 0))
+            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spin)
+        }
+        .frame(width: 56, height: 56)
+
+        VStack(spacing: 3) {
+          Text(phase.isEmpty ? "Generating \(verb)…" : phase)
+            .font(.system(size: 13.5, weight: .semibold))
+          Text("\(elapsed) · \(Int(progress * 100))%")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .tracking(0.6)
+            .foregroundStyle(H3Color.textSecondary.opacity(0.8))
+            .accessibilityIdentifier("generation-elapsed")
+        }
+      }
+    }
+    .clipped()
+    .onAppear {
+      shimmer = true
+      scan = true
+      spin = true
+    }
+  }
+}
+
+private struct GenerationResultMedia: View {
+  let asset: AssetReference
+
+  var body: some View {
+    switch asset.kind {
+    case .video:
+      NativeVideoPlayer(url: asset.url)
+    case .image:
+      if let image = NSImage(contentsOf: asset.url) {
+        Image(nsImage: image)
+          .resizable()
+          .scaledToFit()
+      } else {
+        placeholder("Image preview unavailable")
+      }
+    case .audio:
+      AudioPreviewPlayer(url: asset.url, duration: asset.duration)
+    }
+  }
+
+  private func placeholder(_ title: String) -> some View {
+    VStack(spacing: 8) {
+      Image(systemName: asset.kind == .audio ? "waveform" : "photo")
+        .font(.system(size: 22, weight: .medium))
+        .foregroundStyle(H3Color.accent)
+      Text(title)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
@@ -386,5 +652,100 @@ extension EngineGenerationQuality {
     case .high:
       "\(canvas) · \(denoisingSteps) passes · close quality; intended for M5-class Macs."
     }
+  }
+}
+
+/// Dropdown model selector following the studio design reference: a compact
+/// field with a rotating caret and a floating menu of label + description
+/// rows, the selected row tinted with the accent and ticked.
+private struct ModelDropdown: View {
+  var choices: [ModelChoice]
+  var selectedID: String?
+  var pick: (ModelChoice) -> Void
+
+  @State private var isOpen = false
+
+  private var selected: ModelChoice? {
+    choices.first { $0.id == selectedID } ?? choices.first
+  }
+
+  var body: some View {
+    Button {
+      withAnimation(.easeOut(duration: 0.18)) {
+        isOpen.toggle()
+      }
+    } label: {
+      HStack {
+        Text(selected?.displayName ?? "Choose a model")
+          .font(.system(size: 13, weight: .semibold))
+        Spacer()
+        Image(systemName: "chevron.down")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.7))
+          .rotationEffect(.degrees(isOpen ? 180 : 0))
+          .animation(.easeOut(duration: 0.2), value: isOpen)
+      }
+      .padding(.horizontal, 12)
+      .frame(height: 40)
+      .background(H3Color.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .strokeBorder(H3Color.line, lineWidth: 1)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("generation-model-picker")
+    .overlay(alignment: .top) {
+      if isOpen {
+        menu
+          .offset(y: 46)
+          .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+    }
+  }
+
+  private var menu: some View {
+    VStack(spacing: 0) {
+      ForEach(choices) { choice in
+        let on = choice.id == selected?.id
+        Button {
+          pick(choice)
+          withAnimation(.easeOut(duration: 0.18)) {
+            isOpen = false
+          }
+        } label: {
+          HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+              Text(choice.displayName)
+                .font(.system(size: 13, weight: .semibold))
+              Text(choice.subtitle)
+                .font(.system(size: 11))
+                .foregroundStyle(H3Color.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "checkmark")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(H3Color.accent)
+              .opacity(on ? 1 : 0)
+          }
+          .padding(.vertical, 8)
+          .padding(.horizontal, 10)
+          .background(
+            on ? H3Color.accent.opacity(0.12) : .clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+          )
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(4)
+    .background(H3Color.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(H3Color.line, lineWidth: 1)
+    }
+    .shadow(color: .black.opacity(0.55), radius: 20, y: 14)
   }
 }

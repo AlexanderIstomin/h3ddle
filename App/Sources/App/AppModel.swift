@@ -4,6 +4,7 @@ import H3ddleCore
 import H3ddleEngineClient
 import H3ddleEngineProtocol
 import H3ddleGeneration
+import H3ddleMedia
 import H3ddleModels
 import ImageIO
 import Observation
@@ -27,6 +28,43 @@ enum ManagedModelState: Equatable {
   case failed
 }
 
+struct ManagedPackageStatus: Equatable {
+  var state: ManagedModelState = .checking
+  var progress = 0.0
+  var completedBytes: Int64 = 0
+  var message = "Checking managed model storage…"
+  var installedURL: URL?
+
+  var downloadIsActive: Bool {
+    switch state {
+    case .downloading, .verifying, .installing: true
+    default: false
+    }
+  }
+}
+
+/// One selectable model: a managed catalog package or a user-added folder.
+struct ModelChoice: Identifiable, Equatable {
+  enum Source: Equatable {
+    case managed(ModelPackageManifest)
+    case localFolder(bookmark: Data)
+  }
+
+  let id: String
+  var displayName: String
+  var subtitle: String
+  var source: Source
+  var directory: URL?
+  var generationProfile: ModelGenerationProfile
+
+  var isInstalled: Bool { directory != nil }
+
+  var isLocalFolder: Bool {
+    if case .localFolder = source { return true }
+    return false
+  }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -41,23 +79,42 @@ final class AppModel {
   var errorMessage: String?
   var showsExportNotice = false
   var showsModelSettings = false
+  var showsProjectSettings = false
   var modelDirectory: URL?
   var modelValidationState: ModelValidationState = .notSelected
   var modelValidationMessage = "Choose a local MiniMax H3 model folder."
   var engineCapabilities: EngineCapabilities?
   var modelReport: EngineModelReport?
   let managedModel = ModelCatalog.minimaxH3Int8
-  var managedModelState: ManagedModelState = .checking
-  var managedModelProgress = 0.0
-  var managedModelCompletedBytes: Int64 = 0
-  var managedModelStatusMessage = "Checking managed model storage…"
-  var managedModelInstalledURL: URL?
+  let managedManifests = [ModelCatalog.minimaxH3Int8, ModelCatalog.minimaxH3TurboInt8]
+  var managedStatuses: [String: ManagedPackageStatus] = [:]
+  var modelChoices: [ModelChoice] = []
+  var selectedModelID: String? {
+    didSet {
+      userDefaults.set(selectedModelID, forKey: Self.selectedModelKey)
+    }
+  }
+
+  var managedModelState: ManagedModelState { status(for: managedModel).state }
+  var managedModelProgress: Double { status(for: managedModel).progress }
+  var managedModelCompletedBytes: Int64 { status(for: managedModel).completedBytes }
+  var managedModelStatusMessage: String { status(for: managedModel).message }
+  var managedModelInstalledURL: URL? { status(for: managedModel).installedURL }
   var generationDurations: [AssetID: TimeInterval] = [:]
   var previewDenoise = false {
     didSet {
       userDefaults.set(previewDenoise, forKey: Self.previewDenoiseKey)
     }
   }
+  var playback = ProgramPlaybackController()
+  var timelineZoom = 1.0
+  var timelineMode = TimelinePresentationMode.expanded
+  var showsEffectLanes = false
+  var selectedTimelineItem: TimelineItemID?
+  var visualTrackMuted = false
+  var audioTrackMuted = false
+  var studioResults: [GenerationResult] = []
+  var studioAspect = ProgramAspectRatio.sixteenNine
 
   private let generationProvider: any GenerationProvider
   private let engineSession: EngineSession
@@ -78,8 +135,16 @@ final class AppModel {
     category: "generation"
   )
 
+  private var localModelBookmarks: [Data] = [] {
+    didSet {
+      userDefaults.set(localModelBookmarks, forKey: Self.localModelsKey)
+    }
+  }
+
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
+  private static let selectedModelKey = "H3ddle.selectedModelID"
+  private static let localModelsKey = "H3ddle.localModelBookmarks"
 
   init(
     generationProvider: any GenerationProvider = FakeGenerationProvider(),
@@ -98,7 +163,7 @@ final class AppModel {
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
     }
-    restoreModelDirectory()
+    restoreModelLibrary()
     refreshManagedModelStatus()
   }
 
@@ -179,6 +244,15 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     activeGenerationKind = kind
+    if let ratio = ProgramAspectRatio(rawValue: project.settings.aspect.rawValue) {
+      studioAspect = ratio
+    }
+  }
+
+  func updateProjectSettings(_ mutate: (inout ProjectSettings) -> Void) {
+    mutate(&project.settings)
+    playback.clock.framesPerSecond = project.settings.framesPerSecond
+    syncPlayback()
   }
 
   func generate(
@@ -205,7 +279,8 @@ final class AppModel {
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
       previewDenoise: previewDenoise
-    )
+    ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
+      + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
 
     let generationID = UUID()
     let clock = ContinuousClock()
@@ -233,7 +308,8 @@ final class AppModel {
       denoisingSteps: denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
-      previewDenoise: previewDenoise
+      previewDenoise: previewDenoise,
+      useBetaSchedule: selectedGenerationProfile.usesBetaSchedule
     )
     let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =
@@ -270,9 +346,17 @@ final class AppModel {
               generationPreviewImage = image
             }
           case .completed(let asset):
-            try append(asset)
+            studioResults.insert(
+              GenerationResult(
+                id: UUID(),
+                asset: asset,
+                kind: kind,
+                prompt: prompt,
+                createdAt: Date()
+              ),
+              at: 0
+            )
             completedAssetID = asset.id
-            activeGenerationKind = nil
           }
         }
       } catch {
@@ -292,6 +376,75 @@ final class AppModel {
       }
     }
     return nil
+  }
+
+  var programDuration: TimeInterval {
+    max(project.timeline.visualDuration, project.timeline.audioTrackEnd)
+  }
+
+  var visualLaneAudible: Bool {
+    !visualTrackMuted
+  }
+
+  var audioLaneAudible: Bool {
+    !audioTrackMuted
+  }
+
+  var latestStudioResult: GenerationResult? {
+    studioResults.first
+  }
+
+  func togglePlayback() {
+    playback.toggle(duration: programDuration)
+    syncPlayback()
+  }
+
+  func stepPlayback(frames: Int) {
+    playback.step(frames: frames, duration: programDuration)
+    syncPlayback()
+  }
+
+  func skipToStart() {
+    playback.skipToStart()
+    syncPlayback()
+  }
+
+  func skipToEnd() {
+    playback.skipToEnd(duration: programDuration)
+    syncPlayback()
+  }
+
+  func seekPlayback(_ time: TimeInterval) {
+    playback.seek(time, duration: programDuration)
+    syncPlayback()
+  }
+
+  func syncPlayback() {
+    playback.sync(
+      project: project,
+      visualMuted: !visualLaneAudible,
+      audioMuted: !audioLaneAudible
+    )
+  }
+
+  func setTimelineZoom(_ zoom: Double) {
+    timelineZoom = TimelineRuler.clampZoom(zoom)
+  }
+
+  func adjustTimelineZoom(_ delta: Double) {
+    setTimelineZoom(timelineZoom + delta)
+  }
+
+  func insertToTimeline(_ result: GenerationResult) {
+    do {
+      var asset = result.asset
+      if result.kind == .image {
+        asset.duration = 3
+      }
+      try append(asset)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
   }
 
   func generationDurationDescription(for asset: AssetReference) -> String? {
@@ -346,7 +499,6 @@ final class AppModel {
       endModelAccess()
     }
     modelDirectory = url
-    persistModelDirectory(url)
     validateSelectedModel()
   }
 
@@ -411,41 +563,54 @@ final class AppModel {
   func shutdownEngine() {
     generationTask?.cancel()
     modelValidationTask?.cancel()
+    playback.shutdown()
     engineSession.shutdown()
     endModelAccess()
   }
 
-  func downloadManagedModel() {
-    guard !managedModelDownloadIsActive else { return }
-    modelDownloadTask?.cancel()
-    managedModelState = .downloading
-    managedModelStatusMessage = "Preparing the pinned Hugging Face package…"
+  func status(for manifest: ModelPackageManifest) -> ManagedPackageStatus {
+    managedStatuses[manifest.id] ?? ManagedPackageStatus()
+  }
 
-    let manifest = managedModel
+  var anyManagedDownloadIsActive: Bool {
+    managedStatuses.values.contains { $0.downloadIsActive }
+  }
+
+  func downloadManagedModel() {
+    downloadManagedModel(managedModel)
+  }
+
+  func downloadManagedModel(_ manifest: ModelPackageManifest) {
+    guard !anyManagedDownloadIsActive else { return }
+    modelDownloadTask?.cancel()
+    managedStatuses[manifest.id, default: ManagedPackageStatus()].state = .downloading
+    managedStatuses[manifest.id]?.message = "Preparing the package…"
+
     let downloader = modelDownloader
     modelDownloadTask = Task { [weak self] in
       guard let self else { return }
       do {
         let installedURL = try await downloader.download(manifest) { [weak self] progress in
           Task { @MainActor [weak self] in
-            self?.applyManagedModelProgress(progress)
+            self?.applyManagedModelProgress(progress, manifest: manifest)
           }
         }
         try Task.checkCancellation()
-        managedModelInstalledURL = installedURL
-        managedModelCompletedBytes = manifest.totalByteCount
-        managedModelProgress = 1
-        managedModelState = .installed
-        managedModelStatusMessage =
-          manifest.compatibility == .ready
-          ? "The package is installed and ready for prompt-only local video generation."
-          : "The package is installed, but this engine build still requires a checkpoint adapter."
+        managedStatuses[manifest.id] = ManagedPackageStatus(
+          state: .installed,
+          progress: 1,
+          completedBytes: manifest.totalByteCount,
+          message: installedMessage(for: manifest),
+          installedURL: installedURL
+        )
+        refreshModelChoices()
       } catch is CancellationError {
-        managedModelState = .cancelled
-        managedModelStatusMessage = "Paused. Downloaded data is kept for a later resume."
+        managedStatuses[manifest.id]?.state = .cancelled
+        managedStatuses[manifest.id]?.message =
+          "Paused. Downloaded data is kept for a later resume."
       } catch {
-        managedModelState = .failed
-        managedModelStatusMessage = error.localizedDescription
+        managedStatuses[manifest.id]?.state = .failed
+        managedStatuses[manifest.id]?.message = error.localizedDescription
       }
     }
   }
@@ -453,75 +618,216 @@ final class AppModel {
   func cancelManagedModelDownload() {
     modelDownloadTask?.cancel()
     modelDownloadTask = nil
-    managedModelState = .cancelled
-    managedModelStatusMessage = "Pausing… downloaded data will be kept."
+    for id in managedStatuses.keys where managedStatuses[id]?.downloadIsActive == true {
+      managedStatuses[id]?.state = .cancelled
+      managedStatuses[id]?.message = "Pausing… downloaded data will be kept."
+    }
   }
 
   func refreshManagedModelStatus() {
-    guard !managedModelDownloadIsActive else { return }
+    guard !anyManagedDownloadIsActive else { return }
     modelDownloadTask?.cancel()
-    managedModelState = .checking
-    let manifest = managedModel
+    let manifests = managedManifests
     let downloader = modelDownloader
+    for manifest in manifests where managedStatuses[manifest.id] == nil {
+      managedStatuses[manifest.id] = ManagedPackageStatus()
+    }
     modelDownloadTask = Task { [weak self] in
-      guard let self else { return }
-      if let installedURL = await downloader.installedPackageURL(for: manifest) {
-        managedModelInstalledURL = installedURL
-        managedModelCompletedBytes = manifest.totalByteCount
-        managedModelProgress = 1
-        managedModelState = .installed
-        managedModelStatusMessage =
-          manifest.compatibility == .ready
-          ? "The package is installed and ready for prompt-only local video generation."
-          : "The package is installed, but this engine build still requires a checkpoint adapter."
-        return
+      for manifest in manifests {
+        guard let self else { return }
+        if let installedURL = await downloader.installedPackageURL(for: manifest) {
+          managedStatuses[manifest.id] = ManagedPackageStatus(
+            state: .installed,
+            progress: 1,
+            completedBytes: manifest.totalByteCount,
+            message: installedMessage(for: manifest),
+            installedURL: installedURL
+          )
+          continue
+        }
+        do {
+          let stagedBytes = try await downloader.stagedByteCount(for: manifest)
+          try Task.checkCancellation()
+          managedStatuses[manifest.id] = ManagedPackageStatus(
+            state: stagedBytes > 0 ? .cancelled : .available,
+            progress: manifest.totalByteCount > 0
+              ? Double(stagedBytes) / Double(manifest.totalByteCount) : 0,
+            completedBytes: stagedBytes,
+            message: stagedBytes > 0
+              ? "A partial download is available and can be resumed."
+              : availableMessage(for: manifest)
+          )
+        } catch {
+          managedStatuses[manifest.id]?.state = .failed
+          managedStatuses[manifest.id]?.message = error.localizedDescription
+        }
       }
-
-      do {
-        let stagedBytes = try await downloader.stagedByteCount(for: manifest)
-        try Task.checkCancellation()
-        managedModelCompletedBytes = stagedBytes
-        managedModelProgress =
-          manifest.totalByteCount > 0
-          ? Double(stagedBytes) / Double(manifest.totalByteCount)
-          : 0
-        managedModelState = stagedBytes > 0 ? .cancelled : .available
-        managedModelStatusMessage =
-          stagedBytes > 0
-          ? "A partial download is available and can be resumed."
-          : "Pinned INT8 package recommended for Macs with 32 GB or more."
-      } catch {
-        managedModelState = .failed
-        managedModelStatusMessage = error.localizedDescription
-      }
+      self?.refreshModelChoices()
+      self?.restoreSelectedModelIfNeeded()
     }
   }
 
-  private func applyManagedModelProgress(_ progress: ModelDownloadProgress) {
-    managedModelCompletedBytes = progress.completedBytes
-    managedModelProgress = progress.fractionCompleted
-    switch progress.phase {
-    case .preparing:
-      managedModelState = .downloading
-      managedModelStatusMessage = "Checking free space and existing files…"
-    case .downloading:
-      managedModelState = .downloading
-      managedModelStatusMessage =
-        progress.currentFileName.map { "Downloading \($0)…" } ?? "Downloading model…"
-    case .verifying:
-      managedModelState = .verifying
-      managedModelStatusMessage =
-        progress.currentFileName.map { "Verifying \($0)…" } ?? "Verifying model…"
-    case .installing:
-      managedModelState = .installing
-      managedModelStatusMessage = "Installing the verified package…"
-    case .completed:
-      managedModelState = .installed
-      managedModelStatusMessage = "The optimized model package is installed."
-    case .cancelled:
-      managedModelState = .cancelled
-      managedModelStatusMessage = "Paused. Downloaded data is kept for a later resume."
+  private func installedMessage(for manifest: ModelPackageManifest) -> String {
+    manifest.compatibility == .ready
+      ? "Installed and ready for local generation."
+      : "Installed, but this engine build still requires a checkpoint adapter."
+  }
+
+  private func availableMessage(for manifest: ModelPackageManifest) -> String {
+    if manifest.generationProfile == .turbo {
+      return "Installs instantly from the local conversion; shared files are reused."
     }
+    return "Pinned INT8 package recommended for Macs with 32 GB or more."
+  }
+
+  private func applyManagedModelProgress(
+    _ progress: ModelDownloadProgress,
+    manifest: ModelPackageManifest
+  ) {
+    managedStatuses[manifest.id]?.completedBytes = progress.completedBytes
+    managedStatuses[manifest.id]?.progress = progress.fractionCompleted
+    let (state, message): (ManagedModelState, String) =
+      switch progress.phase {
+      case .preparing:
+        (.downloading, "Checking free space and existing files…")
+      case .downloading:
+        (.downloading, progress.currentFileName.map { "Downloading \($0)…" } ?? "Downloading…")
+      case .verifying:
+        (.verifying, progress.currentFileName.map { "Verifying \($0)…" } ?? "Verifying…")
+      case .installing:
+        (.installing, "Installing the verified package…")
+      case .completed:
+        (.installed, "The model package is installed.")
+      case .cancelled:
+        (.cancelled, "Paused. Downloaded data is kept for a later resume.")
+      }
+    managedStatuses[manifest.id]?.state = state
+    managedStatuses[manifest.id]?.message = message
+  }
+
+  // MARK: - Model library
+
+  var selectedModelChoice: ModelChoice? {
+    modelChoices.first { $0.id == selectedModelID }
+  }
+
+  var installedModelChoices: [ModelChoice] {
+    modelChoices.filter(\.isInstalled)
+  }
+
+  var selectedGenerationProfile: ModelGenerationProfile {
+    selectedModelChoice?.generationProfile ?? .standard
+  }
+
+  func selectModel(_ id: String) {
+    guard
+      let choice = modelChoices.first(where: { $0.id == id }),
+      let directory = choice.directory
+    else { return }
+    selectedModelID = id
+    selectModelDirectory(directory)
+  }
+
+  func addLocalModelFolder(_ url: URL) {
+    guard
+      let bookmark = try? url.bookmarkData(
+        options: .withSecurityScope,
+        includingResourceValuesForKeys: nil,
+        relativeTo: nil
+      )
+    else {
+      errorMessage = "Cannot keep access to \(url.lastPathComponent); choose it again."
+      return
+    }
+    localModelBookmarks.append(bookmark)
+    refreshModelChoices()
+    if let added = modelChoices.last(where: { $0.isLocalFolder && $0.directory == url }) {
+      selectModel(added.id)
+    }
+  }
+
+  func removeLocalModel(_ id: String) {
+    guard let choice = modelChoices.first(where: { $0.id == id }), choice.isLocalFolder,
+      case .localFolder(let bookmark) = choice.source
+    else { return }
+    localModelBookmarks.removeAll { $0 == bookmark }
+    if selectedModelID == id {
+      selectedModelID = nil
+      clearModelDirectory()
+    }
+    refreshModelChoices()
+  }
+
+  private func refreshModelChoices() {
+    var choices: [ModelChoice] = managedManifests.map { manifest in
+      ModelChoice(
+        id: manifest.id,
+        displayName: manifest.displayName,
+        subtitle: manifest.generationProfile == .turbo
+          ? "Fastest · loose prompt control"
+          : "Balanced · follows prompts",
+        source: .managed(manifest),
+        directory: managedStatuses[manifest.id]?.installedURL,
+        generationProfile: manifest.generationProfile
+      )
+    }
+    for bookmark in localModelBookmarks {
+      var isStale = false
+      guard
+        let url = try? URL(
+          resolvingBookmarkData: bookmark,
+          options: .withSecurityScope,
+          relativeTo: nil,
+          bookmarkDataIsStale: &isStale
+        )
+      else { continue }
+      choices.append(
+        ModelChoice(
+          id: "local:" + url.path,
+          displayName: url.lastPathComponent,
+          subtitle: "Local folder",
+          source: .localFolder(bookmark: bookmark),
+          directory: url,
+          generationProfile: .standard
+        )
+      )
+    }
+    modelChoices = choices
+  }
+
+  private func restoreModelLibrary() {
+    localModelBookmarks =
+      userDefaults.array(forKey: Self.localModelsKey) as? [Data] ?? []
+    selectedModelID = userDefaults.string(forKey: Self.selectedModelKey)
+    // A pre-picker install selected one folder through a single bookmark;
+    // carry it into the library as a local folder.
+    if localModelBookmarks.isEmpty, selectedModelID == nil,
+      let legacy = userDefaults.data(forKey: Self.modelBookmarkKey)
+    {
+      localModelBookmarks = [legacy]
+      userDefaults.removeObject(forKey: Self.modelBookmarkKey)
+    }
+    refreshModelChoices()
+    if let selected = selectedModelChoice, selected.isLocalFolder,
+      let directory = selected.directory
+    {
+      selectModelDirectory(directory)
+    } else if selectedModelID == nil,
+      let onlyLocal = modelChoices.first(where: \.isLocalFolder),
+      let directory = onlyLocal.directory
+    {
+      selectedModelID = onlyLocal.id
+      selectModelDirectory(directory)
+    }
+  }
+
+  /// Managed installs resolve asynchronously; re-apply a persisted managed
+  /// selection once its installed directory is known.
+  private func restoreSelectedModelIfNeeded() {
+    guard modelDirectory == nil, let selected = selectedModelChoice,
+      let directory = selected.directory
+    else { return }
+    selectModelDirectory(directory)
   }
 
   func toggleVisual(_ id: UUID) {
@@ -550,12 +856,71 @@ final class AppModel {
     project.timeline.setAudioEnabled(id, isEnabled: !item.isEnabled)
   }
 
+  func applyAudioTrim(
+    _ id: UUID,
+    edge: TimelineTrimEdge,
+    delta: TimeInterval,
+    origin: AudioTrim,
+    sourceLimit: TimeInterval,
+    earliestStart: TimeInterval,
+    latestEnd: TimeInterval
+  ) {
+    let trim = AudioTrimMath.apply(
+      edge: edge,
+      delta: delta,
+      startTime: origin.startTime,
+      duration: origin.duration,
+      sourceOffset: origin.sourceOffset,
+      sourceLimit: sourceLimit,
+      earliestStart: earliestStart,
+      latestEnd: latestEnd,
+      minimumDuration: VisualTrimMath.minimumDuration(
+        framesPerSecond: project.settings.framesPerSecond
+      )
+    )
+    project.timeline.setAudioTrim(id, trim)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func applyVisualTrim(
+    _ id: UUID,
+    edge: VisualTrimEdge,
+    delta: TimeInterval,
+    origin: VisualTrim,
+    startTime: TimeInterval,
+    sourceLimit: TimeInterval?
+  ) {
+    let trim = VisualTrimMath.apply(
+      edge: edge,
+      delta: delta,
+      startTime: startTime,
+      duration: origin.duration,
+      sourceOffset: origin.sourceOffset,
+      gapBefore: origin.gapBefore,
+      sourceLimit: sourceLimit,
+      minimumDuration: VisualTrimMath.minimumDuration(
+        framesPerSecond: project.settings.framesPerSecond
+      )
+    )
+    project.timeline.setVisualTrim(id, trim)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
   func removeVisual(_ id: UUID) {
     project.timeline.removeVisual(id)
+    if selectedTimelineItem == .visual(id) {
+      selectedTimelineItem = nil
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
   }
 
   func removeAudio(_ id: UUID) {
     project.timeline.removeAudio(id)
+    if selectedTimelineItem == .audio(id) {
+      selectedTimelineItem = nil
+    }
   }
 
   private func append(_ asset: AssetReference) throws {
@@ -656,37 +1021,4 @@ final class AppModel {
     return String(format: "%d:%04.1f", minutes, seconds)
   }
 
-  private func persistModelDirectory(_ url: URL) {
-    guard
-      let bookmark = try? url.bookmarkData(
-        options: .withSecurityScope,
-        includingResourceValuesForKeys: nil,
-        relativeTo: nil
-      )
-    else {
-      return
-    }
-    userDefaults.set(bookmark, forKey: Self.modelBookmarkKey)
-  }
-
-  private func restoreModelDirectory() {
-    guard let bookmark = userDefaults.data(forKey: Self.modelBookmarkKey) else { return }
-    var isStale = false
-    guard
-      let url = try? URL(
-        resolvingBookmarkData: bookmark,
-        options: .withSecurityScope,
-        relativeTo: nil,
-        bookmarkDataIsStale: &isStale
-      )
-    else {
-      userDefaults.removeObject(forKey: Self.modelBookmarkKey)
-      return
-    }
-    modelDirectory = url
-    if isStale {
-      persistModelDirectory(url)
-    }
-    validateSelectedModel()
-  }
 }
