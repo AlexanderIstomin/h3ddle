@@ -192,6 +192,32 @@ struct EngineProtocolTests {
     #expect(!decodedLegacy.previewDenoise)
   }
 
+  @Test("Beta schedule defaults off and survives a round trip")
+  func betaScheduleRoundTrip() throws {
+    let output = URL(fileURLWithPath: "/tmp/output.mp4")
+    #expect(
+      !EngineGenerationRequest(kind: .video, prompt: "p", duration: 1, outputURL: output)
+        .useBetaSchedule
+    )
+    let enabled = EngineGenerationRequest(
+      kind: .video, prompt: "p", duration: 1, useBetaSchedule: true, outputURL: output
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(enabled)
+    )
+    #expect(decoded.useBetaSchedule)
+
+    let legacy = Data(
+      """
+      {"duration":1,"kind":"video","outputURL":"file:///tmp/o.mp4","prompt":"p","quality":"preview"}
+      """.utf8
+    )
+    #expect(
+      try !EngineLineCodec.decode(EngineGenerationRequest.self, from: legacy).useBetaSchedule
+    )
+  }
+
   @Test("Progress is clamped at the protocol boundary")
   func progressClamps() {
     let event = EngineEvent(

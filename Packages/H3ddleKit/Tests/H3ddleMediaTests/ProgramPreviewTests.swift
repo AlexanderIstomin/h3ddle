@@ -1,0 +1,153 @@
+import Foundation
+import H3ddleCore
+import Testing
+
+@testable import H3ddleMedia
+
+@Suite("Program preview")
+struct ProgramPreviewTests {
+  @Test("Enabled video occupies derived program time")
+  func mapsEnabledVideo() throws {
+    var project = H3ddleProject()
+    let first = videoAsset(name: "One", duration: 5)
+    let second = videoAsset(name: "Two", duration: 4)
+    project.addAsset(first)
+    project.addAsset(second)
+    try project.timeline.appendVisual(first)
+    try project.timeline.appendVisual(second)
+
+    let frame = ProgramPreview.frame(at: 6, project: project)
+    guard case .video(let asset, let localTime, let includesNativeAudio) = frame.visual else {
+      Issue.record("Expected a video presentation")
+      return
+    }
+    #expect(asset.id == second.id)
+    #expect(abs(localTime - 1) < 0.000_1)
+    #expect(includesNativeAudio)
+    #expect(frame.duration == 9)
+  }
+
+  @Test("Disabled visuals keep duration and render empty")
+  func disabledVisualKeepsDuration() throws {
+    var project = H3ddleProject()
+    let first = videoAsset(name: "One", duration: 5)
+    let second = videoAsset(name: "Two", duration: 4)
+    project.addAsset(first)
+    project.addAsset(second)
+    let firstItem = try project.timeline.appendVisual(first)
+    try project.timeline.appendVisual(second)
+    project.timeline.setVisualEnabled(firstItem.id, isEnabled: false)
+
+    let duringDisabled = ProgramPreview.frame(at: 2, project: project)
+    #expect(duringDisabled.visual == .empty)
+    #expect(duringDisabled.duration == 9)
+
+    let duringSecond = ProgramPreview.frame(at: 6, project: project)
+    guard case .video(let asset, _, _) = duringSecond.visual else {
+      Issue.record("Expected the second visual after the disabled hole")
+      return
+    }
+    #expect(asset.id == second.id)
+  }
+
+  @Test("Audio is resolved at absolute start times including gaps")
+  func audioUsesAbsoluteTime() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 10)
+    let first = audioAsset(name: "One", duration: 3)
+    let second = audioAsset(name: "Two", duration: 2)
+    project.addAsset(visual)
+    project.addAsset(first)
+    project.addAsset(second)
+    try project.timeline.appendVisual(visual)
+    let firstItem = try project.timeline.appendAudio(first)
+    try project.timeline.appendAudio(second)
+    project.timeline.removeAudio(firstItem.id)
+
+    #expect(ProgramPreview.frame(at: 1, project: project).audio.isEmpty)
+    let later = ProgramPreview.frame(at: 3.5, project: project)
+    #expect(later.audio.map(\.asset.id) == [second.id])
+    #expect(abs((later.audio.first?.localTime ?? -1) - 0.5) < 0.000_1)
+  }
+
+  @Test("Audio source offset shifts the local audio time")
+  func audioSourceOffsetShiftsLocalTime() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 10)
+    let audio = audioAsset(name: "Score", duration: 6)
+    project.addAsset(visual)
+    project.addAsset(audio)
+    try project.timeline.appendVisual(visual)
+    let item = try project.timeline.appendAudio(audio)
+    project.timeline.setAudioTrim(
+      item.id,
+      AudioTrim(startTime: 2, duration: 3, sourceOffset: 1.25)
+    )
+
+    let frame = ProgramPreview.frame(at: 3, project: project)
+    #expect(frame.audio.map(\.asset.id) == [audio.id])
+    #expect(abs((frame.audio.first?.localTime ?? -1) - 2.25) < 0.000_1)
+  }
+
+  @Test("Visual source offset shifts the local video time")
+  func visualSourceOffsetShiftsLocalTime() throws {
+    var project = H3ddleProject()
+    let video = videoAsset(name: "Offset", duration: 6)
+    project.addAsset(video)
+    let item = try project.timeline.appendVisual(video)
+    project.timeline.setVisualTrim(
+      item.id,
+      VisualTrim(duration: 4, sourceOffset: 1.5, gapBefore: 1)
+    )
+
+    #expect(ProgramPreview.frame(at: 0.4, project: project).visual == .empty)
+    let frame = ProgramPreview.frame(at: 2, project: project)
+    guard case .video(let asset, let localTime, _) = frame.visual else {
+      Issue.record("Expected a trimmed video presentation")
+      return
+    }
+    #expect(asset.id == video.id)
+    #expect(abs(localTime - 2.5) < 0.000_1)
+    #expect(abs(frame.duration - 5) < 0.000_1)
+  }
+
+  @Test("Muted lanes produce silence or a black frame")
+  func mutedLanesSuppressMedia() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 4)
+    let audio = audioAsset(name: "Score", duration: 4)
+    project.addAsset(visual)
+    project.addAsset(audio)
+    try project.timeline.appendVisual(visual)
+    try project.timeline.appendAudio(audio)
+
+    let mutedVisual = ProgramPreview.frame(at: 1, project: project, visualMuted: true)
+    #expect(mutedVisual.visual == .empty)
+    #expect(mutedVisual.audio.map(\.asset.id) == [audio.id])
+
+    let mutedAudio = ProgramPreview.frame(at: 1, project: project, audioMuted: true)
+    #expect(mutedAudio.audio.isEmpty)
+    guard case .video = mutedAudio.visual else {
+      Issue.record("Expected the visual to remain when only audio is muted")
+      return
+    }
+  }
+
+  private func videoAsset(name: String, duration: TimeInterval) -> AssetReference {
+    AssetReference(
+      kind: .video,
+      displayName: name,
+      url: URL(fileURLWithPath: "/tmp/\(name).mp4"),
+      duration: duration
+    )
+  }
+
+  private func audioAsset(name: String, duration: TimeInterval) -> AssetReference {
+    AssetReference(
+      kind: .audio,
+      displayName: name,
+      url: URL(fileURLWithPath: "/tmp/\(name).m4a"),
+      duration: duration
+    )
+  }
+}

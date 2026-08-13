@@ -681,6 +681,7 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.core_reuse = Int32(coreReuse)
         parameters.denoise_reuse = 1
       }
+      parameters.use_beta_schedule = request.useBetaSchedule ? 1 : 0
 
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque

@@ -87,6 +87,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           activeDiTLayers: request.activeDiTLayers,
           coreReuse: request.coreReuse,
           previewDenoise: request.previewDenoise,
+          useBetaSchedule: request.useBetaSchedule,
           modelDirectory: modelDirectory,
           outputURL: outputURL
         )

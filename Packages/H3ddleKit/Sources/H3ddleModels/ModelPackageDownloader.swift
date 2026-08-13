@@ -41,6 +41,7 @@ public enum ModelDownloadError: LocalizedError, Equatable, Sendable {
   case sizeMismatch(file: String, expected: Int64, actual: Int64)
   case checksumMismatch(file: String)
   case installCollision(URL)
+  case localSourceUnavailable(file: String)
 
   public var errorDescription: String? {
     switch self {
@@ -56,6 +57,8 @@ public enum ModelDownloadError: LocalizedError, Equatable, Sendable {
       "\(file) did not match its published SHA-256 checksum."
     case .installCollision(let url):
       "A different model package already exists at \(url.path(percentEncoded: false))."
+    case .localSourceUnavailable(let file):
+      "\(file) has no download source and no verified local copy was found."
     }
   }
 
@@ -235,6 +238,20 @@ public actor ModelPackageDownloader {
         }
       }
 
+      if try await acquireLocalCopy(
+        of: file,
+        to: destination,
+        manifest: manifest,
+        completedBeforeFile: completedBeforeFile,
+        progress: progress
+      ) {
+        completedBeforeFile += file.byteCount
+        continue
+      }
+      if file.requiresLocalSource {
+        throw ModelDownloadError.localSourceUnavailable(file: file.displayName)
+      }
+
       let partialURL = destination.appendingPathExtension("partial")
       var partialSize = try fileSize(at: partialURL)
       if partialSize > file.byteCount {
@@ -316,7 +333,21 @@ public actor ModelPackageDownloader {
     alreadyPresent: Int64
   ) throws {
     let available = try capacityChecker.availableCapacity(at: store.rootURL)
-    let remaining = max(0, manifest.totalByteCount - alreadyPresent)
+    // Files satisfiable from a local source hardlink into place, so they do
+    // not need fresh capacity.
+    var locallySatisfiable: Int64 = 0
+    for file in manifest.files {
+      let hasLocal =
+        file.localCandidatePath.map {
+          (try? fileSize(at: URL(fileURLWithPath: $0))) == file.byteCount
+        } ?? false
+      if hasLocal
+        || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
+      {
+        locallySatisfiable += file.byteCount
+      }
+    }
+    let remaining = max(0, manifest.totalByteCount - alreadyPresent - locallySatisfiable)
     let required = remaining + Self.diskSafetyMargin
     guard available >= required else {
       throw ModelDownloadError.insufficientDiskSpace(required: required, available: available)
@@ -337,6 +368,96 @@ public actor ModelPackageDownloader {
       }
     }
     return count
+  }
+
+  /// Tries every machine-local source for a file — the manifest's declared
+  /// candidate, then identical files inside other installed packages — and
+  /// installs the first one that verifies. Hardlinks when the volume allows
+  /// it so shared files cost no additional disk.
+  private func acquireLocalCopy(
+    of file: ModelPackageFile,
+    to destination: URL,
+    manifest: ModelPackageManifest,
+    completedBeforeFile: Int64,
+    progress: @escaping ProgressHandler
+  ) async throws -> Bool {
+    let fileManager = FileManager.default
+    var candidates: [URL] = []
+    if let localPath = file.localCandidatePath {
+      candidates.append(URL(fileURLWithPath: localPath))
+    }
+    candidates.append(
+      contentsOf: installedCandidates(sha256: file.sha256, excludingPackage: manifest.id)
+    )
+
+    for candidate in candidates {
+      try Task.checkCancellation()
+      guard try fileSize(at: candidate) == file.byteCount else { continue }
+      let scratch = destination.appendingPathExtension("local")
+      if fileManager.fileExists(atPath: scratch.path) {
+        try fileManager.removeItem(at: scratch)
+      }
+      do {
+        try fileManager.linkItem(at: candidate, to: scratch)
+      } catch {
+        do {
+          try fileManager.copyItem(at: candidate, to: scratch)
+        } catch {
+          continue
+        }
+      }
+      progress(
+        ModelDownloadProgress(
+          phase: .verifying,
+          currentFileName: file.displayName,
+          completedBytes: completedBeforeFile + file.byteCount,
+          totalBytes: manifest.totalByteCount
+        )
+      )
+      do {
+        try await verify(file, at: scratch)
+      } catch {
+        try? fileManager.removeItem(at: scratch)
+        continue
+      }
+      if fileManager.fileExists(atPath: destination.path) {
+        try fileManager.removeItem(at: destination)
+      }
+      try fileManager.moveItem(at: scratch, to: destination)
+      return true
+    }
+    return false
+  }
+
+  /// Files with a matching checksum inside other installed packages.
+  private func installedCandidates(sha256: String, excludingPackage: String) -> [URL] {
+    let fileManager = FileManager.default
+    guard
+      let entries = try? fileManager.contentsOfDirectory(
+        at: store.rootURL,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+      )
+    else {
+      return []
+    }
+    var candidates: [URL] = []
+    for entry in entries where entry.lastPathComponent != excludingPackage {
+      let manifestURL = entry.appendingPathComponent(
+        ModelPackageStore.installedManifestName,
+        isDirectory: false
+      )
+      guard
+        let data = try? Data(contentsOf: manifestURL),
+        let installed = try? JSONDecoder().decode(ModelPackageManifest.self, from: data)
+      else {
+        continue
+      }
+      for installedFile in installed.files where installedFile.sha256 == sha256 {
+        candidates.append(entry.appendingPathComponent(installedFile.path, isDirectory: false))
+      }
+    }
+    return candidates
   }
 
   private func fileIsValid(_ file: ModelPackageFile, at url: URL) async throws -> Bool {

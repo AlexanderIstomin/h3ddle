@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import H3ddleGeneration
@@ -21,6 +22,8 @@ struct FakeGenerationProviderTests {
         progressCount += 1
       case .completed(let asset):
         completedKind = asset.kind == .audio ? .audio : nil
+        #expect(FileManager.default.fileExists(atPath: asset.url.path))
+        #expect(asset.url.pathExtension == "wav")
       case .preview:
         break
       }

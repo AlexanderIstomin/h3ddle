@@ -208,6 +208,147 @@ struct ModelPackageDownloaderTests {
     #expect(try Data(contentsOf: destination) == fixture)
   }
 
+  @Test("The turbo package shares every non-transformer file with the standard package")
+  func turboManifestSharing() throws {
+    let standard = ModelCatalog.minimaxH3Int8
+    let turbo = ModelCatalog.minimaxH3TurboInt8
+
+    #expect(turbo.generationProfile == .turbo)
+    #expect(turbo.generationProfile.defaultDenoisingSteps == 8)
+    #expect(turbo.generationProfile.usesBetaSchedule)
+    #expect(standard.generationProfile == .standard)
+
+    let standardTransformer = try #require(standard.files.first { $0.role == .transformer })
+    let turboTransformer = try #require(turbo.files.first { $0.role == .transformer })
+    // h3.c resolves the transformer by this exact in-package path.
+    #expect(turboTransformer.path == standardTransformer.path)
+    #expect(turboTransformer.sha256 != standardTransformer.sha256)
+    #expect(turboTransformer.requiresLocalSource)
+    #expect(turboTransformer.localCandidatePath != nil)
+
+    let sharedStandard = standard.files.filter { $0.role != .transformer }
+    let sharedTurbo = turbo.files.filter { $0.role != .transformer }
+    #expect(sharedStandard == sharedTurbo)
+  }
+
+  @Test("Manifests written before generation profiles decode with defaults")
+  func legacyManifestDecoding() throws {
+    let encoder = JSONEncoder()
+    var object = try #require(
+      try JSONSerialization.jsonObject(
+        with: encoder.encode(ModelCatalog.minimaxH3Int8)
+      ) as? [String: Any]
+    )
+    object.removeValue(forKey: "generationProfile")
+    var files = try #require(object["files"] as? [[String: Any]])
+    for index in files.indices {
+      files[index].removeValue(forKey: "requiresLocalSource")
+      files[index].removeValue(forKey: "localCandidatePath")
+    }
+    object["files"] = files
+    let legacy = try JSONSerialization.data(withJSONObject: object)
+
+    let decoded = try JSONDecoder().decode(ModelPackageManifest.self, from: legacy)
+    #expect(decoded == ModelCatalog.minimaxH3Int8)
+  }
+
+  @Test("Shared files hardlink from installed packages instead of downloading")
+  func reusesInstalledFiles() async throws {
+    let sharedPayload = Data("shared encoder bytes".utf8)
+    let localPayload = Data("locally converted transformer".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let first = makeManifest(payload: sharedPayload)
+    _ = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: FixtureTransport(payload: sharedPayload),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(first)
+
+    let candidate = root.appendingPathComponent("converted.safetensors")
+    try localPayload.write(to: candidate)
+    let second = ModelPackageManifest(
+      id: "fixture-turbo",
+      displayName: "Fixture Turbo",
+      detail: "Shares one file, imports one locally",
+      repository: "example/fixture",
+      revision: String(repeating: "a", count: 40),
+      licenseName: "Test",
+      licenseURL: URL(string: "https://example.com/license")!,
+      minimumUnifiedMemoryBytes: 1,
+      compatibility: .ready,
+      generationProfile: .turbo,
+      files: [
+        ModelPackageFile(
+          role: .transformer,
+          path: "weights/turbo.safetensors",
+          byteCount: Int64(localPayload.count),
+          sha256: SHA256.hash(data: localPayload).map { String(format: "%02x", $0) }.joined(),
+          localCandidatePath: candidate.path,
+          requiresLocalSource: true
+        ),
+        ModelPackageFile(
+          role: .textEncoder,
+          path: "weights/model.safetensors",
+          byteCount: Int64(sharedPayload.count),
+          sha256: SHA256.hash(data: sharedPayload).map { String(format: "%02x", $0) }.joined()
+        ),
+      ]
+    )
+
+    let installedURL = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: RefusingTransport(),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(second)
+
+    let sharedData = try Data(
+      contentsOf: installedURL.appendingPathComponent("weights/model.safetensors")
+    )
+    let turboData = try Data(
+      contentsOf: installedURL.appendingPathComponent("weights/turbo.safetensors")
+    )
+    #expect(sharedData == sharedPayload)
+    #expect(turboData == localPayload)
+  }
+
+  @Test("A local-only file with no verified copy fails with a clear error")
+  func missingLocalSource() async throws {
+    let payload = Data("never hosted".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manifest = ModelPackageManifest(
+      id: "fixture-local-only",
+      displayName: "Fixture",
+      detail: "Requires a local file that is absent",
+      repository: "example/fixture",
+      revision: String(repeating: "a", count: 40),
+      licenseName: "Test",
+      licenseURL: URL(string: "https://example.com/license")!,
+      minimumUnifiedMemoryBytes: 1,
+      compatibility: .ready,
+      files: [
+        ModelPackageFile(
+          role: .transformer,
+          path: "weights/turbo.safetensors",
+          byteCount: Int64(payload.count),
+          sha256: SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined(),
+          localCandidatePath: root.appendingPathComponent("absent.safetensors").path,
+          requiresLocalSource: true
+        )
+      ]
+    )
+
+    await #expect(throws: ModelDownloadError.localSourceUnavailable(file: "turbo.safetensors")) {
+      _ = try await ModelPackageDownloader(
+        store: ModelPackageStore(rootURL: root),
+        transport: RefusingTransport(),
+        capacityChecker: FixedCapacityChecker(bytes: .max)
+      ).download(manifest)
+    }
+  }
+
   private func makeManifest(payload: Data) -> ModelPackageManifest {
     ModelPackageManifest(
       id: "fixture-model",
@@ -235,6 +376,19 @@ struct ModelPackageDownloaderTests {
       .appendingPathComponent("H3ddleModelsTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+  }
+}
+
+private struct RefusingTransport: ModelFileTransport {
+  struct UnexpectedRequest: Error {}
+
+  func download(
+    request: URLRequest,
+    to destination: URL,
+    existingBytes: Int64,
+    progress: @escaping @Sendable (Int64) -> Void
+  ) async throws -> ModelHTTPResponse {
+    throw UnexpectedRequest()
   }
 }
 

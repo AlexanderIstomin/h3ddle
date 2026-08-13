@@ -79,6 +79,230 @@ struct TimelineTests {
     }
   }
 
+  @Test("Trailing visual trim ripples later clips and keeps video inside the source")
+  func trailingTrimRipplesAndClampsVideo() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "One", duration: 5))
+    try timeline.appendVisual(videoAsset(name: "Two", duration: 4))
+
+    let shorter = VisualTrimMath.apply(
+      edge: .trailing,
+      delta: -2,
+      startTime: 0,
+      duration: 5,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: 5,
+      minimumDuration: 1 / 24
+    )
+    timeline.setVisualTrim(first.id, shorter)
+    #expect(abs(timeline.visualItems[0].duration - 3) < 0.000_1)
+    #expect(abs(timeline.visualPlacements[1].startTime - 3) < 0.000_1)
+
+    let overstretched = VisualTrimMath.apply(
+      edge: .trailing,
+      delta: 20,
+      startTime: 0,
+      duration: 3,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: 5,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(overstretched.duration - 5) < 0.000_1)
+  }
+
+  @Test("Trim cannot collapse a clip below one frame")
+  func trimKeepsAMinimumDuration() {
+    let trim = VisualTrimMath.apply(
+      edge: .trailing,
+      delta: -10,
+      startTime: 0,
+      duration: 3,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: 3,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(trim.duration - 1 / 24) < 0.000_1)
+  }
+
+  @Test("Images can extend past the generated still length")
+  func imageTrimIsUnbounded() {
+    let trim = VisualTrimMath.apply(
+      edge: .trailing,
+      delta: 7,
+      startTime: 0,
+      duration: 3,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: nil,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(trim.duration - 10) < 0.000_1)
+  }
+
+  @Test("Leading visual trim keeps the out point and updates the source in-point")
+  func leadingTrimPreservesOutPoint() throws {
+    var timeline = ProjectTimeline()
+    try timeline.appendVisual(videoAsset(name: "One", duration: 5))
+    let second = try timeline.appendVisual(videoAsset(name: "Two", duration: 4))
+
+    let trim = VisualTrimMath.apply(
+      edge: .leading,
+      delta: 1,
+      startTime: 5,
+      duration: 4,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: 4,
+      minimumDuration: 1 / 24
+    )
+    timeline.setVisualTrim(second.id, trim)
+
+    #expect(abs(timeline.visualItems[1].gapBefore - 1) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].duration - 3) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].sourceOffset - 1) < 0.000_1)
+    #expect(abs(timeline.visualPlacements[1].startTime - 6) < 0.000_1)
+    #expect(abs(timeline.visualDuration - 9) < 0.000_1)
+  }
+
+  @Test("Leading trim cannot enter the previous clip or the source head")
+  func leadingTrimClamps() {
+    let blockedByNeighbor = VisualTrimMath.apply(
+      edge: .leading,
+      delta: -2,
+      startTime: 5,
+      duration: 4,
+      sourceOffset: 0,
+      gapBefore: 0,
+      sourceLimit: 4,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(blockedByNeighbor.gapBefore) < 0.000_1)
+    #expect(abs(blockedByNeighbor.duration - 4) < 0.000_1)
+
+    let blockedBySource = VisualTrimMath.apply(
+      edge: .leading,
+      delta: -2,
+      startTime: 2,
+      duration: 3,
+      sourceOffset: 0.5,
+      gapBefore: 2,
+      sourceLimit: 5,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(blockedBySource.sourceOffset) < 0.000_1)
+    #expect(abs(blockedBySource.duration - 3.5) < 0.000_1)
+    #expect(abs(blockedBySource.gapBefore - 1.5) < 0.000_1)
+  }
+
+  @Test("Trailing audio trim keeps later start times and stays in the source")
+  func trailingAudioTrimDoesNotRipple() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendAudio(audioAsset(name: "One", duration: 4))
+    let second = try timeline.appendAudio(audioAsset(name: "Two", duration: 6))
+    let bounds = timeline.audioNeighborBounds(of: first.id)
+
+    let shorter = AudioTrimMath.apply(
+      edge: .trailing,
+      delta: -1.5,
+      startTime: 0,
+      duration: 4,
+      sourceOffset: 0,
+      sourceLimit: 4,
+      earliestStart: bounds.earliestStart,
+      latestEnd: bounds.latestEnd,
+      minimumDuration: 1 / 24
+    )
+    timeline.setAudioTrim(first.id, shorter)
+    #expect(abs(timeline.audioItems[0].duration - 2.5) < 0.000_1)
+    #expect(timeline.audioItems[1].startTime == second.startTime)
+
+    let blockedByNeighbor = AudioTrimMath.apply(
+      edge: .trailing,
+      delta: 8,
+      startTime: 0,
+      duration: 2.5,
+      sourceOffset: 0,
+      sourceLimit: 8,
+      earliestStart: 0,
+      latestEnd: 4,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(blockedByNeighbor.duration - 4) < 0.000_1)
+  }
+
+  @Test("Leading audio trim keeps the out point and updates the source in-point")
+  func leadingAudioTrimPreservesOutPoint() throws {
+    var timeline = ProjectTimeline()
+    try timeline.appendAudio(audioAsset(name: "One", duration: 4))
+    let second = try timeline.appendAudio(audioAsset(name: "Two", duration: 6))
+    let bounds = timeline.audioNeighborBounds(of: second.id)
+
+    let trim = AudioTrimMath.apply(
+      edge: .leading,
+      delta: 1,
+      startTime: 4,
+      duration: 6,
+      sourceOffset: 0,
+      sourceLimit: 6,
+      earliestStart: bounds.earliestStart,
+      latestEnd: bounds.latestEnd,
+      minimumDuration: 1 / 24
+    )
+    timeline.setAudioTrim(second.id, trim)
+    #expect(abs(timeline.audioItems[1].startTime - 5) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].duration - 5) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].sourceOffset - 1) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].endTime - 10) < 0.000_1)
+    #expect(timeline.audioItems[0].startTime == 0)
+  }
+
+  @Test("Legacy audio items decode without a source offset")
+  func decodesLegacyAudioItems() throws {
+    let item = AudioItem(
+      assetID: AssetID(),
+      startTime: 2,
+      duration: 4
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "sourceOffset")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(AudioItem.self, from: encoded)
+    #expect(decoded.sourceOffset == 0)
+    #expect(decoded.startTime == 2)
+    #expect(decoded.duration == 4)
+  }
+
+  @Test("Legacy visual items decode without trim fields")
+  func decodesLegacyVisualItems() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 4,
+      includesNativeAudio: true
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "sourceOffset")
+    object.removeValue(forKey: "gapBefore")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.sourceOffset == 0)
+    #expect(decoded.gapBefore == 0)
+    #expect(decoded.duration == 4)
+  }
+
+  private func videoAsset(name: String, duration: TimeInterval) -> AssetReference {
+    AssetReference(
+      kind: .video,
+      displayName: name,
+      url: URL(fileURLWithPath: "/tmp/\(name).mp4"),
+      duration: duration
+    )
+  }
+
   private func audioAsset(name: String, duration: TimeInterval) -> AssetReference {
     AssetReference(
       kind: .audio,

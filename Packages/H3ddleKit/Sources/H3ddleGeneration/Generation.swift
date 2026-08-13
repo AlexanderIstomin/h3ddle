@@ -32,6 +32,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Decode a still after every denoising pass. Off by default; does not
   /// change the encoded video.
   public var previewDenoise: Bool
+  /// Beta(0.6, 0.6) sigma spacing; the schedule turbo checkpoints expect.
+  public var useBetaSchedule: Bool
 
   public init(
     kind: GenerationKind,
@@ -41,7 +43,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
-    previewDenoise: Bool = false
+    previewDenoise: Bool = false,
+    useBetaSchedule: Bool = false
   ) {
     self.kind = kind
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,6 +54,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
     self.previewDenoise = previewDenoise
+    self.useBetaSchedule = useBetaSchedule
   }
 }
 
