@@ -186,51 +186,68 @@ def main():
             out.write(data)
 
     stats = {"exact_rows": 0, "rows": 0, "int8_mismatch": 0, "elements": 0}
-    pending_scales = {}
-    merged = 0
+    derived = {}
+    merged_names = set()
+
+    # The template interleaves each weight with its scale in either order, so
+    # the pair is derived when its first member appears and the cached half
+    # is consumed by the second.
+    def derived_pair(weight_name):
+        if weight_name in derived:
+            return derived[weight_name]
+        t = template.header[weight_name]
+        weight = base.f32(weight_name)
+        if list(weight.shape) != [t["shape"][0], t["shape"][1]]:
+            raise ValueError(
+                f"{weight_name}: base shape {weight.shape} != {t['shape']}"
+            )
+        delta = lora_delta(lora, weight_name, args.strength)
+        if delta is not None:
+            if delta.shape != weight.shape:
+                raise ValueError(f"{weight_name}: LoRA delta shape {delta.shape}")
+            weight = weight + delta
+            merged_names.add(weight_name)
+        q, scale = quantize_convrot(weight, hadamard)
+        if args.self_check:
+            reference = np.frombuffer(template.raw(weight_name), dtype=np.int8)
+            stats["int8_mismatch"] += int((q.reshape(-1) != reference).sum())
+            stats["elements"] += reference.size
+            ref_scale = np.frombuffer(
+                template.raw(weight_name + "_scale"), dtype=np.float32
+            )
+            stats["rows"] += ref_scale.size
+            stats["exact_rows"] += int(np.isclose(scale, ref_scale, rtol=1e-6).sum())
+        derived[weight_name] = {
+            "weight": q.tobytes(),
+            "scale": scale.astype(np.float32).tobytes(),
+        }
+        return derived[weight_name]
+
+    def consume(weight_name, part):
+        pair = derived_pair(weight_name)
+        data = pair[part]
+        pair[part] = None
+        if pair["weight"] is None and pair["scale"] is None:
+            del derived[weight_name]
+        return data
+
     for index, name in enumerate(names):
-        t = template.header[name]
         if name in quantized:
-            weight = base.f32(name)
-            if list(weight.shape) != [t["shape"][0], t["shape"][1]]:
-                raise ValueError(f"{name}: base shape {weight.shape} != {t['shape']}")
-            delta = lora_delta(lora, name, args.strength)
-            if delta is not None:
-                if delta.shape != weight.shape:
-                    raise ValueError(f"{name}: LoRA delta shape {delta.shape}")
-                weight = weight + delta
-                merged += 1
-            q, scale = quantize_convrot(weight, hadamard)
-            del weight, delta
-            emit(name, q.tobytes())
-            pending_scales[name + "_scale"] = scale.astype(np.float32).tobytes()
-            if args.self_check:
-                reference = np.frombuffer(template.raw(name), dtype=np.int8)
-                stats["int8_mismatch"] += int((q.reshape(-1) != reference).sum())
-                stats["elements"] += reference.size
-                ref_scale = np.frombuffer(
-                    template.raw(name + "_scale"), dtype=np.float32
-                )
-                stats["rows"] += ref_scale.size
-                stats["exact_rows"] += int(
-                    np.isclose(scale, ref_scale, rtol=1e-6).sum()
-                )
-            del q, scale
+            emit(name, consume(name, "weight"))
         elif name.endswith("_scale") and name.removesuffix("_scale") in quantized:
-            # KeyError here means the template ordered a scale before its
-            # weight; fail loudly rather than copying a stale template scale.
-            emit(name, pending_scales.pop(name))
+            emit(name, consume(name.removesuffix("_scale"), "scale"))
         elif name in refiner_merges:
             weight = base.f32(name) + lora_delta(lora, name, args.strength)
             emit(name, f32_to_bf16_bytes(weight.reshape(-1)))
-            merged += 1
+            merged_names.add(name)
         else:
             emit(name, bytes(template.raw(name)))
         if index % 100 == 0:
             print(f"  {index}/{len(names)} tensors", file=sys.stderr)
 
-    if pending_scales:
-        raise ValueError(f"unemitted scales: {sorted(pending_scales)[:3]}")
+    if derived:
+        raise ValueError(f"unconsumed derived pairs: {sorted(derived)[:3]}")
+    merged = len(merged_names)
     print(f"tensors: {len(names)} · LoRA-merged matrices: {merged}")
     if args.self_check:
         total = max(stats["elements"], 1)
