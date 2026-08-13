@@ -220,11 +220,24 @@ struct ModelPackageDownloaderTests {
 
     let standardTransformer = try #require(standard.files.first { $0.role == .transformer })
     let turboTransformer = try #require(turbo.files.first { $0.role == .transformer })
-    // h3.c resolves the transformer by this exact in-package path.
+    // h3.c resolves the transformer by this exact in-package path, while the
+    // hosted file lives at the root of its own repository.
     #expect(turboTransformer.path == standardTransformer.path)
     #expect(turboTransformer.sha256 != standardTransformer.sha256)
-    #expect(turboTransformer.requiresLocalSource)
+    #expect(!turboTransformer.requiresLocalSource)
     #expect(turboTransformer.localCandidatePath != nil)
+    #expect(
+      turbo.downloadURL(for: turboTransformer).absoluteString
+        == "https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot/resolve/"
+          + "4aea334367e4007d7b3630810ec28eb97639ae65/"
+          + "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
+    )
+    // Shared files keep resolving against the manifest's own repository.
+    let sharedFile = try #require(turbo.files.first { $0.role == .videoVAE })
+    #expect(
+      turbo.downloadURL(for: sharedFile).absoluteString
+        .hasPrefix("https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/")
+    )
 
     let sharedStandard = standard.files.filter { $0.role != .transformer }
     let sharedTurbo = turbo.files.filter { $0.role != .transformer }

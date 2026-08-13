@@ -20,6 +20,9 @@ public struct ModelPackageFile: Codable, Equatable, Sendable, Identifiable {
   public let sha256: String
   public let sourceRepository: String?
   public let sourceRevision: String?
+  /// Path inside the source repository when it differs from the path this
+  /// file takes inside the installed package.
+  public let sourcePath: String?
   /// Absolute path of a machine-local file to install from (verified against
   /// sha256), tried before any download.
   public let localCandidatePath: String?
@@ -36,6 +39,7 @@ public struct ModelPackageFile: Codable, Equatable, Sendable, Identifiable {
     sha256: String,
     sourceRepository: String? = nil,
     sourceRevision: String? = nil,
+    sourcePath: String? = nil,
     localCandidatePath: String? = nil,
     requiresLocalSource: Bool = false
   ) {
@@ -45,6 +49,7 @@ public struct ModelPackageFile: Codable, Equatable, Sendable, Identifiable {
     self.sha256 = sha256
     self.sourceRepository = sourceRepository
     self.sourceRevision = sourceRevision
+    self.sourcePath = sourcePath
     self.localCandidatePath = localCandidatePath
     self.requiresLocalSource = requiresLocalSource
   }
@@ -57,6 +62,7 @@ public struct ModelPackageFile: Codable, Equatable, Sendable, Identifiable {
     sha256 = try container.decode(String.self, forKey: .sha256)
     sourceRepository = try container.decodeIfPresent(String.self, forKey: .sourceRepository)
     sourceRevision = try container.decodeIfPresent(String.self, forKey: .sourceRevision)
+    sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
     localCandidatePath = try container.decodeIfPresent(String.self, forKey: .localCandidatePath)
     requiresLocalSource =
       try container.decodeIfPresent(Bool.self, forKey: .requiresLocalSource) ?? false
@@ -157,7 +163,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     }
     url.appendPathComponent("resolve")
     url.appendPathComponent(file.sourceRevision ?? revision)
-    for component in file.path.split(separator: "/") {
+    for component in (file.sourcePath ?? file.path).split(separator: "/") {
       url.appendPathComponent(String(component))
     }
     return url
@@ -237,9 +243,9 @@ public enum ModelCatalog {
   )
 
   /// The lightx2v turbo distillation merged into the pruned INT8 transformer
-  /// by `Scripts/convert-turbo-package.py`. The merged file has no download
-  /// host yet, so it installs from the local conversion output; every shared
-  /// file reuses the standard package's bytes.
+  /// by `Scripts/convert-turbo-package.py`, hosted on Hugging Face. A local
+  /// conversion output installs instantly when present; every shared file
+  /// reuses the standard package's bytes.
   public static let minimaxH3TurboInt8 = ModelPackageManifest(
     id: "h3ddle-minimax-h3-turbo-int8-v1",
     displayName: "MiniMax H3 · Turbo (Experimental)",
@@ -262,6 +268,9 @@ public enum ModelCatalog {
         path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         byteCount: 20_970_379_854,
         sha256: "9ad5c98b533894c122050d32804a14f49fca8edc16c52564a281cdc5825ac934",
+        sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
+        sourceRevision: "4aea334367e4007d7b3630810ec28eb97639ae65",
+        sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
         localCandidatePath: URL.applicationSupportDirectory
           .appendingPathComponent("H3ddle", isDirectory: true)
           .appendingPathComponent("Conversion", isDirectory: true)
@@ -269,8 +278,7 @@ public enum ModelCatalog {
             "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
             isDirectory: false
           )
-          .path,
-        requiresLocalSource: true
+          .path
       )
     ] + sharedMinimaxH3Files
   )
