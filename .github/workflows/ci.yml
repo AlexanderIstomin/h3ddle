@@ -12,8 +12,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Install project generator
-        run: brew install xcodegen
+      - name: Install project generator and media tooling
+        # ffmpeg is required for the engine to advertise video generation;
+        # the handshake capability check fails without it.
+        run: brew install xcodegen ffmpeg
       - name: Verify, test, and build
         run: Scripts/ci.sh
 
