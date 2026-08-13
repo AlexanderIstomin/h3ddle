@@ -48,7 +48,8 @@ jobs:
           [ "$VERSION" = "$GITHUB_REF_NAME" ] && VERSION="$(git rev-parse --short HEAD)"
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/H3ddle-$VERSION.zip"
-          shasum -a 256 "dist/H3ddle-$VERSION.zip" > "dist/H3ddle-$VERSION.zip.sha256"
+          # Record a bare filename so `shasum -c` works in the download folder.
+          (cd dist && shasum -a 256 "H3ddle-$VERSION.zip" > "H3ddle-$VERSION.zip.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: H3ddle-app
