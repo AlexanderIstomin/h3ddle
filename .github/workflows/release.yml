@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install project generator and media tooling
+        run: brew install xcodegen ffmpeg
+      - name: Generate the Xcode project
+        run: xcodegen generate --spec project.yml --project .
+      - name: Archive the app
+        # Ad-hoc signing keeps the build reproducible without secrets. The
+        # download is unsigned: macOS quarantines it until the user approves
+        # it in System Settings > Privacy & Security.
+        run: |
+          xcodebuild \
+            -project H3ddle.xcodeproj \
+            -scheme H3ddle \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/H3ddle.xcarchive \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet \
+            archive
+      - name: Verify the archived bundle
+        run: |
+          APP="build/H3ddle.xcarchive/Products/Applications/H3ddle.app"
+          test -d "$APP"
+          test -x "$APP/Contents/Helpers/H3ddleEngineService"
+          test -f "$APP/Contents/Resources/H3Engine/h3_shaders.metal"
+      - name: Package the app
+        run: |
+          APP="build/H3ddle.xcarchive/Products/Applications/H3ddle.app"
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$VERSION" = "$GITHUB_REF_NAME" ] && VERSION="$(git rev-parse --short HEAD)"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/H3ddle-$VERSION.zip"
+          shasum -a 256 "dist/H3ddle-$VERSION.zip" > "dist/H3ddle-$VERSION.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3ddle-app
+          path: dist/*
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Unsigned development build for testing.
+
+          **First launch:** macOS blocks unsigned downloads. After opening
+          H3ddle and seeing the warning, allow it in
+          System Settings > Privacy & Security > "Open Anyway", then launch again.
+
+          **Requirements:** Apple silicon, macOS 15 or later, FFmpeg on PATH
+          (`brew install ffmpeg`) for video output. Models are downloaded
+          inside the app from Model Settings; ~32 GB of unified memory is
+          recommended for local generation.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "H3ddle $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --prerelease
