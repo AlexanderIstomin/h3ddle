@@ -231,6 +231,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed for the native generators; nil keeps the engine
   /// default (42). Identical seed + settings reproduce a generation.
   public var seed: UInt64?
+  /// Overrides the quality preset's square canvas when both are set.
+  public var canvasWidth: Int?
+  public var canvasHeight: Int?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -245,6 +248,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
+    canvasWidth: Int? = nil,
+    canvasHeight: Int? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -258,6 +263,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.canvasWidth = canvasWidth
+    self.canvasHeight = canvasHeight
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -273,6 +280,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case previewDenoise
     case useBetaSchedule
     case seed
+    case canvasWidth
+    case canvasHeight
     case modelDirectory
     case outputURL
   }
@@ -294,6 +303,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     useBetaSchedule =
       try container.decodeIfPresent(Bool.self, forKey: .useBetaSchedule) ?? false
     seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
+    canvasWidth = try container.decodeIfPresent(Int.self, forKey: .canvasWidth)
+    canvasHeight = try container.decodeIfPresent(Int.self, forKey: .canvasHeight)
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -310,6 +321,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)
     try container.encodeIfPresent(seed, forKey: .seed)
+    try container.encodeIfPresent(canvasWidth, forKey: .canvasWidth)
+    try container.encodeIfPresent(canvasHeight, forKey: .canvasHeight)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

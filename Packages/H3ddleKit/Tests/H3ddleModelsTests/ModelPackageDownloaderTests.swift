@@ -13,7 +13,7 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.repository == "Comfy-Org/MiniMax-H3")
     #expect(manifest.revision == "014cd40f7e177756c6b2473c0d93b1c89a790dd2")
     #expect(manifest.files.count == 9)
-    #expect(manifest.totalByteCount == 53_931_823_333)
+    #expect(manifest.totalByteCount == 51_895_685_749)
     #expect(manifest.files.filter { $0.role != .runtimeMetadata }.allSatisfy {
       $0.path.hasSuffix(".safetensors")
     })
@@ -232,11 +232,19 @@ struct ModelPackageDownloaderTests {
           + "4aea334367e4007d7b3630810ec28eb97639ae65/"
           + "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
     )
-    // Shared files keep resolving against the manifest's own repository.
-    let sharedFile = try #require(turbo.files.first { $0.role == .videoVAE })
+    // A shared file without its own source resolves against the manifest's
+    // repository; the video VAE overrides both repository and path.
+    let audioVAE = try #require(turbo.files.first { $0.role == .audioVAE })
     #expect(
-      turbo.downloadURL(for: sharedFile).absoluteString
+      turbo.downloadURL(for: audioVAE).absoluteString
         .hasPrefix("https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/")
+    )
+    let videoVAE = try #require(turbo.files.first { $0.role == .videoVAE })
+    #expect(
+      turbo.downloadURL(for: videoVAE).absoluteString
+        == "https://huggingface.co/Kijai/MiniMax-H3-experimental/resolve/"
+          + "a3e7d8da4ae7ba8df0779094cf5ab9d6ee855fe4/"
+          + "minimax_h3_video_vae_int8_convrot.safetensors"
     )
 
     let sharedStandard = standard.files.filter { $0.role != .transformer }
@@ -257,12 +265,19 @@ struct ModelPackageDownloaderTests {
     for index in files.indices {
       files[index].removeValue(forKey: "requiresLocalSource")
       files[index].removeValue(forKey: "localCandidatePath")
+      files[index].removeValue(forKey: "sourcePath")
     }
     object["files"] = files
     let legacy = try JSONSerialization.data(withJSONObject: object)
 
     let decoded = try JSONDecoder().decode(ModelPackageManifest.self, from: legacy)
-    #expect(decoded == ModelCatalog.minimaxH3Int8)
+    // The absent fields take their defaults; everything else round trips.
+    #expect(decoded.generationProfile == .standard)
+    #expect(decoded.files.allSatisfy { !$0.requiresLocalSource })
+    #expect(decoded.files.allSatisfy { $0.localCandidatePath == nil })
+    #expect(decoded.files.allSatisfy { $0.sourcePath == nil })
+    #expect(decoded.id == ModelCatalog.minimaxH3Int8.id)
+    #expect(decoded.files.map(\.sha256) == ModelCatalog.minimaxH3Int8.files.map(\.sha256))
   }
 
   @Test("Shared files hardlink from installed packages instead of downloading")

@@ -37,6 +37,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed; nil keeps the engine default. Same seed and
   /// settings reproduce a generation.
   public var seed: UInt64?
+  /// Overrides the quality preset's square canvas when both are set.
+  public var canvasWidth: Int?
+  public var canvasHeight: Int?
 
   public init(
     kind: GenerationKind,
@@ -48,7 +51,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     coreReuse: Int? = nil,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
-    seed: UInt64? = nil
+    seed: UInt64? = nil,
+    canvasWidth: Int? = nil,
+    canvasHeight: Int? = nil
   ) {
     self.kind = kind
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,6 +65,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.canvasWidth = canvasWidth
+    self.canvasHeight = canvasHeight
   }
 }
 

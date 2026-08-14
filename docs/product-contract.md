@@ -36,6 +36,11 @@
   duration slider; inserted stills hold for 3 seconds. Generate replaces that
   composer with a full-width result (progress, then the finished media).
   Completed results show the wall-clock generate time.
+- Native generation settings sit below the model selector: named presets
+  (Preview / Standard / High) plus Custom, a resolution picker (256, 512, and
+  the two native H3 canvases), denoising, transformer blocks, core reuse, and
+  seed. Editing any preset-owned knob selects Custom and keeps that snapshot
+  when the studio closes.
 - Generation is cancellable and reports phase, progress, and elapsed wall time.
 - Completing a job does not append. Insert to timeline registers the asset and
   appends it after the last item on its lane.

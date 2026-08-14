@@ -115,6 +115,11 @@ final class AppModel {
   var audioTrackMuted = false
   var studioResults: [GenerationResult] = []
   var studioAspect = ProgramAspectRatio.sixteenNine
+  var studioSettings = GenerationStudioSettings.makeDefault() {
+    didSet {
+      persistStudioSettings()
+    }
+  }
 
   private let generationProvider: any GenerationProvider
   private let engineSession: EngineSession
@@ -143,6 +148,7 @@ final class AppModel {
 
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
+  private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
   private static let selectedModelKey = "H3ddle.selectedModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
 
@@ -162,6 +168,13 @@ final class AppModel {
     self.userDefaults = userDefaults
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
+    }
+    if let data = userDefaults.data(forKey: Self.studioSettingsKey),
+      let decoded = try? JSONDecoder().decode(GenerationStudioSettings.self, from: data)
+    {
+      studioSettings = decoded
+    } else {
+      persistStudioSettings()
     }
     restoreModelLibrary()
     refreshManagedModelStatus()
@@ -255,6 +268,20 @@ final class AppModel {
     syncPlayback()
   }
 
+  func applyStudioPreset(_ preset: GenerationPreset) {
+    studioSettings.apply(preset: preset)
+  }
+
+  func updateStudioKnobs(_ mutate: (inout GenerationKnobSnapshot) -> Void) {
+    studioSettings.updateKnobs(mutate)
+  }
+
+  func persistStudioSettings() {
+    if let data = try? JSONEncoder().encode(studioSettings) {
+      userDefaults.set(data, forKey: Self.studioSettingsKey)
+    }
+  }
+
   func generate(
     prompt: String,
     duration: TimeInterval,
@@ -263,7 +290,9 @@ final class AppModel {
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
     previewDenoise: Bool = false,
-    seed: UInt64? = nil
+    seed: UInt64? = nil,
+    canvasWidth: Int? = nil,
+    canvasHeight: Int? = nil
   ) {
     guard let kind = activeGenerationKind else { return }
     generationTask?.cancel()
@@ -313,7 +342,9 @@ final class AppModel {
       coreReuse: coreReuse,
       previewDenoise: previewDenoise,
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
-      seed: seed
+      seed: seed,
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight
     )
     let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =

@@ -108,6 +108,24 @@ struct EngineProtocolTests {
     #expect(decoded.coreReuse == 4)
   }
 
+  @Test("Canvas size overrides survive a round trip")
+  func canvasOverrideRoundTrip() throws {
+    let request = EngineGenerationRequest(
+      kind: .video,
+      prompt: "p",
+      duration: 1,
+      canvasWidth: 1344,
+      canvasHeight: 768,
+      outputURL: URL(fileURLWithPath: "/tmp/o.mp4")
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(request)
+    )
+    #expect(decoded.canvasWidth == 1344)
+    #expect(decoded.canvasHeight == 768)
+  }
+
   @Test("Quality presets stay on validated h3.c combinations")
   func qualityPresetTable() {
     #expect(EngineGenerationQuality.preview.canvasSize == 256)

@@ -657,9 +657,17 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.use_reference_rope = 1
       }
       let quality = request.quality
-      let canvas = audioRequested ? 32 : quality.canvasSize
-      parameters.width = Int32(canvas)
-      parameters.height = Int32(canvas)
+      if audioRequested {
+        parameters.width = 32
+        parameters.height = 32
+      } else if let width = request.canvasWidth, let height = request.canvasHeight {
+        parameters.width = Int32(width)
+        parameters.height = Int32(height)
+      } else {
+        let canvas = Int32(quality.canvasSize)
+        parameters.width = canvas
+        parameters.height = canvas
+      }
       parameters.render_width = 0
       parameters.render_height = 0
       parameters.steps = Int32(quality.denoisingSteps)
