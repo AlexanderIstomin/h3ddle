@@ -969,28 +969,34 @@ private struct ScanningGauge: View {
 
   var body: some View {
     TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-      let spin = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 30) / 30
-        * 360
+      // Sub-expressions are hoisted and kept uniformly Double: the release
+      // archive on CI runners exceeds the type-checker budget when CGFloat
+      // and Double mix freely inside this closure, while debug builds pass.
+      let interval: Double = context.date.timeIntervalSinceReferenceDate
+      let spin: Double = interval.truncatingRemainder(dividingBy: 30) / 30 * 360
       ZStack {
         Circle()
           .stroke(Color.white.opacity(0.12), lineWidth: 16)
         Canvas { ctx, size in
           let ticks = 40
-          let center = CGPoint(x: size.width / 2, y: size.height / 2)
-          let outer = min(size.width, size.height) / 2
+          let centerX = Double(size.width) / 2
+          let centerY = Double(size.height) / 2
+          let outer = min(Double(size.width), Double(size.height)) / 2
           for index in 0..<ticks {
             let angle = (Double(index) / Double(ticks)) * .pi * 2 - .pi / 2
+            let unitX = cos(angle)
+            let unitY = sin(angle)
             var path = Path()
             path.move(
               to: CGPoint(
-                x: center.x + cos(angle) * (outer - 8),
-                y: center.y + sin(angle) * (outer - 8)
+                x: centerX + unitX * (outer - 8),
+                y: centerY + unitY * (outer - 8)
               )
             )
             path.addLine(
               to: CGPoint(
-                x: center.x + cos(angle) * (outer - 1),
-                y: center.y + sin(angle) * (outer - 1)
+                x: centerX + unitX * (outer - 1),
+                y: centerY + unitY * (outer - 1)
               )
             )
             ctx.stroke(path, with: .color(.white.opacity(0.35)), lineWidth: 1.5)
