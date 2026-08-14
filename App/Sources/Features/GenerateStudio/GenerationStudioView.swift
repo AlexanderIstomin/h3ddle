@@ -164,6 +164,10 @@ struct GenerationStudioView: View {
         }
       }
 
+      if kind != .image {
+        audioDesignSection
+      }
+
       if kind != .audio {
         frameAnchorSection
         referenceSection
@@ -178,6 +182,56 @@ struct GenerationStudioView: View {
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(H3Color.surface)
+  }
+
+  /// The soundscape and music sections of H3's trained prompt schema. The
+  /// model reads ambience from a dedicated field, not from the main prose —
+  /// a rain prompt without one has been observed coming back as speech.
+  private var audioDesignSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text("AUDIO DESIGN")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text("optional")
+          .font(.system(size: 9, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.55))
+      }
+      TextField(
+        "Soundscape — ambient and action sound, e.g. steady rain on leaves",
+        text: $model.studioSoundscape,
+        axis: .vertical
+      )
+      .textFieldStyle(.plain)
+      .font(.system(size: 12))
+      .lineLimit(1...3)
+      .padding(10)
+      .background(H3Color.chrome)
+      .overlay {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+      .accessibilityIdentifier("generation-soundscape")
+      TextField(
+        "Music — background score the characters cannot hear; empty for none",
+        text: $model.studioMusic,
+        axis: .vertical
+      )
+      .textFieldStyle(.plain)
+      .font(.system(size: 12))
+      .lineLimit(1...3)
+      .padding(10)
+      .background(H3Color.chrome)
+      .overlay {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+      .accessibilityIdentifier("generation-music")
+    }
   }
 
   private var frameAnchorSection: some View {

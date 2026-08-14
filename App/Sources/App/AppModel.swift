@@ -128,6 +128,11 @@ final class AppModel {
   var studioStartFrame: StudioImageAttachment?
   var studioEndFrame: StudioImageAttachment?
   var studioReferenceImages: [StudioImageAttachment] = []
+  /// Optional schema fields for the composed prompt: the ambient soundscape
+  /// and non-diegetic music sections H3 was trained to read. Empty fields are
+  /// omitted or become the guide's N/A marker; see H3StructuredPrompt.
+  var studioSoundscape = ""
+  var studioMusic = ""
 
   private let generationProvider: any GenerationProvider
   private let engineSession: EngineSession
@@ -407,7 +412,14 @@ final class AppModel {
 
     let request = GenerationRequest(
       kind: kind,
-      prompt: resolveStudioPromptMentions(prompt),
+      prompt: H3StructuredPrompt.compose(
+        body: resolveStudioPromptMentions(prompt),
+        soundscape: studioSoundscape,
+        music: studioMusic,
+        kind: kind,
+        endFrameAlignmentSeconds: kind == .video && studioEndFrame != nil
+          && studioStartFrame == nil ? duration : nil
+      ),
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
