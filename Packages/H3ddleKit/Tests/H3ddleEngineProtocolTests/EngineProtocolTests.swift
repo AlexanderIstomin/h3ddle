@@ -160,7 +160,7 @@ struct EngineProtocolTests {
 
   @Test("Quality presets stay on validated h3.c combinations")
   func qualityPresetTable() {
-    #expect(EngineGenerationQuality.preview.canvasSize == 256)
+    #expect(EngineGenerationQuality.preview.canvasSize == 448)
     #expect(EngineGenerationQuality.preview.denoisingSteps == 4)
     #expect(EngineGenerationQuality.preview.activeDiTLayers == 50)
     #expect(EngineGenerationQuality.preview.denoiseReuse == 1)

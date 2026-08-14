@@ -162,10 +162,13 @@ public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   case high
 
   /// Output canvas edge. All presets use square canvases; H3 requires
-  /// multiples of 32 and treats 256 as the smallest recognizable size.
+  /// multiples of 32. 448 square is 0.2 megapixels, the smallest canvas the
+  /// reference workflows validate — below it prompts stop steering the scene
+  /// and outputs become functions of the seed, measured 2026-08-14 across
+  /// prompts, formats, models, and step counts at 256 square.
   public var canvasSize: Int {
     switch self {
-    case .preview: 256
+    case .preview: 448
     case .standard: 512
     case .high: 768
     }
