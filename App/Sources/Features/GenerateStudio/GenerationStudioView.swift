@@ -21,6 +21,8 @@ struct GenerationStudioView: View {
   @State private var coreReuse = 1
   @State private var showsAdvanced = true
   @State private var seed = UInt64.random(in: 1..<100_000_000)
+  @State private var stage = StudioStage.compose
+  @State private var resultIDAtStart: UUID?
 
   var body: some View {
     ZStack {
@@ -35,12 +37,7 @@ struct GenerationStudioView: View {
       VStack(spacing: 0) {
         header
         Divider().overlay(H3Color.line.opacity(0.75))
-        HStack(spacing: 0) {
-          composer
-            .frame(width: 392)
-          Divider().overlay(H3Color.line.opacity(0.75))
-          results
-        }
+        studioBody
       }
       .frame(maxWidth: 1_080, maxHeight: 720)
       .background(H3Color.surface)
@@ -53,6 +50,33 @@ struct GenerationStudioView: View {
       .padding(24)
     }
     .foregroundStyle(H3Color.textPrimary)
+    .onChange(of: model.isGenerating) { _, generating in
+      guard !generating, stage == .run else { return }
+      if model.errorMessage == nil,
+        let latest = model.latestStudioResult,
+        latest.id != resultIDAtStart
+      {
+        stage = .result
+      } else {
+        stage = .compose
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var studioBody: some View {
+    switch stage {
+    case .compose:
+      HStack(spacing: 0) {
+        promptPane
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Divider().overlay(H3Color.line.opacity(0.75))
+        settingsPane
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    case .run, .result:
+      resultPane
+    }
   }
 
   private var header: some View {
@@ -90,25 +114,35 @@ struct GenerationStudioView: View {
     .background(H3Color.chrome)
   }
 
-  private var composer: some View {
+  private var promptPane: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("PROMPT")
+        .font(.system(size: 9, weight: .bold, design: .monospaced))
+        .tracking(1.6)
+        .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+
+      TextEditor(text: $model.generationPrompt)
+        .font(.system(size: 15))
+        .scrollContentBackground(.hidden)
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 13, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .accessibilityIdentifier("generation-prompt")
+    }
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(H3Color.surface)
+  }
+
+  private var settingsPane: some View {
     VStack(alignment: .leading, spacing: 0) {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          labeled("PROMPT") {
-            TextEditor(text: $model.generationPrompt)
-              .font(.system(size: 14))
-              .scrollContentBackground(.hidden)
-              .frame(minHeight: 110)
-              .padding(14)
-              .background(H3Color.chrome)
-              .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                  .stroke(H3Color.line, lineWidth: 1)
-              }
-              .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-              .accessibilityIdentifier("generation-prompt")
-          }
-
           if kind != .audio {
             labeled("ASPECT RATIO") {
               HStack(spacing: 9) {
@@ -189,16 +223,7 @@ struct GenerationStudioView: View {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
-              model.generate(
-                prompt: model.generationPrompt,
-                duration: requestedDuration,
-                quality: quality,
-                denoisingSteps: 3,
-                activeDiTLayers: activeDiTLayers,
-                coreReuse: 1,
-                previewDenoise: model.previewDenoise,
-                seed: seed
-              )
+              startGeneration(denoisingSteps: 3, coreReuse: 1)
             } label: {
               VStack(spacing: 1) {
                 Text("Draft")
@@ -222,15 +247,9 @@ struct GenerationStudioView: View {
           }
 
           Button {
-            model.generate(
-              prompt: model.generationPrompt,
-              duration: requestedDuration,
-              quality: quality,
+            startGeneration(
               denoisingSteps: Int(denoisingSteps),
-              activeDiTLayers: activeDiTLayers,
-              coreReuse: coreReuse,
-              previewDenoise: model.previewDenoise,
-              seed: usesNativeSettings ? seed : nil
+              coreReuse: coreReuse
             )
           } label: {
             HStack(spacing: 10) {
@@ -444,11 +463,8 @@ struct GenerationStudioView: View {
     }
   }
 
-  private var results: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Text("Results")
-        .font(.system(size: 14, weight: .semibold))
-
+  private var resultPane: some View {
+    VStack(spacing: 16) {
       ZStack {
         RoundedRectangle(cornerRadius: 14, style: .continuous)
           .fill(H3Color.chrome)
@@ -457,7 +473,7 @@ struct GenerationStudioView: View {
               .stroke(H3Color.line, lineWidth: 1)
           }
 
-        if model.isGenerating {
+        if stage == .run {
           GenerationProgressCanvas(
             verb: kind.rawValue,
             phase: model.generationPhase,
@@ -467,19 +483,15 @@ struct GenerationStudioView: View {
           )
         } else if let result = model.latestStudioResult {
           GenerationResultMedia(asset: result.asset)
-        } else {
-          Text("Generate to preview a result here.")
-            .font(.system(size: 13))
-            .foregroundStyle(H3Color.textSecondary)
         }
       }
-      .aspectRatio(resultAspect, contentMode: .fit)
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-      if model.isGenerating {
+      if stage == .run {
         Button("Cancel") {
           model.cancelGeneration()
+          stage = .compose
         }
         .buttonStyle(H3QuietButtonStyle())
       } else if let result = model.latestStudioResult {
@@ -489,20 +501,39 @@ struct GenerationStudioView: View {
             .foregroundStyle(H3Color.textSecondary)
             .accessibilityIdentifier("generation-completed-duration")
         }
-        Button {
-          model.insertToTimeline(result)
-        } label: {
-          Label("Insert to timeline", systemImage: "plus")
+        HStack(spacing: 10) {
+          Button("Generate another") {
+            stage = .compose
+          }
+          .buttonStyle(H3QuietButtonStyle())
+          Button {
+            model.insertToTimeline(result)
+          } label: {
+            Label("Insert to timeline", systemImage: "plus")
+          }
+          .buttonStyle(H3PrimaryButtonStyle())
+          .accessibilityIdentifier("insert-to-timeline")
         }
-        .buttonStyle(H3PrimaryButtonStyle())
-        .accessibilityIdentifier("insert-to-timeline")
       }
-
-      Spacer(minLength: 0)
     }
     .padding(20)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(red: 15 / 255, green: 18 / 255, blue: 23 / 255))
+  }
+
+  private func startGeneration(denoisingSteps: Int, coreReuse: Int) {
+    resultIDAtStart = model.latestStudioResult?.id
+    stage = .run
+    model.generate(
+      prompt: model.generationPrompt,
+      duration: requestedDuration,
+      quality: quality,
+      denoisingSteps: denoisingSteps,
+      activeDiTLayers: activeDiTLayers,
+      coreReuse: coreReuse,
+      previewDenoise: model.previewDenoise,
+      seed: usesNativeSettings ? seed : nil
+    )
   }
 
   private func labeled<Content: View>(
@@ -564,10 +595,6 @@ struct GenerationStudioView: View {
       && !model.isGenerating
   }
 
-  private var resultAspect: CGFloat {
-    kind == .audio ? 16 / 9 : model.studioAspect.fraction
-  }
-
   private var alignedFrames: Int {
     Self.h3MinimumFrames + Self.h3FrameChunk * Int(alignedDurationStep)
   }
@@ -592,6 +619,12 @@ struct GenerationStudioView: View {
   }
 }
 
+private enum StudioStage {
+  case compose
+  case run
+  case result
+}
+
 private struct GenerationProgressCanvas: View {
   var verb: String
   var phase: String
@@ -599,55 +632,11 @@ private struct GenerationProgressCanvas: View {
   var progress: Double
   var preview: CGImage?
 
-  @State private var shimmer = false
-  @State private var scan = false
-  @State private var spin = false
-
   var body: some View {
     ZStack {
-      LinearGradient(
-        colors: [
-          Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255),
-          Color(red: 36 / 255, green: 42 / 255, blue: 51 / 255),
-          Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255),
-        ],
-        startPoint: .leading,
-        endPoint: .trailing
-      )
-      .scaleEffect(x: 2, y: 1, anchor: shimmer ? .trailing : .leading)
-      .animation(.linear(duration: 1.4).repeatForever(autoreverses: false), value: shimmer)
-
-      if let preview {
-        Image(decorative: preview, scale: 1)
-          .resizable()
-          .scaledToFill()
-          .opacity(0.35)
-      }
-
-      GeometryReader { proxy in
-        LinearGradient(
-          colors: [.clear, H3Color.accent, .clear],
-          startPoint: .leading,
-          endPoint: .trailing
-        )
-        .frame(height: 2)
-        .shadow(color: H3Color.accent.opacity(0.6), radius: 7)
-        .offset(y: scan ? proxy.size.height - 2 : 0)
-        .animation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true), value: scan)
-      }
-
+      GenerationProgressBackdrop(preview: preview)
       VStack(spacing: 14) {
-        ZStack {
-          Circle()
-            .stroke(Color.white.opacity(0.12), lineWidth: 3)
-          Circle()
-            .trim(from: 0, to: 0.28)
-            .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            .rotationEffect(.degrees(spin ? 360 : 0))
-            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spin)
-        }
-        .frame(width: 56, height: 56)
-
+        GenerationProgressSpinner()
         VStack(spacing: 3) {
           Text(phase.isEmpty ? "Generating \(verb)…" : phase)
             .font(.system(size: 13.5, weight: .semibold))
@@ -660,10 +649,80 @@ private struct GenerationProgressCanvas: View {
       }
     }
     .clipped()
-    .onAppear {
-      shimmer = true
-      scan = true
-      spin = true
+  }
+}
+
+/// Clock-driven motion so elapsed/progress updates never restart the loop.
+private struct GenerationProgressBackdrop: View {
+  var preview: CGImage?
+
+  private let deep = Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255)
+  private let lift = Color(red: 36 / 255, green: 42 / 255, blue: 51 / 255)
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+      let time = context.date.timeIntervalSinceReferenceDate
+      let shimmer = time.truncatingRemainder(dividingBy: 2.4) / 2.4
+      let scan = (sin(time * .pi / 1.7) + 1) / 2
+
+      GeometryReader { proxy in
+        let width = proxy.size.width
+        let height = proxy.size.height
+        ZStack {
+          deep
+          LinearGradient(
+            stops: [
+              .init(color: deep, location: 0),
+              .init(color: lift, location: 0.25),
+              .init(color: deep, location: 0.5),
+              .init(color: lift, location: 0.75),
+              .init(color: deep, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+          )
+          .frame(width: width * 2, height: height)
+          .offset(x: -width * shimmer)
+
+          if let preview {
+            Image(decorative: preview, scale: 1)
+              .resizable()
+              .scaledToFill()
+              .frame(width: width, height: height)
+              .opacity(0.35)
+          }
+
+          LinearGradient(
+            colors: [.clear, H3Color.accent, .clear],
+            startPoint: .leading,
+            endPoint: .trailing
+          )
+          .frame(width: width, height: 2)
+          .shadow(color: H3Color.accent.opacity(0.6), radius: 7)
+          .position(x: width / 2, y: 1 + scan * max(height - 2, 0))
+        }
+        .frame(width: width, height: height)
+        .clipped()
+      }
+    }
+  }
+}
+
+private struct GenerationProgressSpinner: View {
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+      let spin =
+        (context.date.timeIntervalSinceReferenceDate / 0.9)
+        .truncatingRemainder(dividingBy: 1) * 360
+      ZStack {
+        Circle()
+          .stroke(Color.white.opacity(0.12), lineWidth: 3)
+        Circle()
+          .trim(from: 0, to: 0.28)
+          .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+          .rotationEffect(.degrees(spin))
+      }
+      .frame(width: 56, height: 56)
     }
   }
 }

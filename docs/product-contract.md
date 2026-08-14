@@ -31,10 +31,11 @@
 
 - The initiating lane determines the generation kind. Visual offers video and
   image. Audio offers audio.
-- The studio is a 1B overlay with a prompt, aspect-ratio chips for visual
-  kinds, a Generate action, and a Results panel for the latest job. Image
-  jobs have no duration slider; inserted stills hold for 3 seconds. Completed
-  results show the wall-clock generate time.
+- The studio is a 1B overlay split in half: a full-height prompt on the left
+  and the remaining settings plus Generate on the right. Image jobs have no
+  duration slider; inserted stills hold for 3 seconds. Generate replaces that
+  composer with a full-width result (progress, then the finished media).
+  Completed results show the wall-clock generate time.
 - Generation is cancellable and reports phase, progress, and elapsed wall time.
 - Completing a job does not append. Insert to timeline registers the asset and
   appends it after the last item on its lane.

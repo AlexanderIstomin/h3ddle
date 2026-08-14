@@ -110,28 +110,6 @@ struct ModelSettingsView: View {
         )
       }
 
-      if let status = model.managedStatuses[model.adapterManifest.id] {
-        ModelChoiceRow(
-          choice: ModelChoice(
-            id: model.adapterManifest.id,
-            displayName: model.adapterManifest.displayName,
-            subtitle: status.installedURL != nil
-              ? "Applied on top of the selected model"
-              : ByteCountFormatter.string(
-                fromByteCount: model.adapterManifest.totalByteCount, countStyle: .file),
-            source: .managed(model.adapterManifest),
-            directory: status.installedURL,
-            generationProfile: .turbo
-          ),
-          isSelected: model.adapterIsActive,
-          status: status,
-          select: { model.adapterEnabled.toggle() },
-          install: { manifestPendingDownload = model.adapterManifest },
-          pause: { model.cancelManagedModelDownload() },
-          remove: nil
-        )
-      }
-
       Button {
         isChoosingModel = true
       } label: {

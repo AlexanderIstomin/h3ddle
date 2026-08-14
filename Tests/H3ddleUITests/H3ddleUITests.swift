@@ -33,9 +33,9 @@ final class H3ddleUITests: XCTestCase {
   }
 
   @MainActor
-  func testGenerationStudioKeepsItsChromeVisibleDuringProgress() {
+  func testGenerationStudioHidesComposerDuringProgress() {
     let app = XCUIApplication()
-    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleFastFakeGeneration"]
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
 
     XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 5))
@@ -62,7 +62,10 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(title.exists)
     XCTAssertTrue(title.isHittable)
     XCTAssertTrue(cancel.isHittable)
+    XCTAssertFalse(prompt.exists)
+    XCTAssertFalse(generate.exists)
     cancel.click()
+    XCTAssertTrue(prompt.waitForExistence(timeout: 2))
   }
 
   @MainActor
