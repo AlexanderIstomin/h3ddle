@@ -6,6 +6,7 @@ public enum ModelPackageRole: String, Codable, Equatable, Sendable {
   case videoVAE
   case audioVAE
   case referenceTransformer
+  case previewDecoder
   case runtimeMetadata
 }
 
@@ -196,6 +197,17 @@ public enum ModelCatalog {
       path: "vae/minimax_h3_audio_vae_fp32.safetensors",
       byteCount: 605_254_808,
       sha256: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    ),
+    // Kijai's tiny 2D preview decoder (Apache-2.0). The engine prefers it for
+    // live denoising previews: milliseconds per frame and megabytes resident
+    // where the full decoder costs a long load and about ten gigabytes.
+    ModelPackageFile(
+      role: .previewDecoder,
+      path: "vae_approx/taeh3.safetensors",
+      byteCount: 9_791_388,
+      sha256: "f0f60fa072089997f817402098c2fd90777cb2660dd79cf5df42fc1e3e08e527",
+      sourceRepository: "Kijai/MiniMax-H3-TAE",
+      sourceRevision: "a213ac8bf2f148b4f32372279a7f207846978900"
     ),
     officialMetadata(
       path: "FL2VA/tokenizer/tokenizer.json",

@@ -25,6 +25,7 @@ let package = Package(
         "Vendor/h3.c/h3_dit_schedule.c",
         "Vendor/h3.c/h3_dit.c",
         "Vendor/h3.c/h3_video_vae.c",
+        "Vendor/h3.c/h3_tae.c",
         "Vendor/h3.c/h3_video_encoder.c",
         "Vendor/h3.c/h3_audio_vae.c",
         "Vendor/h3.c/h3_ffmpeg.c",

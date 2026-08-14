@@ -12,8 +12,8 @@ struct ModelPackageDownloaderTests {
 
     #expect(manifest.repository == "Comfy-Org/MiniMax-H3")
     #expect(manifest.revision == "014cd40f7e177756c6b2473c0d93b1c89a790dd2")
-    #expect(manifest.files.count == 9)
-    #expect(manifest.totalByteCount == 53_931_823_333)
+    #expect(manifest.files.count == 10)
+    #expect(manifest.totalByteCount == 53_941_614_721)
     #expect(manifest.files.filter { $0.role != .runtimeMetadata }.allSatisfy {
       $0.path.hasSuffix(".safetensors")
     })
