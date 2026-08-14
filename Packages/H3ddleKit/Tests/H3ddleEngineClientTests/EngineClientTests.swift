@@ -131,8 +131,8 @@ struct EngineClientTests {
     defer { session.shutdown() }
 
     _ = try await session.capabilities()
-    let first = session.processIdentifier
-    #expect(first != nil)
+    #expect(session.processIdentifier != nil)
+    let launchesBefore = session.helperLaunchCount
 
     let provider = EngineGenerationProvider(
       session: session,
@@ -152,9 +152,10 @@ struct EngineClientTests {
     await generation.value
 
     _ = try await session.capabilities()
-    let second = session.processIdentifier
-    #expect(second != nil)
-    #expect(second != first)
+    #expect(session.processIdentifier != nil)
+    // The OS may recycle the killed helper's pid for its replacement — CI
+    // runners do — so the fresh launch is the assertion, not a changed pid.
+    #expect(session.helperLaunchCount == launchesBefore + 1)
   }
 
   @Test("Helper stderr is drained so a long session does not stall")

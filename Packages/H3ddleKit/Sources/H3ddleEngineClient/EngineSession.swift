@@ -22,6 +22,7 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
   private var leftover = Data()
   private var stderrLog = Data()
   private var cancelledJobs = Set<UUID>()
+  private var launchCount = 0
   private var activeJobID: UUID?
   private var escalationWork: [UUID: DispatchWorkItem] = [:]
 
@@ -97,6 +98,13 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
       guard let process, process.isRunning else { return nil }
       return process.processIdentifier
     }
+  }
+
+  /// Helper processes launched over this session's lifetime. A relaunch is
+  /// asserted through this counter rather than by comparing process
+  /// identifiers, which the OS may legally hand back to the replacement.
+  var helperLaunchCount: Int {
+    lock.withLock { launchCount }
   }
 
   private func exchange(
@@ -218,6 +226,7 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
 
     lock.withLock {
       self.process = process
+      launchCount += 1
       standardInput = inputPipe.fileHandleForWriting
       standardOutput = outputPipe.fileHandleForReading
       standardError = errorHandle
