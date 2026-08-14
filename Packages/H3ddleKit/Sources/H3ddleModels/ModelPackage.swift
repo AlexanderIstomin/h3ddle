@@ -180,23 +180,15 @@ public enum ModelCatalog {
       byteCount: 27_141_342_152,
       sha256: "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
     ),
-    // The int8 ConvRot decoder replaces the fp16 one: same output to 53.9 dB
-    // PSNR, about 1.6x faster to decode, and 2.6 GB smaller.
+    // The int8 ConvRot decoder was measured about 2x slower to decode than
+    // the fp16 one at 512 with a 22-frame clip on Apple silicon, so the
+    // released decoder stays the shipped default. The engine still reads an
+    // int8 decoder when a package provides one.
     ModelPackageFile(
       role: .videoVAE,
-      path: "vae/minimax_h3_video_vae_int8_convrot.safetensors",
-      byteCount: 3_171_670_912,
-      sha256: "9bb2d96f218c76babd85e0611b85ca8fb330a90546c01a0005e8a58a59593410",
-      sourceRepository: "Kijai/MiniMax-H3-experimental",
-      sourceRevision: "a3e7d8da4ae7ba8df0779094cf5ab9d6ee855fe4",
-      sourcePath: "minimax_h3_video_vae_int8_convrot.safetensors",
-      localCandidatePath: URL.applicationSupportDirectory
-        .appendingPathComponent("H3ddle", isDirectory: true)
-        .appendingPathComponent("Conversion", isDirectory: true)
-        .appendingPathComponent(
-          "minimax_h3_video_vae_int8_convrot.safetensors", isDirectory: false
-        )
-        .path
+      path: "vae/minimax_h3_video_vae_fp16.safetensors",
+      byteCount: 5_207_808_496,
+      sha256: "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
     ),
     ModelPackageFile(
       role: .audioVAE,

@@ -13,7 +13,7 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.repository == "Comfy-Org/MiniMax-H3")
     #expect(manifest.revision == "014cd40f7e177756c6b2473c0d93b1c89a790dd2")
     #expect(manifest.files.count == 9)
-    #expect(manifest.totalByteCount == 51_895_685_749)
+    #expect(manifest.totalByteCount == 53_931_823_333)
     #expect(manifest.files.filter { $0.role != .runtimeMetadata }.allSatisfy {
       $0.path.hasSuffix(".safetensors")
     })
@@ -232,24 +232,16 @@ struct ModelPackageDownloaderTests {
           + "4aea334367e4007d7b3630810ec28eb97639ae65/"
           + "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
     )
-    // A shared file without its own source resolves against the manifest's
-    // repository; the video VAE overrides both repository and path.
-    let audioVAE = try #require(turbo.files.first { $0.role == .audioVAE })
-    #expect(
-      turbo.downloadURL(for: audioVAE).absoluteString
-        .hasPrefix("https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/")
-    )
-    let videoVAE = try #require(turbo.files.first { $0.role == .videoVAE })
-    #expect(
-      turbo.downloadURL(for: videoVAE).absoluteString
-        == "https://huggingface.co/Kijai/MiniMax-H3-experimental/resolve/"
-          + "a3e7d8da4ae7ba8df0779094cf5ab9d6ee855fe4/"
-          + "minimax_h3_video_vae_int8_convrot.safetensors"
-    )
-
+    // Every non-transformer file is identical across the two packages, so an
+    // install of one can supply the other.
     let sharedStandard = standard.files.filter { $0.role != .transformer }
     let sharedTurbo = turbo.files.filter { $0.role != .transformer }
     #expect(sharedStandard == sharedTurbo)
+    let videoVAE = try #require(turbo.files.first { $0.role == .videoVAE })
+    #expect(
+      turbo.downloadURL(for: videoVAE).absoluteString
+        .hasPrefix("https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/")
+    )
   }
 
   @Test("Manifests written before generation profiles decode with defaults")
