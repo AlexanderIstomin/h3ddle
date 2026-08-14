@@ -315,9 +315,23 @@ public actor ModelPackageDownloader {
 
     let installedURL = store.installedURL(for: manifest)
     if fileManager.fileExists(atPath: installedURL.path) {
-      throw ModelDownloadError.installCollision(installedURL)
+      // Swap rather than refuse: the staged tree is complete and verified,
+      // and its unchanged files are hardlinks to the ones being replaced.
+      let previousURL = installedURL.appendingPathExtension("previous")
+      if fileManager.fileExists(atPath: previousURL.path) {
+        try fileManager.removeItem(at: previousURL)
+      }
+      try fileManager.moveItem(at: installedURL, to: previousURL)
+      do {
+        try fileManager.moveItem(at: stagingURL, to: installedURL)
+      } catch {
+        try? fileManager.moveItem(at: previousURL, to: installedURL)
+        throw error
+      }
+      try? fileManager.removeItem(at: previousURL)
+    } else {
+      try fileManager.moveItem(at: stagingURL, to: installedURL)
     }
-    try fileManager.moveItem(at: stagingURL, to: installedURL)
     progress(
       ModelDownloadProgress(
         phase: .completed,
@@ -385,6 +399,13 @@ public actor ModelPackageDownloader {
     var candidates: [URL] = []
     if let localPath = file.localCandidatePath {
       candidates.append(URL(fileURLWithPath: localPath))
+    }
+    // An update reuses the bytes it already has: unchanged files hardlink
+    // out of the existing install instead of downloading again.
+    let installed = store.installedURL(for: manifest)
+      .appendingPathComponent(file.path, isDirectory: false)
+    if FileManager.default.fileExists(atPath: installed.path) {
+      candidates.append(installed)
     }
     candidates.append(
       contentsOf: installedCandidates(sha256: file.sha256, excludingPackage: manifest.id)

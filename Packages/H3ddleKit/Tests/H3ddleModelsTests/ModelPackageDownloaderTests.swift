@@ -341,6 +341,69 @@ struct ModelPackageDownloaderTests {
     #expect(turboData == localPayload)
   }
 
+  @Test("A changed manifest updates in place and keeps unchanged bytes")
+  func updatesInstalledPackage() async throws {
+    let shared = Data("weights that do not change".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ModelPackageStore(rootURL: root)
+
+    func manifest(extra: Data?) -> ModelPackageManifest {
+      var files = [
+        ModelPackageFile(
+          role: .transformer,
+          path: "weights/model.safetensors",
+          byteCount: Int64(shared.count),
+          sha256: SHA256.hash(data: shared).map { String(format: "%02x", $0) }.joined()
+        )
+      ]
+      if let extra {
+        files.append(
+          ModelPackageFile(
+            role: .videoVAE,
+            path: "vae/added.safetensors",
+            byteCount: Int64(extra.count),
+            sha256: SHA256.hash(data: extra).map { String(format: "%02x", $0) }.joined()
+          )
+        )
+      }
+      return ModelPackageManifest(
+        id: "fixture-model", displayName: "Fixture", detail: "d",
+        repository: "example/fixture", revision: String(repeating: "a", count: 40),
+        licenseName: "Test", licenseURL: URL(string: "https://example.com/l")!,
+        minimumUnifiedMemoryBytes: 1, compatibility: .ready, files: files
+      )
+    }
+
+    _ = try await ModelPackageDownloader(
+      store: store, transport: FixtureTransport(payload: shared),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(manifest(extra: nil))
+
+    // The updated manifest adds a file; the unchanged one must not be fetched.
+    let added = Data("a newly added file".utf8)
+    let updated = manifest(extra: added)
+    let transport = SingleFileTransport(payload: added)
+    let installedURL = try await ModelPackageDownloader(
+      store: store, transport: transport,
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(updated)
+
+    #expect(
+      try Data(contentsOf: installedURL.appendingPathComponent("vae/added.safetensors"))
+        == added
+    )
+    #expect(
+      try Data(contentsOf: installedURL.appendingPathComponent("weights/model.safetensors"))
+        == shared
+    )
+    #expect(await transport.requestCount == 1)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: installedURL.appendingPathExtension("previous").path)
+    )
+  }
+
   @Test("A local-only file with no verified copy fails with a clear error")
   func missingLocalSource() async throws {
     let payload = Data("never hosted".utf8)
@@ -404,6 +467,25 @@ struct ModelPackageDownloaderTests {
       .appendingPathComponent("H3ddleModelsTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+  }
+}
+
+private actor SingleFileTransport: ModelFileTransport {
+  let payload: Data
+  private(set) var requestCount = 0
+
+  init(payload: Data) { self.payload = payload }
+
+  func download(
+    request: URLRequest,
+    to destination: URL,
+    existingBytes: Int64,
+    progress: @escaping @Sendable (Int64) -> Void
+  ) async throws -> ModelHTTPResponse {
+    requestCount += 1
+    try payload.write(to: destination)
+    progress(Int64(payload.count))
+    return ModelHTTPResponse(statusCode: 200, bytesWritten: Int64(payload.count))
   }
 }
 
