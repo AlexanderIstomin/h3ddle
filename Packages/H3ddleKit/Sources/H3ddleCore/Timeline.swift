@@ -10,6 +10,14 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
   public var sourceOffset: TimeInterval
   /// Empty time before this clip. Later clips stay sequential after it.
   public var gapBefore: TimeInterval
+  /// How this clip fills the program canvas.
+  public var canvasFit: CanvasFit
+  /// Quarter-turns clockwise in `0...3`.
+  public var rotationTurns: Int
+
+  public var canvasTransform: VisualCanvasTransform {
+    VisualCanvasTransform(fit: canvasFit, rotationTurns: rotationTurns)
+  }
 
   public init(
     id: UUID = UUID(),
@@ -18,7 +26,9 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     isEnabled: Bool = true,
     includesNativeAudio: Bool = true,
     sourceOffset: TimeInterval = 0,
-    gapBefore: TimeInterval = 0
+    gapBefore: TimeInterval = 0,
+    canvasFit: CanvasFit = .fit,
+    rotationTurns: Int = 0
   ) {
     self.id = id
     self.assetID = assetID
@@ -27,6 +37,8 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     self.includesNativeAudio = includesNativeAudio
     self.sourceOffset = max(0, sourceOffset)
     self.gapBefore = max(0, gapBefore)
+    self.canvasFit = canvasFit
+    self.rotationTurns = CanvasLayout.normalizedTurns(rotationTurns)
   }
 
   public init(from decoder: any Decoder) throws {
@@ -44,6 +56,10 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
       0,
       try container.decodeIfPresent(TimeInterval.self, forKey: .gapBefore) ?? 0
     )
+    canvasFit = try container.decodeIfPresent(CanvasFit.self, forKey: .canvasFit) ?? .fit
+    rotationTurns = CanvasLayout.normalizedTurns(
+      try container.decodeIfPresent(Int.self, forKey: .rotationTurns) ?? 0
+    )
   }
 
   enum CodingKeys: String, CodingKey {
@@ -54,6 +70,8 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     case includesNativeAudio
     case sourceOffset
     case gapBefore
+    case canvasFit
+    case rotationTurns
   }
 }
 
@@ -275,14 +293,17 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
   }
 
   @discardableResult
-  public mutating func appendVisual(_ asset: AssetReference) throws -> VisualItem {
+  public mutating func appendVisual(
+    _ asset: AssetReference,
+    includesNativeAudio: Bool? = nil
+  ) throws -> VisualItem {
     guard asset.kind.isVisual else {
       throw TimelineError.expectedVisualAsset
     }
     let item = VisualItem(
       assetID: asset.id,
       duration: asset.duration,
-      includesNativeAudio: asset.kind == .video
+      includesNativeAudio: includesNativeAudio ?? (asset.kind == .video)
     )
     visualItems.append(item)
     return item
@@ -312,6 +333,18 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     visualItems[index].duration = max(0, trim.duration)
     visualItems[index].sourceOffset = max(0, trim.sourceOffset)
     visualItems[index].gapBefore = max(0, trim.gapBefore)
+  }
+
+  public mutating func setVisualCanvasFit(_ id: UUID, _ fit: CanvasFit) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    visualItems[index].canvasFit = fit
+  }
+
+  public mutating func rotateVisual(_ id: UUID, by turns: Int = 1) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    visualItems[index].rotationTurns = CanvasLayout.normalizedTurns(
+      visualItems[index].rotationTurns + turns
+    )
   }
 
   public mutating func setAudioEnabled(_ id: UUID, isEnabled: Bool) {
@@ -353,6 +386,120 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
   /// Removing audio deliberately preserves every later item's absolute start time.
   public mutating func removeAudio(_ id: UUID) {
     audioItems.removeAll { $0.id == id }
+  }
+
+  public func canSplitVisual(
+    _ id: UUID,
+    at time: TimeInterval,
+    framesPerSecond: Double
+  ) -> Bool {
+    guard let placement = visualPlacements.first(where: { $0.item.id == id }) else {
+      return false
+    }
+    return TimelineSplit.canSplit(
+      startTime: placement.startTime,
+      duration: placement.item.duration,
+      at: time,
+      framesPerSecond: framesPerSecond
+    )
+  }
+
+  public func canSplitAudio(
+    _ id: UUID,
+    at time: TimeInterval,
+    framesPerSecond: Double
+  ) -> Bool {
+    guard let item = audioItems.first(where: { $0.id == id }) else { return false }
+    return TimelineSplit.canSplit(
+      startTime: item.startTime,
+      duration: item.duration,
+      at: time,
+      framesPerSecond: framesPerSecond
+    )
+  }
+
+  /// Divides the visual clip at `time`. The left half keeps the original id.
+  @discardableResult
+  public mutating func splitVisual(
+    _ id: UUID,
+    at time: TimeInterval,
+    sourceKind: MediaKind,
+    framesPerSecond: Double
+  ) -> (left: UUID, right: UUID)? {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let placement = visualPlacements[index]
+    let item = visualItems[index]
+    guard
+      TimelineSplit.canSplit(
+        startTime: placement.startTime,
+        duration: item.duration,
+        at: time,
+        framesPerSecond: framesPerSecond
+      )
+    else {
+      return nil
+    }
+    let leftDuration = time - placement.startTime
+    let rightDuration = item.duration - leftDuration
+    visualItems[index].duration = leftDuration
+    let right = VisualItem(
+      assetID: item.assetID,
+      duration: rightDuration,
+      isEnabled: item.isEnabled,
+      includesNativeAudio: item.includesNativeAudio,
+      sourceOffset: sourceKind == .video ? item.sourceOffset + leftDuration : 0,
+      gapBefore: 0,
+      canvasFit: item.canvasFit,
+      rotationTurns: item.rotationTurns
+    )
+    visualItems.insert(right, at: index + 1)
+    return (item.id, right.id)
+  }
+
+  /// Divides the audio clip at `time`. Later audio start times stay put.
+  @discardableResult
+  public mutating func splitAudio(
+    _ id: UUID,
+    at time: TimeInterval,
+    framesPerSecond: Double
+  ) -> (left: UUID, right: UUID)? {
+    guard let index = audioItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let item = audioItems[index]
+    guard
+      TimelineSplit.canSplit(
+        startTime: item.startTime,
+        duration: item.duration,
+        at: time,
+        framesPerSecond: framesPerSecond
+      )
+    else {
+      return nil
+    }
+    let leftDuration = time - item.startTime
+    audioItems[index].duration = leftDuration
+    let right = AudioItem(
+      assetID: item.assetID,
+      startTime: time,
+      duration: item.duration - leftDuration,
+      isEnabled: item.isEnabled,
+      gain: item.gain,
+      sourceOffset: item.sourceOffset + leftDuration
+    )
+    audioItems.insert(right, at: index + 1)
+    return (item.id, right.id)
+  }
+}
+
+public enum TimelineSplit: Sendable {
+  public static func canSplit(
+    startTime: TimeInterval,
+    duration: TimeInterval,
+    at time: TimeInterval,
+    framesPerSecond: Double
+  ) -> Bool {
+    let minimum = VisualTrimMath.minimumDuration(framesPerSecond: framesPerSecond)
+    let endTime = startTime + duration
+    return time >= startTime + minimum && time <= endTime - minimum
   }
 }
 

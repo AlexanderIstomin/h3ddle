@@ -77,7 +77,8 @@ final class AppModel {
   var generationPreviewImage: CGImage?
   var generationPrompt = ""
   var errorMessage: String?
-  var showsExportNotice = false
+  var importErrorMessage: String?
+  var showsExport = false
   var showsModelSettings = false
   var showsProjectSettings = false
   var modelDirectory: URL?
@@ -86,7 +87,11 @@ final class AppModel {
   var engineCapabilities: EngineCapabilities?
   var modelReport: EngineModelReport?
   let managedModel = ModelCatalog.minimaxH3Int8
-  let managedManifests = [ModelCatalog.minimaxH3Int8, ModelCatalog.minimaxH3TurboInt8]
+  let managedManifests = [
+    ModelCatalog.minimaxH3Int8,
+    ModelCatalog.minimaxH3TurboInt8,
+    ModelCatalog.minimaxH3Ref2VAInt8,
+  ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   var modelChoices: [ModelChoice] = []
   var selectedModelID: String? {
@@ -120,6 +125,9 @@ final class AppModel {
       persistStudioSettings()
     }
   }
+  var studioStartFrame: StudioImageAttachment?
+  var studioEndFrame: StudioImageAttachment?
+  var studioReferenceImages: [StudioImageAttachment] = []
 
   private let generationProvider: any GenerationProvider
   private let engineSession: EngineSession
@@ -202,6 +210,13 @@ final class AppModel {
     }
   }
 
+  /// Audio renders the joint model at H3's native canvas; a smaller one loses
+  /// the prompt and returns speech. Shown wherever settings are reported.
+  static var audioCanvasLabel: String {
+    let size = EngineGenerationRequest.audioCanvasSize
+    return "\(size)×\(size)"
+  }
+
   var managedModelDownloadIsActive: Bool {
     switch managedModelState {
     case .downloading, .verifying, .installing:
@@ -209,6 +224,13 @@ final class AppModel {
     default:
       false
     }
+  }
+
+  /// Bytes an install of this package still has to fetch. Packages share most
+  /// of their weights, so a manifest's total overstates the cost whenever
+  /// another package already supplies those files.
+  func pendingDownloadBytes(for manifest: ModelPackageManifest) -> Int64 {
+    manifest.totalByteCount
   }
 
   func generationBackendDescription(
@@ -220,7 +242,7 @@ final class AppModel {
     previewDenoise: Bool = false
   ) -> String {
     if usesNativeEngine(for: kind) {
-      let canvas = kind == .audio ? "32×32" : "\(quality.canvasSize)×\(quality.canvasSize)"
+      let canvas = kind == .audio ? Self.audioCanvasLabel : "\(quality.canvasSize)×\(quality.canvasSize)"
       let steps = denoisingSteps ?? quality.denoisingSteps
       var parts = ["Local h3.c"]
       if kind == .image {
@@ -274,6 +296,57 @@ final class AppModel {
 
   func updateStudioKnobs(_ mutate: (inout GenerationKnobSnapshot) -> Void) {
     studioSettings.updateKnobs(mutate)
+  }
+
+  var studioHasFrameAnchors: Bool {
+    studioStartFrame != nil || studioEndFrame != nil
+  }
+
+  var studioHasReferences: Bool {
+    !studioReferenceImages.isEmpty
+  }
+
+  func setStudioStartFrame(_ url: URL) {
+    guard !studioHasReferences else { return }
+    studioStartFrame = StudioImageAttachment(url: url)
+  }
+
+  func setStudioEndFrame(_ url: URL) {
+    guard !studioHasReferences else { return }
+    studioEndFrame = StudioImageAttachment(url: url)
+  }
+
+  func clearStudioStartFrame() {
+    studioStartFrame = nil
+  }
+
+  func clearStudioEndFrame() {
+    studioEndFrame = nil
+  }
+
+  /// Ref2VA accepts 12 references overall but only 9 of them images, and every
+  /// reference the studio attaches is an image, so 9 is the limit that applies.
+  static let studioReferenceLimit = 9
+
+  func addStudioReference(_ url: URL) {
+    guard !studioHasFrameAnchors, studioReferenceImages.count < Self.studioReferenceLimit
+    else { return }
+    studioReferenceImages.append(StudioImageAttachment(url: url))
+  }
+
+  func removeStudioReference(_ id: UUID) {
+    studioReferenceImages.removeAll { $0.id == id }
+  }
+
+  func resolveStudioPromptMentions(_ prompt: String) -> String {
+    var resolved = prompt
+    for (index, _) in studioReferenceImages.enumerated() {
+      let number = index + 1
+      for token in ["@Picture \(number)", "@Picture\(number)", "@\(number)"] {
+        resolved = resolved.replacingOccurrences(of: token, with: "<Picture \(number)>")
+      }
+    }
+    return resolved
   }
 
   func persistStudioSettings() {
@@ -334,7 +407,7 @@ final class AppModel {
 
     let request = GenerationRequest(
       kind: kind,
-      prompt: prompt,
+      prompt: resolveStudioPromptMentions(prompt),
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -344,7 +417,10 @@ final class AppModel {
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
       seed: seed,
       canvasWidth: canvasWidth,
-      canvasHeight: canvasHeight
+      canvasHeight: canvasHeight,
+      firstFrameURL: kind == .audio ? nil : studioStartFrame?.url,
+      lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
+      referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
     )
     let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
     let provider: any GenerationProvider =
@@ -479,6 +555,42 @@ final class AppModel {
       try append(asset)
     } catch {
       errorMessage = error.localizedDescription
+    }
+  }
+
+  @discardableResult
+  func receiveDroppedFiles(_ urls: [URL], onto lane: MediaImportLane) -> Bool {
+    let split = MediaImport.partition(urls, onto: lane)
+    guard !split.accepted.isEmpty else { return false }
+    Task {
+      await importFiles(split.accepted, onto: lane)
+      if !split.rejected.isEmpty {
+        importErrorMessage = MediaImportError.wrongLane.errorDescription
+      }
+    }
+    return true
+  }
+
+  func importFiles(_ urls: [URL], onto lane: MediaImportLane) async {
+    importErrorMessage = nil
+    let directory = Self.importedMediaDirectory
+    var lastError: String?
+    for url in urls {
+      do {
+        let imported = try await MediaImport.makeAsset(
+          from: url,
+          onto: lane,
+          copyingInto: directory
+        )
+        try appendImported(imported)
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+    if let lastError {
+      importErrorMessage = lastError
     }
   }
 
@@ -884,6 +996,14 @@ final class AppModel {
     )
   }
 
+  func setVisualCanvasFit(_ id: UUID, _ fit: CanvasFit) {
+    project.timeline.setVisualCanvasFit(id, fit)
+  }
+
+  func rotateVisual(_ id: UUID) {
+    project.timeline.rotateVisual(id)
+  }
+
   func toggleAudio(_ id: UUID) {
     guard let item = project.timeline.audioItems.first(where: { $0.id == id }) else {
       return
@@ -958,6 +1078,65 @@ final class AppModel {
     }
   }
 
+  var canSplitSelectedAtPlayhead: Bool {
+    canSplit(selectedTimelineItem)
+  }
+
+  func canSplit(_ item: TimelineItemID?) -> Bool {
+    guard let item else { return false }
+    let time = playback.clock.currentTime
+    let fps = project.settings.framesPerSecond
+    switch item {
+    case .visual(let id):
+      return project.timeline.canSplitVisual(id, at: time, framesPerSecond: fps)
+    case .audio(let id):
+      return project.timeline.canSplitAudio(id, at: time, framesPerSecond: fps)
+    }
+  }
+
+  func splitSelectedAtPlayhead() {
+    split(selectedTimelineItem)
+  }
+
+  func split(_ item: TimelineItemID?) {
+    guard let item else { return }
+    let time = playback.clock.currentTime
+    let fps = project.settings.framesPerSecond
+    switch item {
+    case .visual(let id):
+      guard let visual = project.timeline.visualItems.first(where: { $0.id == id }) else {
+        return
+      }
+      let kind = project.asset(id: visual.assetID)?.kind ?? .video
+      guard
+        let split = project.timeline.splitVisual(
+          id,
+          at: time,
+          sourceKind: kind,
+          framesPerSecond: fps
+        )
+      else { return }
+      selectedTimelineItem = .visual(split.left)
+    case .audio(let id):
+      guard let split = project.timeline.splitAudio(id, at: time, framesPerSecond: fps) else {
+        return
+      }
+      selectedTimelineItem = .audio(split.left)
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func deleteSelectedTimelineItem() {
+    guard let selectedTimelineItem else { return }
+    switch selectedTimelineItem {
+    case .visual(let id):
+      removeVisual(id)
+    case .audio(let id):
+      removeAudio(id)
+    }
+  }
+
   private func append(_ asset: AssetReference) throws {
     project.addAsset(asset)
     if asset.kind == .audio {
@@ -965,6 +1144,24 @@ final class AppModel {
     } else {
       try project.timeline.appendVisual(asset)
     }
+  }
+
+  private func appendImported(_ imported: ImportedMedia) throws {
+    project.addAsset(imported.asset)
+    if imported.asset.kind == .audio {
+      try project.timeline.appendAudio(imported.asset)
+    } else {
+      try project.timeline.appendVisual(
+        imported.asset,
+        includesNativeAudio: imported.includesNativeAudio
+      )
+    }
+  }
+
+  private static var importedMediaDirectory: URL {
+    URL.applicationSupportDirectory
+      .appendingPathComponent("H3ddle", isDirectory: true)
+      .appendingPathComponent("Media", isDirectory: true)
   }
 
   private func finishGenerationTiming(
@@ -985,6 +1182,7 @@ final class AppModel {
     }
     if let completedAssetID {
       generationDurations[completedAssetID] = elapsed
+      DockAttention.markGenerationFinished()
     }
     activeGenerationID = nil
     generationStartedAt = nil
@@ -1007,7 +1205,7 @@ final class AppModel {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)
     }
     let canvas =
-      kind == .audio ? "32×32" : "\(quality.canvasSize)×\(quality.canvasSize)"
+      kind == .audio ? Self.audioCanvasLabel : "\(quality.canvasSize)×\(quality.canvasSize)"
     let steps = denoisingSteps ?? quality.denoisingSteps
     let layers = activeDiTLayers ?? quality.activeDiTLayers
     let core = coreReuse ?? 1

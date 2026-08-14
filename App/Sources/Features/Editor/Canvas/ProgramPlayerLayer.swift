@@ -4,11 +4,12 @@ import SwiftUI
 
 struct ProgramPlayerLayer: NSViewRepresentable {
   let player: AVPlayer
+  var videoGravity: AVLayerVideoGravity = .resize
 
   func makeNSView(context: Context) -> PlayerHostView {
     let view = PlayerHostView()
     view.playerLayer.player = player
-    view.playerLayer.videoGravity = .resizeAspect
+    view.playerLayer.videoGravity = videoGravity
     view.playerLayer.isOpaque = false
     view.playerLayer.backgroundColor = CGColor.clear
     return view
@@ -18,6 +19,7 @@ struct ProgramPlayerLayer: NSViewRepresentable {
     if view.playerLayer.player !== player {
       view.playerLayer.player = player
     }
+    view.playerLayer.videoGravity = videoGravity
     view.playerLayer.isOpaque = false
     view.playerLayer.backgroundColor = CGColor.clear
   }

@@ -21,17 +21,20 @@ public struct ProgramPreviewFrame: Equatable, Sendable {
   public var time: TimeInterval
   public var duration: TimeInterval
   public var visual: ProgramVisualPresentation
+  public var visualTransform: VisualCanvasTransform
   public var audio: [ProgramAudioPresentation]
 
   public init(
     time: TimeInterval,
     duration: TimeInterval,
     visual: ProgramVisualPresentation,
+    visualTransform: VisualCanvasTransform = .identity,
     audio: [ProgramAudioPresentation]
   ) {
     self.time = time
     self.duration = duration
     self.visual = visual
+    self.visualTransform = visualTransform
     self.audio = audio
   }
 }
@@ -46,9 +49,11 @@ public enum ProgramPreview {
     let plan = ProgramCompositionPlan(project: project)
     let query = queryTime(time, duration: plan.duration)
     var visual: ProgramVisualPresentation = .empty
+    var visualTransform = VisualCanvasTransform.identity
 
-    if !visualMuted, let segment = segment(at: query, in: plan) {
-      if segment.item.isEnabled, let asset = project.asset(id: segment.item.assetID) {
+    if let segment = segment(at: query, in: plan) {
+      visualTransform = segment.item.canvasTransform
+      if !visualMuted, segment.item.isEnabled, let asset = project.asset(id: segment.item.assetID) {
         let localTime = max(0, query - segment.startTime) + segment.item.sourceOffset
         switch asset.kind {
         case .video:
@@ -85,6 +90,7 @@ public enum ProgramPreview {
       time: ProgramClock.clamp(time, duration: plan.duration),
       duration: plan.duration,
       visual: visual,
+      visualTransform: visualTransform,
       audio: audio
     )
   }

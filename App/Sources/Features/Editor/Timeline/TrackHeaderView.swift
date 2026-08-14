@@ -1,4 +1,5 @@
 import H3ddleDesignSystem
+import H3ddleMedia
 import SwiftUI
 
 enum TimelineChrome {
@@ -47,6 +48,7 @@ struct TrackHeaderColumn: View {
         isDisabled: model.visualTrackMuted,
         onToggleEnabled: { model.visualTrackMuted.toggle() }
       )
+      .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-header-drop")
       if model.showsEffectLanes {
         effectHeader
       }
@@ -58,6 +60,7 @@ struct TrackHeaderColumn: View {
         isDisabled: model.audioTrackMuted,
         onToggleEnabled: { model.audioTrackMuted.toggle() }
       )
+      .timelineMediaDrop(lane: .audio, model: model, accessibilityID: "audio-header-drop")
     }
     .frame(width: TimelineChrome.headerWidth, alignment: .top)
     .background(H3Color.chrome)

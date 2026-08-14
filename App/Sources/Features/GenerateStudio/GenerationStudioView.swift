@@ -138,28 +138,240 @@ struct GenerationStudioView: View {
   }
 
   private var promptPane: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 18) {
       Text("PROMPT")
         .font(.system(size: 9, weight: .bold, design: .monospaced))
         .tracking(1.6)
         .foregroundStyle(H3Color.textSecondary.opacity(0.75))
 
-      TextEditor(text: $model.generationPrompt)
-        .font(.system(size: 15))
-        .scrollContentBackground(.hidden)
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(H3Color.chrome)
-        .overlay {
-          RoundedRectangle(cornerRadius: 13, style: .continuous)
-            .stroke(H3Color.line, lineWidth: 1)
+      ZStack(alignment: .bottomLeading) {
+        TextEditor(text: $model.generationPrompt)
+          .font(.system(size: 15))
+          .scrollContentBackground(.hidden)
+          .padding(16)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .background(H3Color.chrome)
+          .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+          .accessibilityIdentifier("generation-prompt")
+
+        if kind != .audio, let query = mentionQuery {
+          mentionPicker(query: query)
+            .padding(10)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .accessibilityIdentifier("generation-prompt")
+      }
+
+      if kind != .audio {
+        frameAnchorSection
+        referenceSection
+        if let note = conditioningNote {
+          Text(note)
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(H3Color.surface)
+  }
+
+  private var frameAnchorSection: some View {
+    let disabled = model.studioHasReferences
+    return VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text("START / END FRAME")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text("optional")
+          .font(.system(size: 9, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.55))
+      }
+      HStack(spacing: 10) {
+        frameWell(
+          title: "Start",
+          attachment: model.studioStartFrame,
+          set: { model.setStudioStartFrame($0) },
+          clear: { model.clearStudioStartFrame() }
+        )
+        frameWell(
+          title: "End",
+          attachment: model.studioEndFrame,
+          set: { model.setStudioEndFrame($0) },
+          clear: { model.clearStudioEndFrame() }
+        )
+        Spacer(minLength: 0)
+      }
+    }
+    .opacity(disabled ? 0.38 : 1)
+    .allowsHitTesting(!disabled)
+  }
+
+  private var referenceSection: some View {
+    let disabled = model.studioHasFrameAnchors
+    return VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text("REFERENCES")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text(
+          model.studioReferenceImages.isEmpty
+            ? "optional"
+            : "\(model.studioReferenceImages.count)/\(AppModel.studioReferenceLimit)")
+          .font(.system(size: 9, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.55))
+      }
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(Array(model.studioReferenceImages.enumerated()), id: \.element.id) { index, item in
+            StudioImageCard(
+              url: item.url,
+              caption: "Picture \(index + 1)",
+              onRemove: { model.removeStudioReference(item.id) }
+            )
+          }
+          if model.studioReferenceImages.count < AppModel.studioReferenceLimit {
+            addImageWell {
+              pickImages(allowMultiple: true) { urls in
+                urls.forEach(model.addStudioReference)
+              }
+            }
+          }
+        }
+      }
+    }
+    .opacity(disabled ? 0.38 : 1)
+    .allowsHitTesting(!disabled)
+    .accessibilityIdentifier("generation-references")
+  }
+
+  private func frameWell(
+    title: String,
+    attachment: StudioImageAttachment?,
+    set: @escaping (URL) -> Void,
+    clear: @escaping () -> Void
+  ) -> some View {
+    Group {
+      if let attachment {
+        StudioImageCard(url: attachment.url, caption: title, onRemove: clear)
+      } else {
+        addImageWell(title: title) {
+          pickImages(allowMultiple: false) { urls in
+            if let url = urls.first { set(url) }
+          }
+        }
+      }
+    }
+  }
+
+  private func addImageWell(title: String? = nil, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      VStack(spacing: 6) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(H3Color.line, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            .background(H3Color.chrome.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)))
+          Image(systemName: "plus")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .frame(width: 78, height: 78)
+        Text(title ?? "Add")
+          .font(.system(size: 9.5, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func mentionPicker(query: String) -> some View {
+    let needle = query.lowercased()
+    let options = model.studioReferenceImages.enumerated().compactMap { index, item -> (String, String)? in
+      let label = "Picture \(index + 1)"
+      if needle.isEmpty || label.lowercased().contains(needle) || "\(index + 1)".hasPrefix(needle) {
+        return (label, "<Picture \(index + 1)>")
+      }
+      return nil
+    }
+    return VStack(alignment: .leading, spacing: 0) {
+      if options.isEmpty {
+        Text(model.studioHasReferences ? "No matching picture" : "Add a reference to mention it")
+          .font(.system(size: 11))
+          .foregroundStyle(H3Color.textSecondary)
+          .padding(10)
+      } else {
+        ForEach(options, id: \.0) { label, token in
+          Button {
+            insertMention(token)
+          } label: {
+            HStack {
+              Text("@\(label)")
+                .font(.system(size: 12, weight: .semibold))
+              Spacer()
+              Text(token)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(H3Color.textSecondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
+      }
+    }
+    .frame(width: 240)
+    .background(H3Color.surface)
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(H3Color.line, lineWidth: 1)
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
+  }
+
+  private var mentionQuery: String? {
+    guard let match = model.generationPrompt.range(of: #"@([A-Za-z0-9 ]*)$"#, options: .regularExpression)
+    else { return nil }
+    return String(model.generationPrompt[match].dropFirst())
+  }
+
+  private func insertMention(_ token: String) {
+    guard let match = model.generationPrompt.range(of: #"@[A-Za-z0-9 ]*$"#, options: .regularExpression)
+    else { return }
+    model.generationPrompt.replaceSubrange(match, with: token + " ")
+  }
+
+  private var conditioningNote: String? {
+    // Start/end frames ride the FL2VA transformer every package ships, so the
+    // optimized single-file build handles them; only ordered references need
+    // the separate Ref2VA checkpoint, which the next clause covers.
+    if model.studioHasReferences, model.modelReport?.hasReferenceTransformer == false {
+      return "Ordered references need the Ref2VA transformer in the selected model folder."
+    }
+    if model.studioHasFrameAnchors, model.studioHasReferences {
+      return "Start/end frames cannot be combined with references."
+    }
+    return nil
+  }
+
+  private func pickImages(allowMultiple: Bool, handle: ([URL]) -> Void) {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = allowMultiple
+    panel.allowedContentTypes = [.png, .jpeg, .heic, .webP, .tiff, .bmp]
+    panel.prompt = "Add"
+    guard panel.runModal() == .OK else { return }
+    handle(panel.urls)
   }
 
   private var settingsPane: some View {
@@ -293,7 +505,8 @@ struct GenerationStudioView: View {
       }
       if kind == .audio, model.nativeAudioGenerationIsReady {
         Text(
-          "H3 has no audio-only model. It generates a 32×32 clip and keeps the soundtrack."
+          "H3 has no audio-only model. It generates a \(AppModel.audioCanvasLabel) clip "
+            + "and keeps the soundtrack, so audio costs about as much as video."
         )
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
@@ -673,6 +886,51 @@ private enum StudioStage {
   case result
 }
 
+private struct StudioImageCard: View {
+  var url: URL
+  var caption: String
+  var onRemove: () -> Void
+
+  var body: some View {
+    VStack(spacing: 6) {
+      ZStack(alignment: .topTrailing) {
+        Group {
+          if let image = NSImage(contentsOf: url) {
+            Image(nsImage: image)
+              .resizable()
+              .scaledToFill()
+          } else {
+            H3Color.chrome
+          }
+        }
+        .frame(width: 78, height: 78)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+
+        Button(action: onRemove) {
+          Image(systemName: "xmark")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(Color.white)
+            .frame(width: 16, height: 16)
+            .background(Color.black.opacity(0.62))
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: 5, y: -5)
+        .accessibilityLabel("Remove \(caption)")
+      }
+      Text(caption)
+        .font(.system(size: 9.5, design: .monospaced))
+        .foregroundStyle(H3Color.textSecondary)
+        .lineLimit(1)
+        .frame(width: 78)
+    }
+  }
+}
+
 private struct GenerationProgressCanvas: View {
   var verb: String
   var phase: String
@@ -682,13 +940,19 @@ private struct GenerationProgressCanvas: View {
 
   var body: some View {
     ZStack {
-      GenerationProgressBackdrop(preview: preview)
-      VStack(spacing: 14) {
-        GenerationProgressSpinner()
+      Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255)
+      if let preview {
+        Image(decorative: preview, scale: 1)
+          .resizable()
+          .scaledToFill()
+          .opacity(0.28)
+      }
+      VStack(spacing: 16) {
+        ScanningGauge(progress: progress)
         VStack(spacing: 3) {
           Text(phase.isEmpty ? "Generating \(verb)…" : phase)
             .font(.system(size: 13.5, weight: .semibold))
-          Text("\(elapsed) · \(Int(progress * 100))%")
+          Text(elapsed)
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .tracking(0.6)
             .foregroundStyle(H3Color.textSecondary.opacity(0.8))
@@ -700,67 +964,47 @@ private struct GenerationProgressCanvas: View {
   }
 }
 
-/// Clock-driven motion so elapsed/progress updates never restart the loop.
-private struct GenerationProgressBackdrop: View {
-  var preview: CGImage?
-
-  private let deep = Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255)
-  private let lift = Color(red: 36 / 255, green: 42 / 255, blue: 51 / 255)
+private struct ScanningGauge: View {
+  var progress: Double
 
   var body: some View {
     TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-      let time = context.date.timeIntervalSinceReferenceDate
-      let shimmer = time.truncatingRemainder(dividingBy: 2.4) / 2.4
-
-      GeometryReader { proxy in
-        let width = proxy.size.width
-        let height = proxy.size.height
-        ZStack {
-          deep
-          LinearGradient(
-            stops: [
-              .init(color: deep, location: 0),
-              .init(color: lift, location: 0.25),
-              .init(color: deep, location: 0.5),
-              .init(color: lift, location: 0.75),
-              .init(color: deep, location: 1),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-          )
-          .frame(width: width * 2, height: height)
-          .offset(x: -width * shimmer)
-
-          if let preview {
-            Image(decorative: preview, scale: 1)
-              .resizable()
-              .scaledToFill()
-              .frame(width: width, height: height)
-              .opacity(0.35)
-          }
-        }
-        .frame(width: width, height: height)
-        .clipped()
-      }
-    }
-  }
-}
-
-private struct GenerationProgressSpinner: View {
-  var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-      let spin =
-        (context.date.timeIntervalSinceReferenceDate / 0.9)
-        .truncatingRemainder(dividingBy: 1) * 360
+      let spin = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 30) / 30
+        * 360
       ZStack {
         Circle()
-          .stroke(Color.white.opacity(0.12), lineWidth: 3)
+          .stroke(Color.white.opacity(0.12), lineWidth: 16)
+        Canvas { ctx, size in
+          let ticks = 40
+          let center = CGPoint(x: size.width / 2, y: size.height / 2)
+          let outer = min(size.width, size.height) / 2
+          for index in 0..<ticks {
+            let angle = (Double(index) / Double(ticks)) * .pi * 2 - .pi / 2
+            var path = Path()
+            path.move(
+              to: CGPoint(
+                x: center.x + cos(angle) * (outer - 8),
+                y: center.y + sin(angle) * (outer - 8)
+              )
+            )
+            path.addLine(
+              to: CGPoint(
+                x: center.x + cos(angle) * (outer - 1),
+                y: center.y + sin(angle) * (outer - 1)
+              )
+            )
+            ctx.stroke(path, with: .color(.white.opacity(0.35)), lineWidth: 1.5)
+          }
+        }
+        .rotationEffect(.degrees(spin))
         Circle()
-          .trim(from: 0, to: 0.28)
-          .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-          .rotationEffect(.degrees(spin))
+          .trim(from: 0, to: min(max(progress, 0.02), 1))
+          .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 16, lineCap: .butt))
+          .rotationEffect(.degrees(-90))
+        Text("\(Int((progress * 100).rounded()))%")
+          .font(.system(size: 26, weight: .semibold, design: .monospaced))
       }
-      .frame(width: 56, height: 56)
+      .frame(width: 130, height: 130)
     }
   }
 }

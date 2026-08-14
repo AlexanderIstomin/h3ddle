@@ -59,6 +59,24 @@ struct TransportBarView: View {
         .help(model.playback.isPlaying ? "Pause" : "Play")
         .accessibilityIdentifier("transport-play")
 
+        Button(action: model.splitSelectedAtPlayhead) {
+          Image(systemName: "scissors")
+        }
+        .buttonStyle(H3IconButtonStyle())
+        .disabled(!model.canSplitSelectedAtPlayhead)
+        .opacity(model.canSplitSelectedAtPlayhead ? 1 : 0.35)
+        .help("Split at playhead")
+        .accessibilityIdentifier("transport-split")
+
+        Button(action: model.deleteSelectedTimelineItem) {
+          Image(systemName: "trash")
+        }
+        .buttonStyle(H3IconButtonStyle())
+        .disabled(model.selectedTimelineItem == nil)
+        .opacity(model.selectedTimelineItem == nil ? 0.35 : 1)
+        .help("Delete")
+        .accessibilityIdentifier("transport-delete")
+
         Button(action: { model.playback.clock.isLooping.toggle() }) {
           Image(systemName: "repeat")
         }

@@ -4,6 +4,16 @@ import H3ddleCore
 import H3ddleGeneration
 import H3ddleMedia
 
+struct StudioImageAttachment: Identifiable, Hashable, Sendable {
+  var id: UUID
+  var url: URL
+
+  init(id: UUID = UUID(), url: URL) {
+    self.id = id
+    self.url = url
+  }
+}
+
 enum TimelinePresentationMode: String, CaseIterable, Identifiable {
   case expanded
   case collapsed

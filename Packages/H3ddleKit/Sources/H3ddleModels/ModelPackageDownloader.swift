@@ -347,25 +347,34 @@ public actor ModelPackageDownloader {
     alreadyPresent: Int64
   ) throws {
     let available = try capacityChecker.availableCapacity(at: store.rootURL)
-    // Files satisfiable from a local source hardlink into place, so they do
-    // not need fresh capacity.
-    var locallySatisfiable: Int64 = 0
-    for file in manifest.files {
-      let hasLocal =
-        file.localCandidatePath.map {
-          (try? fileSize(at: URL(fileURLWithPath: $0))) == file.byteCount
-        } ?? false
-      if hasLocal
-        || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
-      {
-        locallySatisfiable += file.byteCount
-      }
-    }
-    let remaining = max(0, manifest.totalByteCount - alreadyPresent - locallySatisfiable)
+    let remaining = max(0, pendingByteCount(for: manifest) - alreadyPresent)
     let required = remaining + Self.diskSafetyMargin
     guard available >= required else {
       throw ModelDownloadError.insufficientDiskSpace(required: required, available: available)
     }
+  }
+
+  /// Bytes this install actually has to fetch. A file already present in
+  /// another installed package, or at the manifest's declared local candidate
+  /// path, hardlinks into place instead of downloading — so a package that
+  /// only adds one weight file to an existing install costs that file alone,
+  /// not the sum of its parts.
+  public func pendingByteCount(for manifest: ModelPackageManifest) -> Int64 {
+    manifest.files.reduce(into: 0) { total, file in
+      if !isLocallySatisfiable(file, in: manifest) { total += file.byteCount }
+    }
+  }
+
+  private func isLocallySatisfiable(
+    _ file: ModelPackageFile,
+    in manifest: ModelPackageManifest
+  ) -> Bool {
+    let hasLocalCandidate =
+      file.localCandidatePath.map {
+        (try? fileSize(at: URL(fileURLWithPath: $0))) == file.byteCount
+      } ?? false
+    return hasLocalCandidate
+      || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
   }
 
   public func stagedByteCount(for manifest: ModelPackageManifest) throws -> Int64 {

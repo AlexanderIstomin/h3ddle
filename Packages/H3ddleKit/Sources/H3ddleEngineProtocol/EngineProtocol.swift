@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 11
+  public static let currentVersion = 12
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -234,6 +234,18 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Overrides the quality preset's square canvas when both are set.
   public var canvasWidth: Int?
   public var canvasHeight: Int?
+  /// FL2VA keyframe anchors. Mutually exclusive with `referenceImageURLs`.
+  public var firstFrameURL: URL?
+  public var lastFrameURL: URL?
+  /// Ordered Ref2VA stills. Mutually exclusive with first/last frames.
+  public var referenceImageURLs: [URL]
+  /// Ref2VA takes 12 references in total but no more than 9 images, and every
+  /// reference sent from here is an image, so 9 is the ceiling that applies.
+  public static let referenceImageLimit = 9
+  /// Square canvas used for audio jobs: the mechanical minimum, since the
+  /// pictures are discarded. Raising it does not improve prompt adherence in
+  /// the audio lane — 32 through 256 were compared and all returned speech.
+  public static let audioCanvasSize = 32
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -250,6 +262,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
     canvasHeight: Int? = nil,
+    firstFrameURL: URL? = nil,
+    lastFrameURL: URL? = nil,
+    referenceImageURLs: [URL] = [],
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -265,6 +280,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.seed = seed
     self.canvasWidth = canvasWidth
     self.canvasHeight = canvasHeight
+    self.firstFrameURL = firstFrameURL
+    self.lastFrameURL = lastFrameURL
+    self.referenceImageURLs = Array(referenceImageURLs.prefix(Self.referenceImageLimit))
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -282,6 +300,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case seed
     case canvasWidth
     case canvasHeight
+    case firstFrameURL
+    case lastFrameURL
+    case referenceImageURLs
     case modelDirectory
     case outputURL
   }
@@ -305,6 +326,10 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
     canvasWidth = try container.decodeIfPresent(Int.self, forKey: .canvasWidth)
     canvasHeight = try container.decodeIfPresent(Int.self, forKey: .canvasHeight)
+    firstFrameURL = try container.decodeIfPresent(URL.self, forKey: .firstFrameURL)
+    lastFrameURL = try container.decodeIfPresent(URL.self, forKey: .lastFrameURL)
+    referenceImageURLs =
+      try container.decodeIfPresent([URL].self, forKey: .referenceImageURLs) ?? []
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -323,6 +348,11 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encodeIfPresent(seed, forKey: .seed)
     try container.encodeIfPresent(canvasWidth, forKey: .canvasWidth)
     try container.encodeIfPresent(canvasHeight, forKey: .canvasHeight)
+    try container.encodeIfPresent(firstFrameURL, forKey: .firstFrameURL)
+    try container.encodeIfPresent(lastFrameURL, forKey: .lastFrameURL)
+    if !referenceImageURLs.isEmpty {
+      try container.encode(referenceImageURLs, forKey: .referenceImageURLs)
+    }
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

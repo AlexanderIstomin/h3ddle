@@ -8,6 +8,7 @@ struct TimelineClipView: View {
   var kind: MediaKind
   var duration: TimeInterval
   var isEnabled: Bool
+  var isTrackMuted: Bool = false
   var isSelected: Bool
   var metrics: TimelineMetrics
   var height: CGFloat
@@ -53,9 +54,47 @@ struct TimelineClipView: View {
       Rectangle()
         .fill(isSelected ? H3Color.accent : accent)
         .frame(height: 2)
+        .opacity(isEnabled ? 1 : 0)
+        .overlay {
+          if !isEnabled {
+            Rectangle()
+              .stroke(style: StrokeStyle(lineWidth: 2, dash: [4, 3]))
+              .foregroundStyle(isSelected ? H3Color.accent : accent.opacity(0.7))
+          }
+        }
+    }
+    .overlay {
+      if !isEnabled {
+        TimelineDisabledHatch()
+          .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+      } else if isTrackMuted {
+        Color.black.opacity(0.36)
+          .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+      }
     }
     .shadow(color: isSelected ? H3Color.accent.opacity(0.35) : .black.opacity(0.45), radius: isSelected ? 8 : 4, y: 3)
-    .opacity(isEnabled ? 1 : 0.42)
+    .saturation(clipSaturation)
+    .brightness(clipBrightness)
+    .opacity(clipOpacity)
+    .grayscale(isEnabled ? 0 : 0.68)
+  }
+
+  private var clipSaturation: Double {
+    if !isEnabled { return 0.2 }
+    if isTrackMuted { return 0.42 }
+    return 1
+  }
+
+  private var clipBrightness: Double {
+    if !isEnabled { return -0.18 }
+    if isTrackMuted { return -0.12 }
+    return 0
+  }
+
+  private var clipOpacity: Double {
+    if !isEnabled { return 0.68 }
+    if isTrackMuted { return 0.78 }
+    return 1
   }
 
   private func trimHandle(_ edge: TimelineTrimEdge) -> some View {
@@ -185,6 +224,24 @@ struct TimelineClipView: View {
 
   private var accent: Color {
     kind == .audio ? H3Color.clipAudio : H3Color.clipVideo
+  }
+}
+
+private struct TimelineDisabledHatch: View {
+  var body: some View {
+    Canvas { context, size in
+      let spacing: CGFloat = 8
+      var x: CGFloat = -size.height
+      while x < size.width + size.height {
+        var path = Path()
+        path.move(to: CGPoint(x: x, y: size.height))
+        path.addLine(to: CGPoint(x: x + size.height, y: 0))
+        context.stroke(path, with: .color(.black.opacity(0.22)), lineWidth: 1)
+        x += spacing
+      }
+    }
+    .background(Color.black.opacity(0.46))
+    .allowsHitTesting(false)
   }
 }
 

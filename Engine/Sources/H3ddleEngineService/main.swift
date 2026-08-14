@@ -106,13 +106,16 @@ private let engineCapabilities = EngineCapabilities(
   engineName: "h3.c",
   engineVersion: String(cString: h3ddle_h3_version()),
   features: {
+    // Audio renders write their own WAV, so the audio lane no longer depends
+    // on an FFmpeg process; only the video mux still does.
     var features: [EngineFeature] = [
       .modelInspection, .imageGeneration, .embeddedAudio, .cancellation,
       .denoisingPreviews,
+      .referenceInputs,
+      .standaloneAudioGeneration,
     ]
     if executableIsAvailable(named: "ffmpeg", override: "H3_FFMPEG") {
       features.append(.videoGeneration)
-      features.append(.standaloneAudioGeneration)
     }
     return features
   }()
@@ -243,32 +246,31 @@ private func executableIsAvailable(named name: String, override key: String) -> 
   resolveTool(named: name, override: key) != nil
 }
 
-/// Community audio is the soundtrack of a joint H3 render. Lift AAC out of
-/// the throwaway 32×32 mux so the audio lane never has to keep the pictures.
-private func extractSoundtrack(from video: URL, to audio: URL) -> String? {
-  guard let ffmpeg = resolveTool(named: "ffmpeg", override: "H3_FFMPEG") else {
-    return "FFmpeg is required to extract H3 audio"
+private func withOptionalCString(
+  _ value: String?,
+  _ body: (UnsafePointer<CChar>?) -> Void
+) {
+  if let value {
+    value.withCString(body)
+  } else {
+    body(nil)
   }
-  let process = Process()
-  process.executableURL = URL(fileURLWithPath: ffmpeg)
-  // The joint mux already encoded AAC (192k); stream-copy instead of paying
-  // a second lossy generation.
-  process.arguments = [
-    "-y", "-i", video.path, "-vn", "-c:a", "copy", audio.path,
-  ]
-  process.standardOutput = FileHandle.nullDevice
-  process.standardError = FileHandle.nullDevice
-  do {
-    try process.run()
-    process.waitUntilExit()
-  } catch {
-    return "Could not start FFmpeg to extract audio"
+}
+
+private func withCStringList(
+  _ values: [String],
+  _ body: ([UnsafePointer<CChar>]) -> Void
+) {
+  func step(_ index: Int, _ collected: [UnsafePointer<CChar>]) {
+    if index == values.count {
+      body(collected)
+      return
+    }
+    values[index].withCString { pointer in
+      step(index + 1, collected + [pointer])
+    }
   }
-  guard process.terminationStatus == 0, FileManager.default.isReadableFile(atPath: audio.path)
-  else {
-    return "FFmpeg could not extract the H3 soundtrack"
-  }
-  return nil
+  step(0, [])
 }
 
 private func modelComponents(_ model: h3_model_info) -> [EngineModelComponent] {
@@ -532,7 +534,7 @@ private final class EngineRuntime: @unchecked Sendable {
     switch request.kind {
     case .audio:
       guard engineCapabilities.supports(.standaloneAudioGeneration) else {
-        EngineOutput.fail(command, message: "FFmpeg is required to extract H3 audio")
+        EngineOutput.fail(command, message: "This engine cannot generate standalone audio")
         return
       }
     case .video:
@@ -631,11 +633,16 @@ private final class EngineRuntime: @unchecked Sendable {
       var parameters = h3ddle_h3_default_params()
       // Community stills are a short H3 clip plus one decoded frame. h3.c
       // rejects anything below one trained 22-frame VAE chunk.
-      // Community audio is the same joint model at 32×32; soundtrack only.
+      // Community audio is the same joint model rendered for its soundtrack.
       let stillRequested = request.kind == .image
       let audioRequested = request.kind == .audio
       parameters.frames =
         stillRequested ? 22 : h3ddle_h3_frames_for_seconds(request.duration)
+      // A still keeps one frame, so decode one instead of the whole clip.
+      parameters.still_frame_only = stillRequested ? 1 : 0
+      // An audio job keeps no pictures at all, so skip the video decoder and
+      // let the engine write the soundtrack straight out as a WAV.
+      parameters.audio_only = audioRequested ? 1 : 0
       parameters.preview_denoise = request.previewDenoise && !audioRequested ? 1 : 0
       parameters.on_frame =
         (request.previewDenoise && !audioRequested) || stillRequested
@@ -658,8 +665,18 @@ private final class EngineRuntime: @unchecked Sendable {
       }
       let quality = request.quality
       if audioRequested {
-        parameters.width = 32
-        parameters.height = 32
+        // The soundtrack is generated jointly with pictures nobody keeps, so
+        // the canvas is kept at the mechanical minimum.
+        //
+        // KNOWN ISSUE: prompts describing ambience (rain, thunder) come back as
+        // speech. Raising the canvas does not fix it — 32, 64, 128, and 256 were
+        // compared on one prompt at a fixed seed and pass count on 2026-08-14
+        // and every one returned speech, so 256 costs about six times per pass
+        // (148s against 24.7s for a three-second clip) and buys nothing. The
+        // cause is still unknown; the canvas is not it.
+        let audioCanvas = Int32(EngineGenerationRequest.audioCanvasSize)
+        parameters.width = audioCanvas
+        parameters.height = audioCanvas
       } else if let width = request.canvasWidth, let height = request.canvasHeight {
         parameters.width = Int32(width)
         parameters.height = Int32(height)
@@ -694,23 +711,46 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.seed = seed
       }
 
+      let hasFrames = request.firstFrameURL != nil || request.lastFrameURL != nil
+      let references = Array(
+        request.referenceImageURLs.prefix(EngineGenerationRequest.referenceImageLimit))
+      if hasFrames, !references.isEmpty {
+        EngineOutput.fail(
+          command,
+          message: "Start/end frames cannot be combined with reference images."
+        )
+        return
+      }
+
+      let firstPath = request.firstFrameURL?.path
+      let lastPath = request.lastFrameURL?.path
+      let referencePaths = references.map(\.path)
+
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque
       defer { Unmanaged<GenerationCallbackContext>.fromOpaque(opaque).release() }
 
-      let scratchURL =
-        request.outputURL
-        .deletingPathExtension()
-        .appendingPathExtension("scratch.mp4")
-      request.prompt.withCString { prompt in
-        (audioRequested ? scratchURL : request.outputURL).path.withCString { outputPath in
-          defer {
-            if audioRequested {
-              try? FileManager.default.removeItem(at: scratchURL)
+      withOptionalCString(firstPath) { firstC in
+        withOptionalCString(lastPath) { lastC in
+          withCStringList(referencePaths) { referenceCs in
+            parameters.first_frame = firstC
+            parameters.last_frame = lastC
+            let referenceRecords = referenceCs.map { path in
+              h3_reference(
+                kind: H3_REFERENCE_IMAGE,
+                path: path,
+                audio_path: nil,
+                include_embedded_audio: 0
+              )
             }
-          }
-          // Stills skip mux and keep a PNG. Audio muxes a tiny 32×32 clip
-          // only so the soundtrack can be lifted out.
+            referenceRecords.withUnsafeBufferPointer { buffer in
+              if !buffer.isEmpty {
+                parameters.references = buffer.baseAddress
+                parameters.reference_count = buffer.count
+              }
+      request.prompt.withCString { prompt in
+        request.outputURL.path.withCString { outputPath in
+          // Stills skip the container and keep a PNG. Audio writes a WAV.
           parameters.output_path = stillRequested ? nil : outputPath
           guard let result = h3_generate(context, prompt, &parameters) else {
             if callbackContext.isCancelled {
@@ -755,15 +795,6 @@ private final class EngineRuntime: @unchecked Sendable {
             }
           }
 
-          if audioRequested {
-            if let extractError = extractSoundtrack(
-              from: scratchURL, to: request.outputURL
-            ) {
-              EngineOutput.fail(command, message: extractError)
-              return
-            }
-          }
-
           EngineOutput.emit(
             EngineEvent(
               requestID: command.requestID,
@@ -773,6 +804,10 @@ private final class EngineRuntime: @unchecked Sendable {
               outputDuration: stillRequested ? request.duration : muxedDuration
             )
           )
+        }
+      }
+            }
+          }
         }
       }
     }

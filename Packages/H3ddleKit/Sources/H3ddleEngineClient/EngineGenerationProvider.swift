@@ -49,16 +49,22 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
     )
   }
 
+  /// Container the helper writes for each kind. Audio is the audio VAE's own
+  /// samples written straight out, not a lossy mux, so it carries no video
+  /// and needs no FFmpeg.
+  static func outputExtension(for kind: GenerationKind) -> String {
+    switch kind {
+    case .image: "png"
+    case .audio: "wav"
+    case .video: "mp4"
+    }
+  }
+
   public func events(
     for request: GenerationRequest
   ) -> AsyncThrowingStream<GenerationEvent, any Error> {
     AsyncThrowingStream { continuation in
-      let outputExtension =
-        switch request.kind {
-        case .image: "png"
-        case .audio: "m4a"
-        case .video: "mp4"
-        }
+      let outputExtension = Self.outputExtension(for: request.kind)
       let engineKind: EngineGenerationKind =
         switch request.kind {
         case .image: .image
@@ -91,6 +97,9 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           seed: request.seed,
           canvasWidth: request.canvasWidth,
           canvasHeight: request.canvasHeight,
+          firstFrameURL: request.firstFrameURL,
+          lastFrameURL: request.lastFrameURL,
+          referenceImageURLs: request.referenceImageURLs,
           modelDirectory: modelDirectory,
           outputURL: outputURL
         )

@@ -13,6 +13,7 @@ The first scaffold includes:
 
 - a native macOS editor shell with a Project settings panel;
 - ordered visual items and explicitly timed audio items;
+- append of generated or imported video, image, and audio files;
 - append, disable, and remove domain behavior;
 - a provider-neutral Generate Studio with explicit prototype fallbacks;
 - a versioned JSON-lines engine protocol and bundled native helper;
@@ -20,11 +21,11 @@ The first scaffold includes:
 - a pinned, resumable managed-model download with disk preflight, progress,
   cancellation, SHA-256 verification, and atomic installation;
 - real prompt-to-video dispatch when a valid model and FFmpeg are available;
-- reserved AVFoundation export boundaries; and
+- AVFoundation/VideoToolbox export with a preset-based Export Video sheet; and
 - public-boundary, unit, engine, and Xcode build checks.
 
 Generated video plays on the program canvas at the shared playhead. Export
-composition is still a placeholder.
+writes H.264, H.265, or ProRes from the two-track program.
 Image generation uses the community still recipe: the shortest trained
 22-frame H3 chunk, then the last decoded frame as a PNG. Audio uses the
 community soundtrack recipe: a 32×32 joint clip, then the AAC track only.
@@ -35,7 +36,8 @@ community soundtrack recipe: a 32×32 joint clip, then the AAC track only.
 - macOS 15 or newer
 - Xcode 26 or newer
 - XcodeGen 2.46 or newer
-- FFmpeg and FFprobe for real generation
+- FFmpeg and FFprobe for real video generation and for reference media inputs;
+  audio generation writes its own WAV and needs neither
 
 ## Build
 

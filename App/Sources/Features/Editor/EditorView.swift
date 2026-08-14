@@ -1,10 +1,14 @@
+import AppKit
+import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleGeneration
+import H3ddleMedia
 import SwiftUI
 
 struct EditorView: View {
   @Bindable var model: AppModel
   @State private var appendMenu: AppendMenuPlacement?
+  @State private var clipMenu: ClipMenuPlacement?
 
   var body: some View {
     ZStack {
@@ -20,7 +24,11 @@ struct EditorView: View {
               .frame(maxWidth: .infinity, maxHeight: .infinity)
             VStack(spacing: 0) {
               TransportBarView(model: model)
-              ProgramTimelineView(model: model, appendMenu: $appendMenu)
+              ProgramTimelineView(
+                model: model,
+                appendMenu: $appendMenu,
+                clipMenu: $clipMenu
+              )
             }
           }
         }
@@ -30,33 +38,96 @@ struct EditorView: View {
       .coordinateSpace(name: editorSpace)
       .overlay(alignment: .topLeading) {
         appendMenuOverlay
+        clipMenuOverlay
       }
 
       if let kind = model.activeGenerationKind {
         GenerationStudioView(model: model, kind: kind)
           .transition(.opacity)
       }
+
+      if model.showsExport {
+        ExportModalView(model: model)
+          .transition(.opacity)
+      }
     }
     .animation(.easeOut(duration: 0.16), value: model.activeGenerationKind)
     .animation(.easeOut(duration: 0.16), value: model.showsProjectSettings)
+    .animation(.easeOut(duration: 0.16), value: model.showsExport)
     .sheet(isPresented: $model.showsModelSettings) {
       ModelSettingsView(model: model)
     }
-    .alert("Export is being connected", isPresented: $model.showsExportNotice) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(
-        "The native AVFoundation export pipeline is reserved by the scaffold but not implemented in this slice."
+    .alert(
+      "Couldn’t import media",
+      isPresented: Binding(
+        get: { model.importErrorMessage != nil },
+        set: { if !$0 { model.importErrorMessage = nil } }
       )
+    ) {
+      Button("OK", role: .cancel) { model.importErrorMessage = nil }
+    } message: {
+      Text(model.importErrorMessage ?? "")
     }
     .onKeyPress(.space) {
-      guard model.activeGenerationKind == nil else { return .ignored }
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
       model.togglePlayback()
       return .handled
+    }
+    .onKeyPress(characters: CharacterSet(charactersIn: "sS")) { _ in
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      guard model.canSplitSelectedAtPlayhead else { return .ignored }
+      model.splitSelectedAtPlayhead()
+      return .handled
+    }
+    .onKeyPress(.delete) {
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      guard model.selectedTimelineItem != nil else { return .ignored }
+      model.deleteSelectedTimelineItem()
+      return .handled
+    }
+    .onKeyPress(.deleteForward) {
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      guard model.selectedTimelineItem != nil else { return .ignored }
+      model.deleteSelectedTimelineItem()
+      return .handled
+    }
+    .onKeyPress(.escape) {
+      if clipMenu != nil || appendMenu != nil {
+        clipMenu = nil
+        appendMenu = nil
+        return .handled
+      }
+      return .ignored
+    }
+    .onChange(of: model.activeGenerationKind) { _, _ in
+      clipMenu = nil
+      appendMenu = nil
+    }
+    .onChange(of: model.showsExport) { _, _ in
+      clipMenu = nil
+      appendMenu = nil
     }
   }
 
   private let editorSpace = "editor-root"
+
+  private func presentImportPanel(ontoVisualLane: Bool) {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = true
+    panel.allowedContentTypes =
+      ontoVisualLane ? MediaImport.visualContentTypes : MediaImport.audioContentTypes
+    panel.prompt = "Add"
+    panel.message =
+      ontoVisualLane
+      ? "Add video or image files to V1"
+      : "Add audio files to A1"
+    guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+    Task {
+      await model.importFiles(panel.urls, onto: ontoVisualLane ? .visual : .audio)
+    }
+  }
 
   @ViewBuilder
   private var appendMenuOverlay: some View {
@@ -76,12 +147,122 @@ struct EditorView: View {
             ? TimelineAppendMenu.visualItems()
             : TimelineAppendMenu.audioItems()
         ) { item in
+          let importingVisual = appendMenu.isVisual
           self.appendMenu = nil
-          model.presentGeneration(item.kind)
+          self.clipMenu = nil
+          switch item.action {
+          case .generate(let kind):
+            model.presentGeneration(kind)
+          case .importFiles:
+            presentImportPanel(ontoVisualLane: importingVisual)
+          }
         }
         .offset(x: appendMenu.origin.x, y: appendMenu.origin.y)
       }
     }
+  }
+
+  @ViewBuilder
+  private var clipMenuOverlay: some View {
+    if let clipMenu, let content = clipMenuContent(for: clipMenu.target) {
+      GeometryReader { proxy in
+        ZStack(alignment: .topLeading) {
+          Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {
+              self.clipMenu = nil
+            }
+            .overlay {
+              SecondaryClickProbe { _ in
+                self.clipMenu = nil
+              }
+            }
+          TimelineClipMenu(title: content.title, items: content.items) { item in
+            performClipMenu(item, target: clipMenu.target)
+          }
+          .offset(
+            clipMenuOffset(
+              clipMenu.origin,
+              itemCount: content.items.count,
+              in: proxy.size
+            )
+          )
+        }
+      }
+    }
+  }
+
+  private func clipMenuContent(
+    for target: ClipMenuPlacement.Target
+  ) -> (title: String, items: [TimelineClipMenuItem])? {
+    switch target {
+    case .visual(let id):
+      guard let item = model.project.timeline.visualItems.first(where: { $0.id == id }) else {
+        return nil
+      }
+      let asset = model.project.asset(id: item.assetID)
+      return (
+        asset?.displayName ?? "Visual",
+        TimelineClipMenu.visualItems(
+          item: item,
+          kind: asset?.kind ?? .video,
+          canSplit: model.canSplit(.visual(id))
+        )
+      )
+    case .audio(let id):
+      guard let item = model.project.timeline.audioItems.first(where: { $0.id == id }) else {
+        return nil
+      }
+      return (
+        model.project.asset(id: item.assetID)?.displayName ?? "Audio",
+        TimelineClipMenu.audioItems(item: item, canSplit: model.canSplit(.audio(id)))
+      )
+    }
+  }
+
+  private func performClipMenu(_ item: TimelineClipMenuItem, target: ClipMenuPlacement.Target) {
+    clipMenu = nil
+    guard let action = item.action else { return }
+    switch target {
+    case .visual(let id):
+      model.selectedTimelineItem = .visual(id)
+      switch action {
+      case .toggleEnabled:
+        model.toggleVisual(id)
+      case .toggleNativeAudio:
+        model.toggleVisualNativeAudio(id)
+      case .split:
+        model.split(.visual(id))
+      case .coverCanvas:
+        model.setVisualCanvasFit(id, .cover)
+      case .fitToCanvas:
+        model.setVisualCanvasFit(id, .fit)
+      case .rotate:
+        model.rotateVisual(id)
+      case .remove:
+        model.removeVisual(id)
+      }
+    case .audio(let id):
+      model.selectedTimelineItem = .audio(id)
+      switch action {
+      case .toggleEnabled:
+        model.toggleAudio(id)
+      case .split:
+        model.split(.audio(id))
+      case .remove:
+        model.removeAudio(id)
+      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate:
+        break
+      }
+    }
+  }
+
+  private func clipMenuOffset(_ origin: CGPoint, itemCount: Int, in size: CGSize) -> CGSize {
+    let width: CGFloat = 208
+    let estimatedHeight = 42 + CGFloat(itemCount) * 32
+    let x = min(max(8, origin.x), max(8, size.width - width - 8))
+    let y = min(max(8, origin.y), max(8, size.height - estimatedHeight - 8))
+    return CGSize(width: x, height: y)
   }
 
   private var toolbar: some View {
@@ -127,7 +308,7 @@ struct EditorView: View {
       .accessibilityIdentifier("model-status")
 
       Button("Export") {
-        model.showsExportNotice = true
+        model.showsExport = true
       }
       .buttonStyle(H3PrimaryButtonStyle())
       .accessibilityIdentifier("export-button")

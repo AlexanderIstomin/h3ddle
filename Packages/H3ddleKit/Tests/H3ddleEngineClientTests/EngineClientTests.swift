@@ -40,6 +40,13 @@ struct EngineClientTests {
     }
   }
 
+  @Test("Audio results are written as WAV, so no mux or extraction is involved")
+  func audioResultsAreWAV() {
+    #expect(EngineGenerationProvider.outputExtension(for: .audio) == "wav")
+    #expect(EngineGenerationProvider.outputExtension(for: .video) == "mp4")
+    #expect(EngineGenerationProvider.outputExtension(for: .image) == "png")
+  }
+
   @Test("A helper process is reused across handshake and inspection")
   func sessionReusesHelperProcess() async throws {
     let session = fakeEngineSession()

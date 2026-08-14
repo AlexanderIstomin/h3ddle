@@ -26,6 +26,91 @@ struct TimelineTests {
 
     #expect(timeline.visualItems.map(\.assetID) == [video.id, image.id])
     #expect(timeline.visualDuration == 8)
+    #expect(timeline.visualItems[0].includesNativeAudio)
+    #expect(!timeline.visualItems[1].includesNativeAudio)
+  }
+
+  @Test("Split at playhead divides a visual clip and carries the source offset")
+  func splitsVisualAtPlayhead() throws {
+    var timeline = ProjectTimeline()
+    let video = videoAsset(name: "Shot", duration: 6)
+    let later = videoAsset(name: "Next", duration: 4)
+    try timeline.appendVisual(video)
+    try timeline.appendVisual(later)
+    let first = timeline.visualItems[0]
+    timeline.setVisualTrim(
+      first.id,
+      VisualTrim(duration: 6, sourceOffset: 1, gapBefore: 0)
+    )
+
+    #expect(!timeline.canSplitVisual(first.id, at: 0, framesPerSecond: 24))
+    #expect(!timeline.canSplitVisual(first.id, at: 6, framesPerSecond: 24))
+    #expect(timeline.canSplitVisual(first.id, at: 2.5, framesPerSecond: 24))
+
+    let split = timeline.splitVisual(
+      first.id,
+      at: 2.5,
+      sourceKind: .video,
+      framesPerSecond: 24
+    )
+    #expect(split?.left == first.id)
+    #expect(timeline.visualItems.count == 3)
+    #expect(abs(timeline.visualItems[0].duration - 2.5) < 0.000_1)
+    #expect(abs(timeline.visualItems[0].sourceOffset - 1) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].duration - 3.5) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].sourceOffset - 3.5) < 0.000_1)
+    #expect(timeline.visualItems[1].gapBefore == 0)
+    #expect(timeline.visualItems[2].assetID == later.id)
+    #expect(abs(timeline.visualDuration - 10) < 0.000_1)
+  }
+
+  @Test("An image split does not invent a source offset")
+  func splitsImageWithoutSourceOffset() throws {
+    var timeline = ProjectTimeline()
+    let image = AssetReference(
+      kind: .image,
+      displayName: "Still",
+      url: URL(fileURLWithPath: "/tmp/still.png"),
+      duration: 4
+    )
+    try timeline.appendVisual(image)
+    _ = timeline.splitVisual(
+      timeline.visualItems[0].id,
+      at: 1.5,
+      sourceKind: .image,
+      framesPerSecond: 24
+    )
+    #expect(timeline.visualItems[0].sourceOffset == 0)
+    #expect(timeline.visualItems[1].sourceOffset == 0)
+    #expect(abs(timeline.visualItems[1].duration - 2.5) < 0.000_1)
+  }
+
+  @Test("Audio split keeps later start times and advances the right-hand in-point")
+  func splitsAudioAtPlayhead() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendAudio(audioAsset(name: "One", duration: 5))
+    let second = try timeline.appendAudio(audioAsset(name: "Two", duration: 3))
+    #expect(timeline.canSplitAudio(first.id, at: 2, framesPerSecond: 24))
+    #expect(!timeline.canSplitAudio(first.id, at: 0, framesPerSecond: 24))
+
+    let split = timeline.splitAudio(first.id, at: 2, framesPerSecond: 24)
+    #expect(split?.left == first.id)
+    #expect(timeline.audioItems.count == 3)
+    #expect(timeline.audioItems[0].startTime == 0)
+    #expect(abs(timeline.audioItems[0].duration - 2) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].startTime - 2) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].duration - 3) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].sourceOffset - 2) < 0.000_1)
+    #expect(timeline.audioItems[2].id == second.id)
+    #expect(timeline.audioItems[2].startTime == 5)
+  }
+
+  @Test("Imported video can append without a native soundtrack")
+  func importedVideoWithoutNativeAudio() throws {
+    var timeline = ProjectTimeline()
+    let video = videoAsset(name: "Silent", duration: 4)
+    let item = try timeline.appendVisual(video, includesNativeAudio: false)
+    #expect(!item.includesNativeAudio)
   }
 
   @Test("Audio appends at the current audio end")
@@ -292,6 +377,56 @@ struct TimelineTests {
     #expect(decoded.sourceOffset == 0)
     #expect(decoded.gapBefore == 0)
     #expect(decoded.duration == 4)
+    #expect(decoded.canvasFit == .fit)
+    #expect(decoded.rotationTurns == 0)
+  }
+
+  @Test("Visual canvas fit and rotation persist and wrap")
+  func visualCanvasTransformPersists() throws {
+    var timeline = ProjectTimeline()
+    let video = videoAsset(name: "Shot", duration: 4)
+    let item = try timeline.appendVisual(video)
+    #expect(item.canvasFit == .fit)
+    #expect(item.rotationTurns == 0)
+
+    timeline.setVisualCanvasFit(item.id, .cover)
+    timeline.rotateVisual(item.id)
+    timeline.rotateVisual(item.id)
+    #expect(timeline.visualItems[0].canvasFit == .cover)
+    #expect(timeline.visualItems[0].rotationTurns == 2)
+
+    timeline.rotateVisual(item.id, by: 3)
+    #expect(timeline.visualItems[0].rotationTurns == 1)
+
+    let encoded = try JSONEncoder().encode(timeline.visualItems[0])
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.canvasFit == .cover)
+    #expect(decoded.rotationTurns == 1)
+
+    _ = timeline.splitVisual(item.id, at: 2, sourceKind: .video, framesPerSecond: 24)
+    #expect(timeline.visualItems[0].canvasFit == .cover)
+    #expect(timeline.visualItems[1].canvasFit == .cover)
+    #expect(timeline.visualItems[0].rotationTurns == 1)
+    #expect(timeline.visualItems[1].rotationTurns == 1)
+  }
+
+  @Test("Legacy visual items decode without canvas fields")
+  func decodesLegacyVisualCanvasFields() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 4,
+      includesNativeAudio: true,
+      canvasFit: .cover,
+      rotationTurns: 2
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "canvasFit")
+    object.removeValue(forKey: "rotationTurns")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.canvasFit == .fit)
+    #expect(decoded.rotationTurns == 0)
   }
 
   private func videoAsset(name: String, duration: TimeInterval) -> AssetReference {

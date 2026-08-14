@@ -17,8 +17,14 @@ struct H3ddleApp: App {
         .preferredColorScheme(.dark)
         .background(WindowChromeInstaller())
         .onReceive(
+          NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+          DockAttention.clear()
+        }
+        .onReceive(
           NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
         ) { _ in
+          DockAttention.clear()
           model.shutdownEngine()
         }
     }

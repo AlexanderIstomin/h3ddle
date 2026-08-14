@@ -7,12 +7,17 @@ struct AppendMenuPlacement: Equatable {
   var origin: CGPoint
 }
 
+enum TimelineAppendAction: Equatable {
+  case generate(GenerationKind)
+  case importFiles
+}
+
 struct TimelineAppendMenuItem: Identifiable {
   var id: String { label }
   var label: String
   var symbol: String
   var tint: Color
-  var kind: GenerationKind
+  var action: TimelineAppendAction
 }
 
 struct TimelineAppendMenu: View {
@@ -77,13 +82,19 @@ struct TimelineAppendMenu: View {
         label: "Video",
         symbol: "film",
         tint: H3Color.clipVideo,
-        kind: .video
+        action: .generate(.video)
       ),
       TimelineAppendMenuItem(
         label: "Image",
         symbol: "photo",
         tint: Color(red: 210 / 255, green: 162 / 255, blue: 78 / 255),
-        kind: .image
+        action: .generate(.image)
+      ),
+      TimelineAppendMenuItem(
+        label: "Import…",
+        symbol: "square.and.arrow.down",
+        tint: H3Color.textSecondary,
+        action: .importFiles
       ),
     ]
   }
@@ -94,7 +105,13 @@ struct TimelineAppendMenu: View {
         label: "Generate",
         symbol: "wand.and.stars",
         tint: H3Color.accent,
-        kind: .audio
+        action: .generate(.audio)
+      ),
+      TimelineAppendMenuItem(
+        label: "Import…",
+        symbol: "square.and.arrow.down",
+        tint: H3Color.textSecondary,
+        action: .importFiles
       ),
     ]
   }
@@ -117,6 +134,7 @@ private struct AppendMenuRow: View {
         Text(item.label)
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(H3Color.textPrimary)
+          .accessibilityIdentifier(item.accessibilityIdentifier)
         Spacer(minLength: 0)
       }
       .padding(.horizontal, 8)
@@ -129,5 +147,15 @@ private struct AppendMenuRow: View {
     }
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
+    .accessibilityIdentifier(item.accessibilityIdentifier)
+  }
+}
+
+extension TimelineAppendMenuItem {
+  var accessibilityIdentifier: String {
+    switch action {
+    case .generate(let kind): "append-generate-\(kind.rawValue)"
+    case .importFiles: "append-import"
+    }
   }
 }

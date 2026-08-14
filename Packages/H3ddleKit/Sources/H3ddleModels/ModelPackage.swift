@@ -5,6 +5,7 @@ public enum ModelPackageRole: String, Codable, Equatable, Sendable {
   case textEncoder
   case videoVAE
   case audioVAE
+  case referenceTransformer
   case runtimeMetadata
 }
 
@@ -242,6 +243,41 @@ public enum ModelCatalog {
         path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         byteCount: 20_970_379_616,
         sha256: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      )
+    ] + sharedMinimaxH3Files
+  )
+
+  /// Adds the Ref2VA transformer alongside the standard FL2VA one, which is
+  /// what ordered reference images need. Both ship together because the engine
+  /// picks between them per generation, so one package covers prompt-only,
+  /// keyframe, and reference work. Every file except the extra transformer is
+  /// shared with the standard package and installs as a hardlink, so the real
+  /// cost of adding this is the Ref2VA weights alone.
+  public static let minimaxH3Ref2VAInt8 = ModelPackageManifest(
+    id: "comfy-minimax-h3-int8-ref2va-v1",
+    displayName: "MiniMax H3 · INT8 + References",
+    detail: "Adds the Ref2VA transformer for ordered reference images",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
+    licenseName: "MiniMax H3 Community License Agreement",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        byteCount: 20_970_379_616,
+        sha256: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      ),
+      ModelPackageFile(
+        role: .referenceTransformer,
+        path: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        byteCount: 20_970_379_616,
+        sha256: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
       )
     ] + sharedMinimaxH3Files
   )

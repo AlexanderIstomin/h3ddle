@@ -6,7 +6,7 @@ H3ddle is a native macOS application with three strict boundaries.
 SwiftUI application
 ├── H3ddleCore              versioned project and two-track timeline
 ├── H3ddleGeneration        provider-neutral generation workflow
-├── H3ddleMedia             preview and AVFoundation export boundary
+├── H3ddleMedia             preview and AVFoundation/VideoToolbox export
 ├── H3ddleModels            pinned catalogs, download and installation
 └── H3ddleEngineProtocol    JSON-lines IPC contract
         └── Engine service  h3.c, Metal, FFmpeg and model lifetime
@@ -15,11 +15,13 @@ SwiftUI application
 ## Timeline
 
 The visual track is the program backbone. Its items are ordered, non-overlapping,
-and derive their start time from the preceding visual items. The initial UI only
-supports append, disable, and remove.
+and derive their start time from the preceding visual items. Visual clips store
+canvas fit (letterbox or cover) and 90° rotation. The UI supports append, disable,
+trim, split, canvas placement, rotate, and remove.
 
 The audio track shares the program clock but stores explicit start times. The
-initial UI appends generated audio at the current audio-track end. Disabling an
+initial UI appends generated or imported audio at the current audio-track end.
+Imported files are copied into an app-managed media folder. Disabling an
 audio item preserves its position and renders silence. Removing it also preserves
 later start times, leaving a gap rather than silently desynchronizing the mix.
 
@@ -43,7 +45,8 @@ completion, failure, and cancellation events without loading weights in the app
 process. Stills follow the community recipe: one 22-frame H3 chunk, keep the
 last decoded frame, skip FFmpeg mux. Audio follows the community 32×32
 soundtrack recipe: run the joint model at the mechanical minimum canvas,
-mux a throwaway clip, keep only the AAC.
+then skip the video decoder outright and write the audio VAE's own samples
+as a WAV. Only video output needs FFmpeg.
 
 The engine service is deliberately single-job. Keeping `h3_ctx` in that process
 allows later interactive cache reuse while still permitting the app to reclaim

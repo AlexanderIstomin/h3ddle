@@ -19,7 +19,7 @@ case "$engine_handshake" in
         ;;
 esac
 case "$engine_handshake" in
-    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"standaloneAudioGeneration"'*) ;;
+    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"standaloneAudioGeneration"'*'"referenceInputs"'*) ;;
     *)
         echo "Engine generation capabilities are incomplete." >&2
         exit 1

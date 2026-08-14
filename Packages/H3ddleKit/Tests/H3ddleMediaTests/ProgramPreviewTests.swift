@@ -25,6 +25,30 @@ struct ProgramPreviewTests {
     #expect(abs(localTime - 1) < 0.000_1)
     #expect(includesNativeAudio)
     #expect(frame.duration == 9)
+    #expect(frame.visualTransform == .identity)
+  }
+
+  @Test("Preview carries the current visual canvas transform")
+  func carriesVisualCanvasTransform() throws {
+    var project = H3ddleProject()
+    let first = videoAsset(name: "One", duration: 5)
+    let second = videoAsset(name: "Two", duration: 4)
+    project.addAsset(first)
+    project.addAsset(second)
+    let firstItem = try project.timeline.appendVisual(first)
+    let secondItem = try project.timeline.appendVisual(second)
+    project.timeline.setVisualCanvasFit(firstItem.id, .cover)
+    project.timeline.rotateVisual(firstItem.id)
+    project.timeline.rotateVisual(firstItem.id)
+    project.timeline.setVisualCanvasFit(secondItem.id, .cover)
+
+    let firstFrame = ProgramPreview.frame(at: 2, project: project)
+    #expect(firstFrame.visualTransform.fit == .cover)
+    #expect(firstFrame.visualTransform.rotationTurns == 2)
+
+    let secondFrame = ProgramPreview.frame(at: 6, project: project)
+    #expect(secondFrame.visualTransform.fit == .cover)
+    #expect(secondFrame.visualTransform.rotationTurns == 0)
   }
 
   @Test("Disabled visuals keep duration and render empty")

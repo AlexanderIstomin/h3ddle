@@ -108,6 +108,38 @@ struct EngineProtocolTests {
     #expect(decoded.coreReuse == 4)
   }
 
+  @Test("Frame anchors and reference images survive a round trip")
+  func visualConditioningRoundTrip() throws {
+    let request = EngineGenerationRequest(
+      kind: .video,
+      prompt: "Continue from the stills",
+      duration: 1,
+      firstFrameURL: URL(fileURLWithPath: "/tmp/start.png"),
+      lastFrameURL: URL(fileURLWithPath: "/tmp/end.png"),
+      outputURL: URL(fileURLWithPath: "/tmp/o.mp4")
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(request)
+    )
+    #expect(decoded.firstFrameURL?.path == "/tmp/start.png")
+    #expect(decoded.lastFrameURL?.path == "/tmp/end.png")
+    #expect(decoded.referenceImageURLs.isEmpty)
+
+    let refs = EngineGenerationRequest(
+      kind: .video,
+      prompt: "Use Picture 1",
+      duration: 1,
+      referenceImageURLs: [URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.png")],
+      outputURL: URL(fileURLWithPath: "/tmp/o.mp4")
+    )
+    let decodedRefs = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(refs)
+    )
+    #expect(decodedRefs.referenceImageURLs.map(\.lastPathComponent) == ["a.png", "b.png"])
+  }
+
   @Test("Canvas size overrides survive a round trip")
   func canvasOverrideRoundTrip() throws {
     let request = EngineGenerationRequest(

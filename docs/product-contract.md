@@ -5,24 +5,31 @@
 - The header shows the H3ddle title on the left and the model selector plus
   Export on the right.
 - One visual lane and one audio lane share one ruler and playhead.
-- Visual assets support video and images. Audio assets support generated or
-  imported audio.
+- Visual assets support generated or imported video and images. Audio assets
+  support generated or imported audio. Import copies the file into an
+  app-managed media folder and appends after the last clip on that lane.
+  Finder files can be dropped onto the matching lane or its header.
+  Disabling the audio track omits A1 and native clip soundtracks from export.
 - Both lanes begin without move or reorder interactions. Selected video,
   image, and audio clips expose left and right trim handles. Images can
   extend freely; video and audio stay inside the source. A leading trim keeps
   the out point. Audio start times stay absolute — later audio does not move.
-- Insert is append-after-last only: a visual result goes on the visual end, an
-  audio result on the current audio end. There is no insert-at-playhead or
-  replace mode.
+  Split at playhead (S) divides the selected clip when the playhead is strictly
+  inside it; the left half keeps the original clip, the right half continues
+  the source. Delete / Backspace removes the selection. Visual delete closes
+  the gap; audio delete leaves later clips where they are.
+- Insert is append-after-last only: a generated or imported visual goes on the
+  visual end, audio on the current audio end. There is no insert-at-playhead,
+  replace mode, or media library. Imported stills hold for 3 seconds.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
 - Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
   audio model. Duration follows the same 22+17n frame shapes as video.
 - Disabling keeps an item recoverable. Removing audio does not shift later audio.
 - Each visual video can include or mute its native soundtrack.
-- The program canvas shows the composed visual at the playhead, letterboxed to
-  the project aspect on the project background. The viewer can pan and zoom
-  that frame; clip transforms are out of scope.
+- The program canvas shows the composed visual at the playhead, fitted to the
+  project aspect on the project background. A visual clip can fit or cover that
+  canvas and rotate in 90° steps. The viewer can pan and zoom the frame.
 - Project settings cover platform presets, custom aspect/resolution/frame rate,
   background, stored tone mapping and exposure, and master gain. Live AgX/ACES
   preview, live peak meters, and LUFS normalization are out of scope.
@@ -36,6 +43,10 @@
   duration slider; inserted stills hold for 3 seconds. Generate replaces that
   composer with a full-width result (progress, then the finished media).
   Completed results show the wall-clock generate time.
+- Visual jobs can attach a start and/or end frame, or up to 12 ordered
+  reference stills. The two modes are mutually exclusive. Live native
+  conditioning needs a released FL2VA folder (frames) or Ref2VA (references);
+  the optimized INT8 package stays prompt-only.
 - Native generation settings sit below the model selector: named presets
   (Preview / Standard / High) plus Custom, a resolution picker (256, 512, and
   the two native H3 canvases), denoising, transformer blocks, core reuse, and
@@ -53,10 +64,17 @@
 
 ## Export
 
-- The export surface will reproduce the approved visible behavior independently
-  using AVFoundation and VideoToolbox.
-- The visual duration is authoritative.
-- Trailing audio requires an explicit warning rather than silent truncation.
+- Export opens a native sheet with quality presets (Recommended, High, Smaller,
+  Master, Custom), a poster/progress column, and encode settings.
+- Named presets seed from the project platform. Custom unlocks resolution,
+  frame rate, format, H.264 profile, and AAC quality. Bitrate edits select
+  Custom. Loudness and hardware acceleration stay additive.
+- Formats are H.264, H.265, and ProRes. GIF and WebM are out of scope.
+- Full video or a custom in/out range can be encoded. The visual duration is
+  authoritative; trailing audio shows a warning and is truncated.
+- Encode uses AVFoundation and VideoToolbox on this Mac. Cancel aborts the
+  writer. Completion reveals the file in Finder.
+- Optional −14 LUFS normalization is an offline mix pass, not a live meter.
 
 ## Model management
 

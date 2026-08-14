@@ -40,6 +40,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Overrides the quality preset's square canvas when both are set.
   public var canvasWidth: Int?
   public var canvasHeight: Int?
+  public var firstFrameURL: URL?
+  public var lastFrameURL: URL?
+  public var referenceImageURLs: [URL]
 
   public init(
     kind: GenerationKind,
@@ -53,7 +56,10 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
-    canvasHeight: Int? = nil
+    canvasHeight: Int? = nil,
+    firstFrameURL: URL? = nil,
+    lastFrameURL: URL? = nil,
+    referenceImageURLs: [URL] = []
   ) {
     self.kind = kind
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,6 +73,10 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.seed = seed
     self.canvasWidth = canvasWidth
     self.canvasHeight = canvasHeight
+    self.firstFrameURL = firstFrameURL
+    self.lastFrameURL = lastFrameURL
+    self.referenceImageURLs = Array(
+      referenceImageURLs.prefix(EngineGenerationRequest.referenceImageLimit))
   }
 }
 

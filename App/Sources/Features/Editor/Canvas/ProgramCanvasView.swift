@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import H3ddleCore
 import H3ddleDesignSystem
@@ -11,6 +12,7 @@ struct ProgramCanvasView: View {
   @State private var pinchBase: CGFloat?
   @State private var pointerInside = false
   @State private var eventMonitor: Any?
+  @State private var videoNaturalSizes: [URL: CGSize] = [:]
 
   var body: some View {
     GeometryReader { proxy in
@@ -79,19 +81,34 @@ struct ProgramCanvasView: View {
   @ViewBuilder
   private var mediaSurface: some View {
     switch currentFrame.visual {
-    case .video:
-      ProgramPlayerLayer(player: model.playback.visualPlayer)
+    case .video(let asset, _, _):
+      PlacedCanvasMedia(
+        source: videoNaturalSizes[asset.url] ?? CGSize(width: 16, height: 9),
+        transform: currentFrame.visualTransform
+      ) {
+        ProgramPlayerLayer(player: model.playback.visualPlayer)
+      }
+      .task(id: asset.url) {
+        await rememberVideoSize(asset.url)
+      }
     case .image(let asset):
       if let image = NSImage(contentsOf: asset.url) {
-        Image(nsImage: image)
-          .resizable()
-          .scaledToFit()
+        PlacedCanvasMedia(source: image.size, transform: currentFrame.visualTransform) {
+          Image(nsImage: image)
+            .resizable()
+        }
       }
     case .empty:
       if model.project.timeline.visualItems.isEmpty {
         emptyState
       }
     }
+  }
+
+  private func rememberVideoSize(_ url: URL) async {
+    if videoNaturalSizes[url] != nil { return }
+    guard let size = await MediaSourceSize.video(at: url) else { return }
+    videoNaturalSizes[url] = size
   }
 
   @ViewBuilder
@@ -197,5 +214,21 @@ struct ProgramCanvasView: View {
       visualMuted: !model.visualLaneAudible,
       audioMuted: !model.audioLaneAudible
     )
+  }
+}
+
+private enum MediaSourceSize {
+  static func video(at url: URL) async -> CGSize? {
+    let asset = AVURLAsset(url: url)
+    guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
+      return nil
+    }
+    let natural = (try? await track.load(.naturalSize)) ?? .zero
+    let transform = (try? await track.load(.preferredTransform)) ?? .identity
+    let mapped = natural.applying(transform)
+    let width = abs(mapped.width)
+    let height = abs(mapped.height)
+    guard width > 1, height > 1 else { return nil }
+    return CGSize(width: width, height: height)
   }
 }

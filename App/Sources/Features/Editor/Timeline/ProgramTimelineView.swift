@@ -8,6 +8,7 @@ import SwiftUI
 struct ProgramTimelineView: View {
   @Bindable var model: AppModel
   @Binding var appendMenu: AppendMenuPlacement?
+  @Binding var clipMenu: ClipMenuPlacement?
   @State private var playheadDragOrigin: TimeInterval?
   @State private var appendButtonFrames: [String: CGRect] = [:]
   @State private var timelineScrollPosition = ScrollPosition(edge: .leading)
@@ -167,6 +168,7 @@ struct ProgramTimelineView: View {
           kind: asset?.kind ?? .video,
           duration: placement.item.duration,
           isEnabled: placement.item.isEnabled,
+          isTrackMuted: model.visualTrackMuted,
           isSelected: model.selectedTimelineItem == .visual(placement.item.id),
           metrics: metrics,
           height: TimelineChrome.visualLaneHeight,
@@ -180,8 +182,18 @@ struct ProgramTimelineView: View {
         .onTapGesture {
           model.selectedTimelineItem = .visual(placement.item.id)
         }
-        .contextMenu {
-          visualMenu(for: placement.item)
+        .overlay {
+          GeometryReader { proxy in
+            SecondaryClickProbe { local in
+              presentClipMenu(
+                .visual(placement.item.id),
+                at: CGPoint(
+                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
+                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
+                )
+              )
+            }
+          }
         }
       }
       appendControl(isVisual: true)
@@ -191,6 +203,12 @@ struct ProgramTimelineView: View {
         )
     }
     .frame(height: TimelineChrome.visualLaneHeight)
+    .overlay {
+      if model.visualTrackMuted {
+        Color.black.opacity(0.16).allowsHitTesting(false)
+      }
+    }
+    .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-lane-drop")
   }
 
   private var audioLane: some View {
@@ -202,6 +220,7 @@ struct ProgramTimelineView: View {
           kind: .audio,
           duration: item.duration,
           isEnabled: item.isEnabled,
+          isTrackMuted: model.audioTrackMuted,
           isSelected: model.selectedTimelineItem == .audio(item.id),
           metrics: metrics,
           height: TimelineChrome.audioLaneHeight,
@@ -215,8 +234,18 @@ struct ProgramTimelineView: View {
         .onTapGesture {
           model.selectedTimelineItem = .audio(item.id)
         }
-        .contextMenu {
-          audioMenu(for: item)
+        .overlay {
+          GeometryReader { proxy in
+            SecondaryClickProbe { local in
+              presentClipMenu(
+                .audio(item.id),
+                at: CGPoint(
+                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
+                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
+                )
+              )
+            }
+          }
         }
       }
       appendControl(isVisual: false)
@@ -226,6 +255,12 @@ struct ProgramTimelineView: View {
         )
     }
     .frame(height: TimelineChrome.audioLaneHeight)
+    .overlay {
+      if model.audioTrackMuted {
+        Color.black.opacity(0.16).allowsHitTesting(false)
+      }
+    }
+    .timelineMediaDrop(lane: .audio, model: model, accessibilityID: "audio-lane-drop")
   }
 
   private var effectLane: some View {
@@ -296,7 +331,8 @@ struct ProgramTimelineView: View {
             start: item.startTime,
             duration: item.duration,
             color: H3Color.clipAudio,
-            width: width
+            width: width,
+            isMuted: model.audioTrackMuted || !item.isEnabled
           )
         }
       } else {
@@ -305,23 +341,31 @@ struct ProgramTimelineView: View {
             start: placement.startTime,
             duration: placement.item.duration,
             color: H3Color.clipVideo,
-            width: width
+            width: width,
+            isMuted: model.visualTrackMuted || !placement.item.isEnabled
           )
         }
       }
     }
     .frame(height: 15)
+    .timelineMediaDrop(
+      lane: isAudio ? .audio : .visual,
+      model: model,
+      accessibilityID: isAudio ? "audio-collapsed-drop" : "visual-collapsed-drop"
+    )
   }
 
   private func collapsedSegment(
     start: TimeInterval,
     duration: TimeInterval,
     color: Color,
-    width: CGFloat
+    width: CGFloat,
+    isMuted: Bool
   ) -> some View {
     let span = max(contentDuration, 0.001)
     return Rectangle()
-      .fill(color.opacity(0.82))
+      .fill(color.opacity(isMuted ? 0.32 : 0.82))
+      .saturation(isMuted ? 0.4 : 1)
       .frame(width: max(2, width * CGFloat(duration / span)))
       .offset(x: width * CGFloat(start / span))
   }
@@ -376,14 +420,16 @@ struct ProgramTimelineView: View {
     .zIndex(6)
   }
 
-  @ViewBuilder
   private func appendControl(isVisual: Bool) -> some View {
-    Button {
+    let trackMuted = isVisual ? model.visualTrackMuted : model.audioTrackMuted
+    return Button {
       toggleAppendMenu(isVisual: isVisual)
     } label: {
       appendPlus
     }
     .buttonStyle(.plain)
+    .disabled(trackMuted)
+    .opacity(trackMuted ? 0.34 : 1)
     .background {
       GeometryReader { proxy in
         Color.clear.preference(
@@ -397,19 +443,24 @@ struct ProgramTimelineView: View {
     .onPreferenceChange(AppendButtonFrameKey.self) { frames in
       appendButtonFrames.merge(frames) { _, new in new }
     }
-    .help(isVisual ? "Append visual" : "Append audio")
+    .help(
+      trackMuted
+        ? "Enable the track to append"
+        : (isVisual ? "Append visual" : "Append audio")
+    )
     .accessibilityLabel(isVisual ? "Append visual" : "Append audio")
     .accessibilityIdentifier(isVisual ? "append-visual" : "append-audio")
   }
 
   private func toggleAppendMenu(isVisual: Bool) {
+    clipMenu = nil
     if appendMenu?.isVisual == isVisual {
       appendMenu = nil
       return
     }
     let key = isVisual ? "visual" : "audio"
     let frame = appendButtonFrames[key] ?? .zero
-    let menuHeight: CGFloat = isVisual ? 118 : 86
+    let menuHeight: CGFloat = isVisual ? 154 : 122
     appendMenu = AppendMenuPlacement(
       isVisual: isVisual,
       origin: CGPoint(x: frame.minX, y: frame.minY - menuHeight - 8)
@@ -430,29 +481,15 @@ struct ProgramTimelineView: View {
       .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
   }
 
-  @ViewBuilder
-  private func visualMenu(for item: VisualItem) -> some View {
-    Button(item.isEnabled ? "Disable" : "Enable") {
-      model.toggleVisual(item.id)
+  private func presentClipMenu(_ target: ClipMenuPlacement.Target, at origin: CGPoint) {
+    appendMenu = nil
+    switch target {
+    case .visual(let id):
+      model.selectedTimelineItem = .visual(id)
+    case .audio(let id):
+      model.selectedTimelineItem = .audio(id)
     }
-    Button(item.includesNativeAudio ? "Mute native audio" : "Include native audio") {
-      model.toggleVisualNativeAudio(item.id)
-    }
-    Divider()
-    Button("Remove", role: .destructive) {
-      model.removeVisual(item.id)
-    }
-  }
-
-  @ViewBuilder
-  private func audioMenu(for item: AudioItem) -> some View {
-    Button(item.isEnabled ? "Disable" : "Enable") {
-      model.toggleAudio(item.id)
-    }
-    Divider()
-    Button("Remove", role: .destructive) {
-      model.removeAudio(item.id)
-    }
+    clipMenu = ClipMenuPlacement(target: target, origin: origin)
   }
 
   private var visualPlacements: [VisualPlacement] {

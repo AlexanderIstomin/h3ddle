@@ -12,6 +12,8 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(app.buttons["append-audio"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["program-preview"].exists)
     XCTAssertTrue(app.buttons["transport-play"].exists)
+    XCTAssertTrue(app.buttons["transport-split"].exists)
+    XCTAssertTrue(app.buttons["transport-delete"].exists)
 
     app.buttons["model-status"].click()
     XCTAssertTrue(app.staticTexts["model-settings"].waitForExistence(timeout: 2))
@@ -30,6 +32,22 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["project-settings"].waitForExistence(timeout: 2))
     XCTAssertTrue(app.staticTexts["Custom / None"].exists)
     XCTAssertTrue(app.staticTexts["MASTER"].exists)
+  }
+
+  @MainActor
+  func testExportModalOpensFromTheHeader() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+
+    XCTAssertTrue(app.buttons["export-button"].waitForExistence(timeout: 5))
+    app.buttons["export-button"].click()
+    XCTAssertTrue(app.descendants(matching: .any)["export-modal"].waitForExistence(timeout: 2))
+    XCTAssertTrue(app.staticTexts["Export Video"].exists)
+    XCTAssertTrue(app.buttons["preset-recommended"].exists)
+    XCTAssertTrue(app.buttons["export-now"].exists)
+    app.buttons["export-close"].click()
+    XCTAssertFalse(app.descendants(matching: .any)["export-modal"].waitForExistence(timeout: 1))
   }
 
   @MainActor
@@ -89,5 +107,35 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(insert.waitForExistence(timeout: 5))
     insert.click()
     XCTAssertTrue(app.staticTexts["Generated Audio"].waitForExistence(timeout: 2))
+  }
+
+  @MainActor
+  func testAppendMenusOfferImport() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+
+    XCTAssertTrue(app.buttons["append-visual"].waitForExistence(timeout: 5))
+    app.buttons["append-visual"].click()
+    XCTAssertTrue(app.buttons["append-import"].waitForExistence(timeout: 2))
+    XCTAssertTrue(app.buttons["append-generate-video"].exists)
+    app.buttons["append-visual"].click()
+
+    app.buttons["append-audio"].click()
+    XCTAssertTrue(app.buttons["append-import"].waitForExistence(timeout: 2))
+    XCTAssertTrue(app.buttons["append-generate-audio"].exists)
+  }
+
+  @MainActor
+  func testTimelineLanesAcceptFileDrops() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+
+    XCTAssertTrue(app.staticTexts["program-timeline"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.descendants(matching: .any)["visual-lane-drop"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["audio-lane-drop"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["visual-header-drop"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["audio-header-drop"].exists)
   }
 }

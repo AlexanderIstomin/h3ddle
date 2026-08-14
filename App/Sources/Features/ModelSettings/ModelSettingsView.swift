@@ -67,7 +67,8 @@ struct ModelSettingsView: View {
     manifest.generationProfile == .turbo
       ? "Agree & Install"
       : "Agree & Download "
-        + ByteCountFormatter.string(fromByteCount: manifest.totalByteCount, countStyle: .file)
+        + ByteCountFormatter.string(
+          fromByteCount: model.pendingDownloadBytes(for: manifest), countStyle: .file)
   }
 
   private var header: some View {

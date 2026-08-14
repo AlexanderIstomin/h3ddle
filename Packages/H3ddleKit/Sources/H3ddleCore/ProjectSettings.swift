@@ -54,6 +54,18 @@ public enum ProjectResolution: String, CaseIterable, Sendable, Identifiable {
     }
   }
 
+  public var shortLabel: String {
+    switch self {
+    case .ultraHD: "4K"
+    case .fullHD: "1080p"
+    case .hd: "720p"
+    case .sd: "480p"
+    case .low: "320p"
+    case .veryLow: "240p"
+    case .extreme: "120p"
+    }
+  }
+
   public var landscapeWidth: Int {
     switch self {
     case .ultraHD: 3840
