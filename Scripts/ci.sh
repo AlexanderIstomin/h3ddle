@@ -4,6 +4,7 @@ set -eu
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 "$repository_root/Scripts/check-public-boundary.sh"
+"$repository_root/Scripts/check-untracked-sources.sh"
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
 swift test --package-path "$repository_root/Packages/H3ddleKit"
 swift build --package-path "$repository_root/Engine"
