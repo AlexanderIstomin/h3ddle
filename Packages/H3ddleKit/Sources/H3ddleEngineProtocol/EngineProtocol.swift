@@ -16,6 +16,9 @@ public enum EngineGenerationKind: String, Codable, Sendable {
   case video
   case image
   case audio
+  /// Stable Audio 3 rather than H3: sound effects and ambience, which
+  /// H3's dialogue-trained audio branch will not produce.
+  case soundEffect
 }
 
 public enum EngineFeature: String, CaseIterable, Codable, Sendable {
@@ -23,6 +26,7 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case videoGeneration
   case imageGeneration
   case standaloneAudioGeneration
+  case soundEffectGeneration
   case embeddedAudio
   case cancellation
   case denoisingPreviews

@@ -113,7 +113,7 @@ private let engineCapabilities = EngineCapabilities(
     [
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
-      .standaloneAudioGeneration,
+      .standaloneAudioGeneration, .soundEffectGeneration,
     ]
   }()
 )
@@ -485,6 +485,19 @@ private func generationProgressCallback(
   )
 }
 
+/// Sound effects report one tick per denoising pass. There is no preview
+/// to decode, so unlike H3 this carries no frame callback.
+private func soundEffectStepCallback(
+  _ completed: Int32,
+  _ total: Int32,
+  _ opaque: UnsafeMutableRawPointer?
+) {
+  guard let opaque else { return }
+  let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
+    .takeUnretainedValue()
+  _ = context.progress(phase: "denoise", completed: completed, total: total)
+}
+
 private func generationFrameCallback(
   _ frame: UnsafePointer<h3_frame>?,
   _ opaque: UnsafeMutableRawPointer?
@@ -532,6 +545,11 @@ private final class EngineRuntime: @unchecked Sendable {
     case .audio:
       guard engineCapabilities.supports(.standaloneAudioGeneration) else {
         EngineOutput.fail(command, message: "This engine cannot generate standalone audio")
+        return
+      }
+    case .soundEffect:
+      guard engineCapabilities.supports(.soundEffectGeneration) else {
+        EngineOutput.fail(command, message: "This engine cannot generate sound effects")
         return
       }
     case .video:
@@ -606,6 +624,65 @@ private final class EngineRuntime: @unchecked Sendable {
     lock.withLock { activeContext }?.cancel()
   }
 
+  /// Stable Audio 3 keeps none of H3's machinery: no shared model cache, no
+  /// preview decoder, no container to mux. It loads its package, denoises,
+  /// and writes a WAV.
+  private func runSoundEffect(
+    _ request: EngineGenerationRequest,
+    command: EngineCommand,
+    packageDirectory: URL,
+    callbackContext: GenerationCallbackContext
+  ) {
+    var error = [CChar](repeating: 0, count: 512)
+    let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    let produced = packageDirectory.path.withCString { packagePath in
+      request.prompt.withCString { prompt in
+        request.outputURL.path.withCString { outputPath in
+          h3ddle_sa3_generate(
+            packagePath,
+            prompt,
+            request.duration,
+            Int32(request.denoisingSteps ?? 0),
+            request.seed ?? 42,
+            outputPath,
+            soundEffectStepCallback,
+            opaque,
+            &error,
+            error.count
+          )
+        }
+      }
+    }
+
+    if callbackContext.isCancelled {
+      EngineOutput.emit(
+        EngineEvent(
+          requestID: command.requestID,
+          jobID: command.jobID,
+          kind: .cancelled
+        )
+      )
+      return
+    }
+    guard produced != 0 else {
+      let message = String(cString: error)
+      EngineOutput.fail(
+        command,
+        message: message.isEmpty ? "Sound effect generation failed" : message
+      )
+      return
+    }
+    EngineOutput.emit(
+      EngineEvent(
+        requestID: command.requestID,
+        jobID: command.jobID,
+        kind: .completed,
+        outputURL: request.outputURL,
+        outputDuration: request.duration
+      )
+    )
+  }
+
   private func run(
     _ request: EngineGenerationRequest,
     command: EngineCommand,
@@ -619,6 +696,16 @@ private final class EngineRuntime: @unchecked Sendable {
         }
       }
       EngineResourceWatch.shared.noteActivity()
+    }
+
+    if request.kind == .soundEffect {
+      runSoundEffect(
+        request,
+        command: command,
+        packageDirectory: modelDirectory,
+        callbackContext: callbackContext
+      )
+      return
     }
 
     modelDirectory.path.withCString { modelPath in
