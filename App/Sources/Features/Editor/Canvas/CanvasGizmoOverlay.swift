@@ -4,10 +4,6 @@ import SwiftUI
 
 struct CanvasGizmoOverlay: View {
   var layout: CanvasGizmoGeometry.Layout
-  var isEnabled: Bool
-  var onDuplicate: () -> Void
-  var onToggleEnabled: () -> Void
-  var onChromeChange: ([CGRect]) -> Void
 
   var body: some View {
     ZStack(alignment: .topLeading) {
@@ -19,9 +15,8 @@ struct CanvasGizmoOverlay: View {
         }
       }
       handle(at: layout.rotateHandle, circular: true)
-      chrome
     }
-    .allowsHitTesting(true)
+    .allowsHitTesting(false)
   }
 
   private var outline: some View {
@@ -65,76 +60,6 @@ struct CanvasGizmoOverlay: View {
     .frame(width: size, height: size)
     .position(x: point.x, y: point.y)
     .allowsHitTesting(false)
-  }
-
-  private var chrome: some View {
-    HStack(spacing: 4) {
-      gizmoButton(
-        symbol: "plus.square.on.square",
-        label: "Duplicate",
-        identifier: "gizmo-duplicate",
-        action: onDuplicate
-      )
-      gizmoButton(
-        symbol: isEnabled ? "power" : "power",
-        label: isEnabled ? "Disable" : "Enable",
-        identifier: "gizmo-toggle-enabled",
-        action: onToggleEnabled
-      )
-    }
-    .padding(4)
-    .background(H3Color.surface.opacity(0.94))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(H3Color.line, lineWidth: 1)
-    }
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .background {
-      GeometryReader { proxy in
-        Color.clear.preference(
-          key: GizmoChromeKey.self,
-          value: [proxy.frame(in: .named("program-canvas"))]
-        )
-      }
-    }
-    .onPreferenceChange(GizmoChromeKey.self, perform: onChromeChange)
-    .position(chromeCenter)
-    .accessibilityElement(children: .contain)
-  }
-
-  private var chromeCenter: CGPoint {
-    CGPoint(
-      x: layout.aabb.x + layout.aabb.width / 2,
-      y: max(18, layout.aabb.y - 22)
-    )
-  }
-
-  private func gizmoButton(
-    symbol: String,
-    label: String,
-    identifier: String,
-    action: @escaping () -> Void
-  ) -> some View {
-    Button(action: action) {
-      Image(systemName: symbol)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(H3Color.textPrimary)
-        .frame(width: 24, height: 22)
-        .background(H3Color.controlFill)
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-    }
-    .buttonStyle(.plain)
-    .help(label)
-    .accessibilityLabel(label)
-    .accessibilityIdentifier(identifier)
-  }
-}
-
-private struct GizmoChromeKey: PreferenceKey {
-  static let defaultValue: [CGRect] = []
-
-  static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
-    value.append(contentsOf: nextValue())
   }
 }
 

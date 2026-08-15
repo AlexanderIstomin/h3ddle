@@ -14,7 +14,6 @@ struct ProgramCanvasView: View {
   @State private var presenter = ProgramFramePresenter()
   @State private var monitorSize: CGSize = .zero
   @State private var viewSize: CGSize = .zero
-  @State private var chromeRects: [CGRect] = []
   @State private var pointerDown: CanvasPointerSample?
   @State private var lastViewPoint: CGPoint = .zero
   @State private var isPanning = false
@@ -40,15 +39,9 @@ struct ProgramCanvasView: View {
           .clipped()
           .allowsHitTesting(false)
 
-        if let gizmo = gizmoLayout, let target = gizmoTarget {
-          CanvasGizmoOverlay(
-            layout: gizmo,
-            isEnabled: target.isEnabled,
-            onDuplicate: { model.duplicateVisual(target.id) },
-            onToggleEnabled: { model.toggleVisual(target.id) },
-            onChromeChange: { chromeRects = $0 }
-          )
-          .accessibilityIdentifier("canvas-gizmo")
+        if let gizmo = gizmoLayout {
+          CanvasGizmoOverlay(layout: gizmo)
+            .accessibilityIdentifier("canvas-gizmo")
         }
 
         Color.clear
@@ -57,7 +50,7 @@ struct ProgramCanvasView: View {
           .simultaneousGesture(resetGesture)
           .onHover { pointerInside = $0 }
 
-        CanvasInteractionProbe(chromeRects: chromeRects, onEvent: handlePointer)
+        CanvasInteractionProbe(onEvent: handlePointer)
           .allowsHitTesting(true)
       }
       .coordinateSpace(name: "program-canvas")

@@ -19,32 +19,25 @@ enum CanvasPointerEvent {
 /// Claims left-drag, Option-drag, and right-click. Returns nil over SwiftUI
 /// chrome and for pinch / scroll so those stay on the SwiftUI layer.
 struct CanvasInteractionProbe: NSViewRepresentable {
-  var chromeRects: [CGRect]
   var onEvent: (CanvasPointerEvent) -> Void
 
   func makeNSView(context: Context) -> Probe {
     let view = Probe()
-    view.chromeRects = chromeRects
     view.onEvent = onEvent
     return view
   }
 
   func updateNSView(_ view: Probe, context: Context) {
-    view.chromeRects = chromeRects
     view.onEvent = onEvent
   }
 
   final class Probe: NSView {
-    var chromeRects: [CGRect] = []
     var onEvent: ((CanvasPointerEvent) -> Void)?
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-      if chromeRects.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) }) {
-        return nil
-      }
       guard let event = NSApp.currentEvent else { return nil }
       switch event.type {
       case .rightMouseDown, .rightMouseUp:
