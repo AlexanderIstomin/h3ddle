@@ -1,34 +1,51 @@
 # H3ddle
 
-H3ddle is an open-source native macOS workspace for local MiniMax H3 video
-generation. Generated video, images, and audio are assembled on a deliberately
-small two-track timeline: one visual lane and one audio lane.
+H3ddle is an open-source native macOS workspace for local MiniMax H3
+generation. Video, images, and audio are produced entirely on your own machine
+and assembled on a deliberately small two-track timeline: one visual lane and
+one audio lane.
 
-The project is an independent SwiftUI/AppKit implementation. Model weights are
-not stored in this repository or bundled by the scaffold.
+The project is an independent SwiftUI/AppKit implementation over a vendored
+Metal engine. Model weights are never stored in this repository or bundled with
+the app; they are downloaded from pinned, checksummed Hugging Face revisions
+into Application Support.
 
 ## Current state
 
-The first scaffold includes:
+Generation, on the local Metal engine:
 
-- a native macOS editor shell with a Project settings panel;
-- ordered visual items and explicitly timed audio items;
-- append of generated or imported video, image, and audio files;
-- append, disable, and remove domain behavior;
-- a provider-neutral Generate Studio with explicit prototype fallbacks;
-- a versioned JSON-lines engine protocol and bundled native helper;
-- persistent local-model selection and H3/Metal inventory validation;
-- a pinned, resumable managed-model download with disk preflight, progress,
-  cancellation, SHA-256 verification, and atomic installation;
-- real prompt-to-video dispatch when a valid model and FFmpeg are available;
-- AVFoundation/VideoToolbox export with a preset-based Export Video sheet; and
-- public-boundary, unit, engine, and Xcode build checks.
+- prompt-to-video with synchronized audio, still images, and standalone audio;
+- start and end keyframes, and ordered reference images through a Ref2VA
+  transformer, both working on the optimized single-file packages;
+- four managed model packages — standard and step-distilled, each with or
+  without reference support — pinned by revision and SHA-256, sharing their
+  common weights by hardlink so a second package costs only what differs;
+- prompts composed in the three-field schema MiniMax H3 was trained on;
+- resolutions named by short edge from 352p to 1088p, derived from the chosen
+  aspect ratio;
+- block caching, which replays cached tail-block residuals on stable denoising
+  steps for about 40% less work at standard step counts;
+- denoising previews decoded through a 9 MB tiny autoencoder in roughly 180 ms,
+  showing the model's current estimate of the finished frame; and
+- a remaining-time estimate projected from each run's own measured pace.
 
-Generated video plays on the program canvas at the shared playhead. Export
-writes H.264, H.265, or ProRes from the two-track program.
-Image generation uses the community still recipe: the shortest trained
-22-frame H3 chunk, then the last decoded frame as a PNG. Audio uses the
-community soundtrack recipe: a 32×32 joint clip, then the AAC track only.
+Editing and output:
+
+- a two-track program timeline with one visual lane and one audio lane;
+- canvas objects with direct gesture editing, text items, visual effects and
+  transitions, and undo/redo;
+- drag-and-drop import of existing video, image, and audio files;
+- H.264, H.265, or ProRes export with loudness normalization; and
+- Download and Copy statistics on any finished generation.
+
+Stills render one representative frame of a short H3 clip, at either the
+detailed 22-frame chunk or a 5-frame chunk that is about three times quicker.
+Audio renders the joint model for its soundtrack and writes a 32 kHz stereo WAV
+directly, with no FFmpeg process involved.
+
+Known limitation: prompts asking for ambience rather than speech tend to return
+speech. The cause is under investigation and is not the canvas size, which was
+measured across 32, 64, 128, and 256 square.
 
 ## Requirements
 
@@ -51,26 +68,18 @@ the released `FL2VA` model tree, or download the pinned optimized package into
 `~/Library/Application Support/H3ddle/Models`. Model weights stay outside the
 repository and app bundle. `Ref2VA` is optional in the current protocol.
 
-The first managed package is the approximately 53.9 GB FL2VA INT8 ConvRot
-variant from `Comfy-Org/MiniMax-H3`, plus pinned official tokenizer/configuration
-metadata. Both sources use immutable Hub revisions. This package is ready for
-prompt-only FL2VA generation: Qwen and all 50 DiT layers stream from SSD, then
-the F32 AudioVAE and F16 VideoVAE decode synchronized output. A native M1 Pro
-smoke test completed the entire path through a 22-frame H.264/AAC file with
-1.49 GiB peak tracked DiT residency. Visual-reference conditioning for this
-optimized layout remains future work.
+Managed packages come from `Comfy-Org/MiniMax-H3` for the base weights and
+`PulpCut` for the two step-distilled transformers converted for this project,
+plus pinned official tokenizer and configuration metadata. Every source uses an
+immutable Hub revision and every file is verified by SHA-256 before install.
+Packages share their text encoder, VAEs, preview decoder, and metadata, so
+installing a second one downloads only the transformer that differs.
 
-The app currently exposes a native 256×256 preview with four denoising passes.
-This is the smallest canvas and denoising budget intended to produce a
-recognizable result; it is still below H3's 20-pass quality default. The
-duration control is a request because H3 rounds it up to a legal temporal
-shape. Denoising reports progress for every transformer layer, VideoVAE work is
-aggregated across temporal chunks, and Cancel terminates the job-specific
-helper immediately so mapped weights and Metal allocations are released even
-while a long GPU operation is active. Generated videos can be played in the
-editor or copied to a user-selected location, and both live and completed
-generation time are shown in the UI. Use the CLI for deliberate larger-canvas
-or higher-step experiments.
+Denoising reports progress for every transformer layer, and the video decoder
+reports its own blocks, so a long decode does not look like a hang. Cancel
+terminates the job-specific helper immediately, releasing mapped weights and
+Metal allocations even during a long GPU operation. Use the CLI in
+`Engine/Vendor/h3.c` for experiments the app does not expose.
 
 Run all non-UI checks and build the application with:
 
