@@ -29,6 +29,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var activeDiTLayers: Int?
   /// Transformer-core reuse interval; nil or 1 keeps the exact path.
   public var coreReuse: Int?
+  /// Render stills from a 5-frame clip instead of 22: about 3x faster with
+  /// visibly less detail. Image generations only.
+  public var fastStill: Bool
   /// Replay cached tail-block residuals on schedule-gated steps: about 40%
   /// faster at standard step counts for a different sample of the same
   /// quality. Replaces both reuse ladders when enabled.
@@ -56,6 +59,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
+    fastStill: Bool = false,
     blockCache: Bool = false,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
@@ -73,6 +77,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
+    self.fastStill = fastStill
     self.blockCache = blockCache
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule

@@ -224,6 +224,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Recomputes the expensive transformer core every N denoising passes while
   /// refreshing the timestep heads each pass; nil or 1 keeps the exact path.
   public var coreReuse: Int?
+  /// Render stills from the 5-frame first chunk instead of a 22-frame clip:
+  /// about 3x faster, with visibly less detail. Ignored by video and audio.
+  public var fastStill: Bool
   /// Replay cached tail-block residuals on schedule-gated denoising steps:
   /// about 40% faster at standard step counts, trading exact reproduction for
   /// a different sample of the same quality. Replaces both reuse ladders.
@@ -264,6 +267,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
+    fastStill: Bool = false,
     blockCache: Bool = false,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
@@ -283,6 +287,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.denoisingSteps = denoisingSteps.map { Self.denoisingStepsRange.clamping($0) }
     self.activeDiTLayers = activeDiTLayers.map { Self.activeDiTLayersRange.clamping($0) }
     self.coreReuse = coreReuse.map { Self.coreReuseRange.clamping($0) }
+    self.fastStill = fastStill
     self.blockCache = blockCache
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
@@ -304,6 +309,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case denoisingSteps
     case activeDiTLayers
     case coreReuse
+    case fastStill
     case blockCache
     case previewDenoise
     case useBetaSchedule
@@ -330,6 +336,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
       .map { Self.activeDiTLayersRange.clamping($0) }
     coreReuse = try container.decodeIfPresent(Int.self, forKey: .coreReuse)
       .map { Self.coreReuseRange.clamping($0) }
+    fastStill = try container.decodeIfPresent(Bool.self, forKey: .fastStill) ?? false
     blockCache = try container.decodeIfPresent(Bool.self, forKey: .blockCache) ?? false
     previewDenoise = try container.decodeIfPresent(Bool.self, forKey: .previewDenoise) ?? false
     useBetaSchedule =
@@ -354,6 +361,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encodeIfPresent(denoisingSteps, forKey: .denoisingSteps)
     try container.encodeIfPresent(activeDiTLayers, forKey: .activeDiTLayers)
     try container.encodeIfPresent(coreReuse, forKey: .coreReuse)
+    try container.encode(fastStill, forKey: .fastStill)
     try container.encode(blockCache, forKey: .blockCache)
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)

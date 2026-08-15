@@ -67,19 +67,24 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   /// standard step counts; the result is a different sample of the same
   /// quality, so it stays a deliberate choice.
   public var blockCache: Bool
+  /// Render stills from a 5-frame clip rather than 22. Roughly 3x faster and
+  /// visibly softer, so the detailed path stays the default.
+  public var fastStill: Bool
 
   public init(
     canvas: GenerationCanvas,
     denoisingSteps: Int,
     activeDiTLayers: Int,
     coreReuse: Int,
-    blockCache: Bool = false
+    blockCache: Bool = false,
+    fastStill: Bool = false
   ) {
     self.canvas = canvas
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
     self.blockCache = blockCache
+    self.fastStill = fastStill
   }
 
   enum CodingKeys: String, CodingKey {
@@ -88,6 +93,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     case activeDiTLayers
     case coreReuse
     case blockCache
+    case fastStill
   }
 
   public init(from decoder: Decoder) throws {
@@ -98,6 +104,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     coreReuse = try container.decode(Int.self, forKey: .coreReuse)
     // Settings persisted before the knob existed decode to off.
     blockCache = try container.decodeIfPresent(Bool.self, forKey: .blockCache) ?? false
+    fastStill = try container.decodeIfPresent(Bool.self, forKey: .fastStill) ?? false
   }
 
   public static func preset(_ preset: GenerationPreset) -> GenerationKnobSnapshot {

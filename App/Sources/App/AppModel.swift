@@ -373,6 +373,7 @@ final class AppModel {
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
     blockCache: Bool = false,
+    fastStill: Bool = false,
     previewDenoise: Bool = false,
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
@@ -393,6 +394,7 @@ final class AppModel {
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
       blockCache: blockCache,
+      fastStill: fastStill,
       previewDenoise: previewDenoise
     ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
       + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
@@ -432,6 +434,7 @@ final class AppModel {
       denoisingSteps: denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
+      fastStill: fastStill,
       blockCache: blockCache,
       previewDenoise: previewDenoise,
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
@@ -1404,6 +1407,7 @@ final class AppModel {
     activeDiTLayers: Int?,
     coreReuse: Int?,
     blockCache: Bool,
+    fastStill: Bool,
     previewDenoise: Bool
   ) -> String {
     guard kind == .video || kind == .image || kind == .audio else {
@@ -1418,9 +1422,11 @@ final class AppModel {
     return String(
       format:
         "%@ · %@ · %@ · passes %d · blocks %d · core-reuse %d · reuse %d · "
-        + "cache %@ · preview %@ · %.2fs",
+        + "cache %@%@ · preview %@ · %.2fs",
       kind.rawValue, quality.rawValue, canvas, steps, layers, core, reuse,
-      blockCache ? "on" : "off", previewDenoise ? "on" : "off", duration
+      blockCache ? "on" : "off",
+      kind == .image ? (fastStill ? " · still 5f" : " · still 22f") : "",
+      previewDenoise ? "on" : "off", duration
     )
   }
 

@@ -496,7 +496,8 @@ struct GenerationStudioView: View {
             startGeneration(
               denoisingSteps: knobs.denoisingSteps,
               coreReuse: knobs.coreReuse,
-              blockCache: knobs.blockCache
+              blockCache: knobs.blockCache,
+              fastStill: knobs.fastStill
             )
           } label: {
             HStack(spacing: 10) {
@@ -677,6 +678,18 @@ struct GenerationStudioView: View {
         .accessibilityIdentifier("generation-dit-layers")
       }
 
+      if kind == .image {
+        labeled("STILL DETAIL") {
+          settingChips(
+            selection: knobs.fastStill,
+            options: [(false, "Full 22f"), (true, "Fast 5f")]
+          ) { fast in
+            model.updateStudioKnobs { $0.fastStill = fast }
+          }
+          .accessibilityIdentifier("generation-still-detail")
+        }
+      }
+
       labeled("CORE REUSE") {
         settingChips(
           selection: knobs.coreReuse,
@@ -825,7 +838,8 @@ struct GenerationStudioView: View {
   }
 
   private func startGeneration(
-    denoisingSteps: Int, coreReuse: Int, blockCache: Bool = false
+    denoisingSteps: Int, coreReuse: Int, blockCache: Bool = false,
+    fastStill: Bool = false
   ) {
     modelMenuOpen = false
     resultIDAtStart = model.latestStudioResult?.id
@@ -839,6 +853,7 @@ struct GenerationStudioView: View {
       activeDiTLayers: knobs.activeDiTLayers,
       coreReuse: coreReuse,
       blockCache: blockCache,
+      fastStill: fastStill,
       previewDenoise: model.previewDenoise,
       seed: usesNativeSettings ? model.studioSettings.seed : nil,
       canvasWidth: kind == .audio ? nil : size.width,
