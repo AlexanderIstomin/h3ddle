@@ -91,6 +91,7 @@ final class AppModel {
     ModelCatalog.minimaxH3Int8,
     ModelCatalog.minimaxH3TurboInt8,
     ModelCatalog.minimaxH3Ref2VAInt8,
+    ModelCatalog.minimaxH3Ref2VATurboInt8,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   var modelChoices: [ModelChoice] = []
@@ -123,6 +124,8 @@ final class AppModel {
   var selectedTimelineItem: TimelineItemID?
   var visualTrackMuted = false
   var audioTrackMuted = false
+  var canvasGesture: CanvasGestureSession?
+  private var snapshots = ProjectSnapshotStack()
   var studioResults: [GenerationResult] = []
   var studioAspect = ProgramAspectRatio.sixteenNine
   var studioSettings = GenerationStudioSettings.makeDefault() {
@@ -513,7 +516,46 @@ final class AppModel {
   }
 
   var programDuration: TimeInterval {
-    max(project.timeline.visualDuration, project.timeline.audioTrackEnd)
+    max(
+      project.timeline.visualDuration,
+      project.timeline.audioTrackEnd,
+      project.timeline.textTrackEnd
+    )
+  }
+
+  var canUndo: Bool { snapshots.canUndo }
+  var canRedo: Bool { snapshots.canRedo }
+
+  func registerUndoCheckpoint() {
+    snapshots.checkpoint(project)
+  }
+
+  func undo() {
+    guard let next = snapshots.popUndo(current: project) else { return }
+    applySnapshot(next)
+  }
+
+  func redo() {
+    guard let next = snapshots.popRedo(current: project) else { return }
+    applySnapshot(next)
+  }
+
+  private func applySnapshot(_ next: H3ddleProject) {
+    project = next
+    if let selected = selectedTimelineItem {
+      switch selected {
+      case .visual(let id):
+        if project.timeline.visualItems.contains(where: { $0.id == id }) == false {
+          selectedTimelineItem = nil
+        }
+      case .audio(let id):
+        if project.timeline.audioItems.contains(where: { $0.id == id }) == false {
+          selectedTimelineItem = nil
+        }
+      }
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
   }
 
   var visualLaneAudible: Bool {
@@ -575,8 +617,10 @@ final class AppModel {
       if result.kind == .image {
         asset.duration = 3
       }
+      registerUndoCheckpoint()
       try append(asset)
     } catch {
+      _ = snapshots.popUndo(current: project)
       errorMessage = error.localizedDescription
     }
   }
@@ -598,6 +642,8 @@ final class AppModel {
     importErrorMessage = nil
     let directory = Self.importedMediaDirectory
     var lastError: String?
+    registerUndoCheckpoint()
+    var importedAny = false
     for url in urls {
       do {
         let imported = try await MediaImport.makeAsset(
@@ -606,9 +652,13 @@ final class AppModel {
           copyingInto: directory
         )
         try appendImported(imported)
+        importedAny = true
       } catch {
         lastError = error.localizedDescription
       }
+    }
+    if !importedAny {
+      _ = snapshots.popUndo(current: project)
     }
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()
@@ -1004,27 +1054,47 @@ final class AppModel {
     guard let item = project.timeline.visualItems.first(where: { $0.id == id }) else {
       return
     }
+    registerUndoCheckpoint()
     project.timeline.setVisualEnabled(id, isEnabled: !item.isEnabled)
   }
 
   func toggleVisualNativeAudio(_ id: UUID) {
-    guard let index = project.timeline.visualItems.firstIndex(where: { $0.id == id }) else {
+    guard let item = project.timeline.visualItems.first(where: { $0.id == id }) else {
       return
     }
-    var items = project.timeline.visualItems
-    items[index].includesNativeAudio.toggle()
-    project.timeline = ProjectTimeline(
-      visualItems: items,
-      audioItems: project.timeline.audioItems
-    )
+    registerUndoCheckpoint()
+    project.timeline.setVisualIncludesNativeAudio(id, includes: !item.includesNativeAudio)
   }
 
   func setVisualCanvasFit(_ id: UUID, _ fit: CanvasFit) {
+    registerUndoCheckpoint()
     project.timeline.setVisualCanvasFit(id, fit)
   }
 
   func rotateVisual(_ id: UUID) {
+    registerUndoCheckpoint()
     project.timeline.rotateVisual(id)
+  }
+
+  func setVisualCanvasTransform(_ id: UUID, _ transform: CanvasObjectTransform) {
+    registerUndoCheckpoint()
+    project.timeline.setVisualCanvasTransform(id, transform)
+  }
+
+  func resetVisualTransform(_ id: UUID) {
+    registerUndoCheckpoint()
+    project.timeline.resetVisualTransform(id)
+  }
+
+  func commitCanvasGesture() {
+    guard let gesture = canvasGesture else { return }
+    canvasGesture = nil
+    switch gesture.target {
+    case .visual(let id):
+      setVisualCanvasTransform(id, gesture.current)
+    case .audio:
+      break
+    }
   }
 
   var effectLaneItems: [EffectLaneItem] {
@@ -1070,9 +1140,10 @@ final class AppModel {
   }
 
   func addVisualEffect(_ kind: VisualEffectKind) {
-    guard let host = effectsHostClip,
-      let effect = project.timeline.addVisualEffect(host.id, kind: kind)
-    else {
+    guard let host = effectsHostClip else { return }
+    registerUndoCheckpoint()
+    guard let effect = project.timeline.addVisualEffect(host.id, kind: kind) else {
+      _ = snapshots.popUndo(current: project)
       return
     }
     selectedTimelineItem = .visual(host.id)
@@ -1086,6 +1157,7 @@ final class AppModel {
 
   func removeSelectedEffect() {
     guard let host = effectsHostClip, let selectedEffectID else { return }
+    registerUndoCheckpoint()
     project.timeline.removeVisualEffect(host.id, effectID: selectedEffectID)
     self.selectedEffectID = nil
     if effectLaneItems.isEmpty {
@@ -1137,9 +1209,12 @@ final class AppModel {
     browsesTransitionCatalog = false
   }
 
-  func setVisualTransition(_ id: UUID, kind: VisualTransitionKind) {
+  func setVisualTransition(_ id: UUID, kind: VisualTransitionKind, registersUndo: Bool = true) {
     let current = project.timeline.visualItems.first(where: { $0.id == id })?.transition
     let duration = current?.duration ?? VisualTransitionMath.defaultDuration
+    if registersUndo {
+      registerUndoCheckpoint()
+    }
     project.timeline.setVisualTransition(id, VisualTransition(kind: kind, duration: duration))
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()
@@ -1159,6 +1234,7 @@ final class AppModel {
   }
 
   func removeVisualTransition(_ id: UUID) {
+    registerUndoCheckpoint()
     project.timeline.setVisualTransition(id, nil)
     browsesTransitionCatalog = true
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
@@ -1169,6 +1245,7 @@ final class AppModel {
     guard let item = project.timeline.audioItems.first(where: { $0.id == id }) else {
       return
     }
+    registerUndoCheckpoint()
     project.timeline.setAudioEnabled(id, isEnabled: !item.isEnabled)
   }
 
@@ -1225,6 +1302,7 @@ final class AppModel {
   }
 
   func removeVisual(_ id: UUID) {
+    registerUndoCheckpoint()
     project.timeline.removeVisual(id)
     if selectedTimelineItem == .visual(id) {
       selectedTimelineItem = nil
@@ -1233,6 +1311,7 @@ final class AppModel {
   }
 
   func removeAudio(_ id: UUID) {
+    registerUndoCheckpoint()
     project.timeline.removeAudio(id)
     if selectedTimelineItem == .audio(id) {
       selectedTimelineItem = nil
@@ -1241,14 +1320,22 @@ final class AppModel {
   }
 
   func duplicateVisual(_ id: UUID) {
-    guard let copy = project.timeline.duplicateVisual(id) else { return }
+    registerUndoCheckpoint()
+    guard let copy = project.timeline.duplicateVisual(id) else {
+      _ = snapshots.popUndo(current: project)
+      return
+    }
     selectedTimelineItem = .visual(copy.id)
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()
   }
 
   func duplicateAudio(_ id: UUID) {
-    guard let copy = project.timeline.duplicateAudio(id) else { return }
+    registerUndoCheckpoint()
+    guard let copy = project.timeline.duplicateAudio(id) else {
+      _ = snapshots.popUndo(current: project)
+      return
+    }
     selectedTimelineItem = .audio(copy.id)
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()
@@ -1265,6 +1352,7 @@ final class AppModel {
   }
 
   func moveVisual(_ id: UUID, toIndex: Int) {
+    registerUndoCheckpoint()
     project.timeline.moveVisual(id, toIndex: toIndex)
     selectedTimelineItem = .visual(id)
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
@@ -1272,6 +1360,7 @@ final class AppModel {
   }
 
   func moveAudio(_ id: UUID, toIndex: Int) {
+    registerUndoCheckpoint()
     project.timeline.moveAudio(id, toIndex: toIndex)
     selectedTimelineItem = .audio(id)
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
@@ -1279,6 +1368,7 @@ final class AppModel {
   }
 
   func setAudioStart(_ id: UUID, startTime: TimeInterval) {
+    registerUndoCheckpoint()
     project.timeline.setAudioStart(id, startTime: startTime)
     selectedTimelineItem = .audio(id)
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
@@ -1307,28 +1397,35 @@ final class AppModel {
 
   func split(_ item: TimelineItemID?) {
     guard let item else { return }
+    registerUndoCheckpoint()
     let time = playback.clock.currentTime
     let fps = project.settings.framesPerSecond
+    var didSplit = false
     switch item {
     case .visual(let id):
       guard let visual = project.timeline.visualItems.first(where: { $0.id == id }) else {
+        _ = snapshots.popUndo(current: project)
         return
       }
       let kind = project.asset(id: visual.assetID)?.kind ?? .video
-      guard
-        let split = project.timeline.splitVisual(
-          id,
-          at: time,
-          sourceKind: kind,
-          framesPerSecond: fps
-        )
-      else { return }
-      selectedTimelineItem = .visual(split.left)
-    case .audio(let id):
-      guard let split = project.timeline.splitAudio(id, at: time, framesPerSecond: fps) else {
-        return
+      if let split = project.timeline.splitVisual(
+        id,
+        at: time,
+        sourceKind: kind,
+        framesPerSecond: fps
+      ) {
+        selectedTimelineItem = .visual(split.left)
+        didSplit = true
       }
-      selectedTimelineItem = .audio(split.left)
+    case .audio(let id):
+      if let split = project.timeline.splitAudio(id, at: time, framesPerSecond: fps) {
+        selectedTimelineItem = .audio(split.left)
+        didSplit = true
+      }
+    }
+    if !didSplit {
+      _ = snapshots.popUndo(current: project)
+      return
     }
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()

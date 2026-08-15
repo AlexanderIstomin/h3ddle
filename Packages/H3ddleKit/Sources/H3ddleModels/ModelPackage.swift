@@ -294,6 +294,48 @@ public enum ModelCatalog {
     ] + sharedMinimaxH3Files
   )
 
+  /// Both transformers step-distilled: the FL2VA turbo we host plus a Ref2VA
+  /// turbo merged the same way, so reference generations get a fast path they
+  /// have never had — every published turbo adapter targets FL2VA only.
+  /// Measured 2.4x faster than base Ref2VA with reference identity intact.
+  public static let minimaxH3Ref2VATurboInt8 = ModelPackageManifest(
+    id: "h3ddle-minimax-h3-ref2va-turbo-int8-v1",
+    displayName: "MiniMax H3 · Turbo + References (Experimental)",
+    detail:
+      "Step-distilled prompt and reference transformers: 8 passes, ordered "
+      + "reference images, loose prompt control.",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
+    licenseName: "MiniMax H3 Community License Agreement",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    generationProfile: .turbo,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        byteCount: 20_970_379_854,
+        sha256: "9ad5c98b533894c122050d32804a14f49fca8edc16c52564a281cdc5825ac934",
+        sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
+        sourceRevision: "4aea334367e4007d7b3630810ec28eb97639ae65",
+        sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
+      ),
+      ModelPackageFile(
+        role: .referenceTransformer,
+        path: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        byteCount: 20_970_379_854,
+        sha256: "e64cef63bc2785bcd72e6103c52aa78c6cd2c4f9870a7ce79675083fd65cf2e7",
+        sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
+        sourceRevision: "c0c8e368009ee8cbd498f620cd4716d4268e6f02",
+        sourcePath: "minimax_h3_ref2va_pruned_turbo_int8_convrot.safetensors"
+      )
+    ] + sharedMinimaxH3Files
+  )
+
   /// The lightx2v turbo distillation merged into the pruned INT8 transformer
   /// by `Scripts/convert-turbo-package.py`, hosted on Hugging Face. A local
   /// conversion output installs instantly when present; every shared file
