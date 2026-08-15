@@ -1,7 +1,7 @@
 import Foundation
 
 public struct H3ddleProject: Identifiable, Hashable, Codable, Sendable {
-  public static let currentSchemaVersion = 1
+  public static let currentSchemaVersion = 2
 
   public let id: UUID
   public var schemaVersion: Int

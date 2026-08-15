@@ -45,10 +45,54 @@ struct ProgramPreviewTests {
     let firstFrame = ProgramPreview.frame(at: 2, project: project)
     #expect(firstFrame.visualTransform.fit == .cover)
     #expect(firstFrame.visualTransform.rotationTurns == 2)
+    #expect(abs(firstFrame.visualTransform.rotationRadians - .pi) < 0.000_1)
 
     let secondFrame = ProgramPreview.frame(at: 6, project: project)
     #expect(secondFrame.visualTransform.fit == .cover)
     #expect(secondFrame.visualTransform.rotationTurns == 0)
+  }
+
+  @Test("Transform overrides replace the committed visual transform")
+  func transformOverridesReplaceCommitted() throws {
+    var project = H3ddleProject()
+    let video = videoAsset(name: "One", duration: 4)
+    project.addAsset(video)
+    let item = try project.timeline.appendVisual(video)
+    project.timeline.setVisualCanvasFit(item.id, .cover)
+
+    let override = CanvasObjectTransform(
+      fit: .fit,
+      translationX: 0.1,
+      translationY: -0.2,
+      scale: 1.5,
+      rotationRadians: 0.4
+    )
+    let frame = ProgramPreview.frame(
+      at: 1,
+      project: project,
+      transformOverrides: [item.id: override]
+    )
+    #expect(frame.visualTransform == override)
+    #expect(abs(frame.previewDuration - 4) < 0.000_1)
+    #expect(abs(frame.duration - 4) < 0.000_1)
+  }
+
+  @Test("Preview query can sit past the last visual when audio outlasts it")
+  func previewQueryPastVisualIsEmpty() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 2)
+    let audio = audioAsset(name: "Score", duration: 5)
+    project.addAsset(visual)
+    project.addAsset(audio)
+    try project.timeline.appendVisual(visual)
+    try project.timeline.appendAudio(audio)
+
+    let frame = ProgramPreview.frame(at: 3, project: project)
+    #expect(frame.visual == .empty)
+    #expect(abs(frame.duration - 2) < 0.000_1)
+    #expect(abs(frame.previewDuration - 5) < 0.000_1)
+    #expect(frame.audio.map(\.asset.id) == [audio.id])
+    #expect(ProgramPreview.visualSegmentStart(at: 3, project: project) == nil)
   }
 
   @Test("An incoming dissolve reports both sources and progress")

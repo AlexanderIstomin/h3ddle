@@ -670,10 +670,233 @@ struct TimelineTests {
     var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
     object.removeValue(forKey: "canvasFit")
     object.removeValue(forKey: "rotationTurns")
+    object.removeValue(forKey: "translationX")
+    object.removeValue(forKey: "translationY")
+    object.removeValue(forKey: "uniformScale")
+    object.removeValue(forKey: "rotationRadians")
     encoded = try JSONSerialization.data(withJSONObject: object)
     let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
     #expect(decoded.canvasFit == .fit)
     #expect(decoded.rotationTurns == 0)
+    #expect(decoded.translationX == 0)
+    #expect(decoded.translationY == 0)
+    #expect(abs(decoded.uniformScale - 1) < 0.000_1)
+    #expect(abs(decoded.rotationRadians) < 0.000_1)
+  }
+
+  @Test("Schema v1 visual items derive radians from rotationTurns")
+  func derivesRadiansFromLegacyTurns() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 4,
+      includesNativeAudio: true,
+      canvasFit: .fit,
+      rotationTurns: 1
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "translationX")
+    object.removeValue(forKey: "translationY")
+    object.removeValue(forKey: "uniformScale")
+    object.removeValue(forKey: "rotationRadians")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.rotationTurns == 1)
+    #expect(abs(decoded.rotationRadians - .pi / 2) < 0.000_1)
+  }
+
+  @Test("rotationRadians wins when it disagrees with rotationTurns")
+  func radiansWinOverTurns() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 4,
+      includesNativeAudio: true,
+      rotationTurns: 1,
+      rotationRadians: .pi / 4
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object["rotationTurns"] = 2
+    object["rotationRadians"] = Double.pi / 4
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(abs(decoded.rotationRadians - .pi / 4) < 0.000_1)
+    #expect(decoded.rotationTurns == 1)
+  }
+
+  @Test("Reset transform zeros translation and scale and keeps fit and angle")
+  func resetTransformKeepsFitAndAngle() throws {
+    var timeline = ProjectTimeline()
+    let item = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    timeline.setVisualCanvasTransform(
+      item.id,
+      CanvasObjectTransform(
+        fit: .cover,
+        translationX: 0.2,
+        translationY: -0.1,
+        scale: 1.4,
+        rotationRadians: 0.4
+      )
+    )
+    timeline.resetVisualTransform(item.id)
+    #expect(timeline.visualItems[0].canvasFit == .cover)
+    #expect(timeline.visualItems[0].translationX == 0)
+    #expect(timeline.visualItems[0].translationY == 0)
+    #expect(abs(timeline.visualItems[0].uniformScale - 1) < 0.000_1)
+    #expect(abs(timeline.visualItems[0].rotationRadians - 0.4) < 0.000_1)
+  }
+
+  @Test("Fit zeros translation and scale and keeps rotation")
+  func fitZerosExtras() throws {
+    var timeline = ProjectTimeline()
+    let item = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    timeline.setVisualCanvasTransform(
+      item.id,
+      CanvasObjectTransform(
+        fit: .fit,
+        translationX: 0.2,
+        translationY: -0.1,
+        scale: 1.4,
+        rotationRadians: 0.4
+      )
+    )
+    timeline.setVisualCanvasFit(item.id, .cover)
+    #expect(timeline.visualItems[0].canvasFit == .cover)
+    #expect(timeline.visualItems[0].translationX == 0)
+    #expect(timeline.visualItems[0].translationY == 0)
+    #expect(abs(timeline.visualItems[0].uniformScale - 1) < 0.000_1)
+    #expect(abs(timeline.visualItems[0].rotationRadians - 0.4) < 0.000_1)
+  }
+
+  @Test("setVisualCanvasTransform persists through encode/decode")
+  func canvasTransformRoundTrips() throws {
+    var timeline = ProjectTimeline()
+    let item = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    let transform = CanvasObjectTransform(
+      fit: .cover,
+      translationX: 0.05,
+      translationY: -0.1,
+      scale: 1.25,
+      rotationRadians: 0.4
+    )
+    timeline.setVisualCanvasTransform(item.id, transform)
+    let encoded = try JSONEncoder().encode(timeline.visualItems[0])
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.canvasFit == .cover)
+    #expect(abs(decoded.translationX - 0.05) < 0.000_1)
+    #expect(abs(decoded.translationY + 0.1) < 0.000_1)
+    #expect(abs(decoded.uniformScale - 1.25) < 0.000_1)
+    #expect(abs(decoded.rotationRadians - 0.4) < 0.000_1)
+  }
+
+  @Test("Duplicate and split copy free-transform fields")
+  func copiesFreeTransform() throws {
+    var timeline = ProjectTimeline()
+    let item = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    timeline.setVisualCanvasTransform(
+      item.id,
+      CanvasObjectTransform(
+        fit: .cover,
+        translationX: 0.08,
+        translationY: 0.02,
+        scale: 1.3,
+        rotationRadians: 0.5
+      )
+    )
+    let copy = timeline.duplicateVisual(item.id)
+    #expect(copy?.translationX == 0.08)
+    #expect(copy?.translationY == 0.02)
+    #expect(abs((copy?.uniformScale ?? 0) - 1.3) < 0.000_1)
+    #expect(abs((copy?.rotationRadians ?? 0) - 0.5) < 0.000_1)
+
+    _ = timeline.splitVisual(item.id, at: 2, sourceKind: .video, framesPerSecond: 24)
+    #expect(abs(timeline.visualItems[0].translationX - 0.08) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].translationX - 0.08) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].rotationRadians - 0.5) < 0.000_1)
+  }
+
+  @Test("A missing textItems key decodes as empty")
+  func decodesTimelineWithoutTextItems() throws {
+    var timeline = ProjectTimeline()
+    _ = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    var encoded = try JSONEncoder().encode(timeline)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "textItems")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(ProjectTimeline.self, from: encoded)
+    #expect(decoded.textItems.isEmpty)
+    #expect(decoded.visualItems.count == 1)
+  }
+
+  @Test("Native-audio toggle keeps textItems")
+  func nativeAudioKeepsTextItems() throws {
+    let title = TextItem(startTime: 1, duration: 5, text: "Hello")
+    var timeline = ProjectTimeline(
+      visualItems: [
+        VisualItem(assetID: videoAsset(name: "Shot", duration: 4).id, duration: 4)
+      ],
+      textItems: [title]
+    )
+    let visualID = timeline.visualItems[0].id
+    timeline.setVisualIncludesNativeAudio(visualID, includes: false)
+    #expect(!timeline.visualItems[0].includesNativeAudio)
+    #expect(timeline.textItems.map(\.id) == [title.id])
+    #expect(abs(timeline.textTrackEnd - 6) < 0.000_1)
+    #expect(abs(timeline.trailingTextDuration - 2) < 0.000_1)
+    #expect(abs(timeline.exportDuration(includeTextLane: true) - 6) < 0.000_1)
+    #expect(abs(timeline.exportDuration(includeTextLane: false) - 4) < 0.000_1)
+  }
+
+  @Test("Text insert, trim, split, duplicate, and remove keep later starts")
+  func textOverlayOps() throws {
+    var timeline = ProjectTimeline()
+    _ = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    let first = timeline.insertText(TextItem(startTime: 1, duration: 5, text: "Hello"))
+    #expect(abs(timeline.textTrackEnd - 6) < 0.000_1)
+    #expect(abs(timeline.exportDuration(includeTextLane: true) - 6) < 0.000_1)
+
+    timeline.setTextTrim(first.id, TextTrim(startTime: 0.5, duration: 2))
+    #expect(abs(timeline.textItems[0].startTime - 0.5) < 0.000_1)
+    #expect(abs(timeline.textItems[0].duration - 2) < 0.000_1)
+
+    let copy = timeline.duplicateText(first.id)
+    #expect(copy != nil)
+    #expect(abs((copy?.startTime ?? 0) - 2.5) < 0.000_1)
+    #expect(timeline.textItems[1].id == copy?.id)
+    #expect(abs(timeline.textItems[0].startTime - 0.5) < 0.000_1)
+
+    let split = timeline.splitText(first.id, at: 1.5, framesPerSecond: 24)
+    #expect(split != nil)
+    #expect(split?.left == first.id)
+    #expect(abs(timeline.textItems[0].duration - 1) < 0.000_1)
+    #expect(abs(timeline.textItems[1].startTime - 1.5) < 0.000_1)
+    #expect(abs(timeline.textItems[2].startTime - 2.5) < 0.000_1)
+
+    timeline.removeText(first.id)
+    #expect(timeline.textItems[0].id == split?.right)
+    #expect(abs(timeline.textItems[1].startTime - 2.5) < 0.000_1)
+
+    let trim = TextTrimMath.apply(
+      edge: .leading,
+      delta: 0.5,
+      startTime: 1,
+      duration: 3,
+      minimumDuration: 1 / 24
+    )
+    #expect(abs(trim.startTime - 1.5) < 0.000_1)
+    #expect(abs(trim.duration - 2.5) < 0.000_1)
+  }
+
+  @Test("TextStyle missing fields use documented defaults")
+  func textStyleDecodesDefaults() throws {
+    let encoded = try JSONSerialization.data(withJSONObject: [String: Any]())
+    let style = try JSONDecoder().decode(TextStyle.self, from: encoded)
+    #expect(style.fontFamily == ".AppleSystemUIFont")
+    #expect(style.fontWeight == 400)
+    #expect(abs(style.fontSize - 48) < 0.000_1)
+    #expect(style.alignment == .center)
+    #expect(style.wrap == .none)
+    #expect(style.fill.a == 1)
   }
 
   private func videoAsset(name: String, duration: TimeInterval) -> AssetReference {

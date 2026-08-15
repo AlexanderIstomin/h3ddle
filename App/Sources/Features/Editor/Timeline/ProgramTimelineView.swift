@@ -592,6 +592,7 @@ struct ProgramTimelineView: View {
 
   private func dragTransition(_ item: VisualItem, translation: CGFloat) {
     if transitionDrag?.itemID != item.id {
+      model.registerUndoCheckpoint()
       transitionDrag = TransitionDragSession(
         itemID: item.id,
         origin: item.transition?.duration ?? VisualTransitionMath.defaultDuration
@@ -599,7 +600,7 @@ struct ProgramTimelineView: View {
     }
     guard let transitionDrag else { return }
     if item.transition == nil {
-      model.setVisualTransition(item.id, kind: .dissolve)
+      model.setVisualTransition(item.id, kind: .dissolve, registersUndo: false)
     }
     model.setVisualTransitionDuration(
       item.id,
@@ -736,6 +737,7 @@ struct ProgramTimelineView: View {
   ) {
     model.selectedTimelineItem = .visual(placement.item.id)
     if visualTrim?.itemID != placement.item.id || visualTrim?.edge != edge {
+      model.registerUndoCheckpoint()
       let asset = model.project.asset(id: placement.item.assetID)
       visualTrim = VisualTrimSession(
         itemID: placement.item.id,
@@ -770,6 +772,7 @@ struct ProgramTimelineView: View {
   ) {
     model.selectedTimelineItem = .audio(item.id)
     if audioTrim?.itemID != item.id || audioTrim?.edge != edge {
+      model.registerUndoCheckpoint()
       let asset = model.project.asset(id: item.assetID)
       let bounds = model.project.timeline.audioNeighborBounds(of: item.id)
       audioTrim = AudioTrimSession(

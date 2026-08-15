@@ -22,11 +22,18 @@ final class ProgramFramePresenter {
     canvas: CGSize,
     scale: CGFloat,
     background: ProjectBackground,
-    videoFrame: CGImage?
+    videoFrame: CGImage?,
+    layoutWidth: Int? = nil,
+    layoutHeight: Int? = nil
   ) {
     let raster = Self.raster(size: canvas, scale: scale)
     guard raster.width > 1, raster.height > 1 else { return }
-    prepareCompositor(raster: raster, background: background)
+    prepareCompositor(
+      raster: raster,
+      background: background,
+      layoutWidth: layoutWidth,
+      layoutHeight: layoutHeight
+    )
     queued = Request(frame: frame, videoFrame: videoFrame)
     startIfNeeded()
   }
@@ -38,11 +45,16 @@ final class ProgramFramePresenter {
 
   private func prepareCompositor(
     raster: (width: Int, height: Int),
-    background: ProjectBackground
+    background: ProjectBackground,
+    layoutWidth: Int?,
+    layoutHeight: Int?
   ) {
     let fillsBackground = !background.isClear
     let color = background.compositorColor
+    let layoutW = layoutWidth ?? raster.width
+    let layoutH = layoutHeight ?? raster.height
     if compositor.width != raster.width || compositor.height != raster.height
+      || compositor.layoutWidth != layoutW || compositor.layoutHeight != layoutH
       || compositor.backgroundAlpha != (fillsBackground ? 1 : 0)
       || compositor.background != color
     {
@@ -50,7 +62,9 @@ final class ProgramFramePresenter {
         width: raster.width,
         height: raster.height,
         background: background,
-        fillsBackground: fillsBackground
+        fillsBackground: fillsBackground,
+        layoutWidth: layoutW,
+        layoutHeight: layoutH
       )
     }
   }

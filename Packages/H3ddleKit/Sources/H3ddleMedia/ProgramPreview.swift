@@ -48,30 +48,48 @@ public struct ProgramVisualMix: Equatable, Sendable {
   }
 }
 
+public struct ProgramTextPresentation: Equatable, Sendable {
+  public var item: TextItem
+  public var transform: CanvasObjectTransform
+
+  public init(item: TextItem, transform: CanvasObjectTransform) {
+    self.item = item
+    self.transform = transform
+  }
+}
+
 public struct ProgramPreviewFrame: Equatable, Sendable {
   public var time: TimeInterval
+  /// Export / plan duration (`max(visual, text)`).
   public var duration: TimeInterval
+  /// Playhead domain (`max(visual, audio, text)`).
+  public var previewDuration: TimeInterval
   public var visual: ProgramVisualPresentation
   public var visualTransform: VisualCanvasTransform
   public var visualEffects: [VisualEffectInstance]
   public var transition: ProgramVisualMix?
+  public var overlays: [ProgramTextPresentation]
   public var audio: [ProgramAudioPresentation]
 
   public init(
     time: TimeInterval,
     duration: TimeInterval,
+    previewDuration: TimeInterval? = nil,
     visual: ProgramVisualPresentation,
     visualTransform: VisualCanvasTransform = .identity,
     visualEffects: [VisualEffectInstance] = [],
     transition: ProgramVisualMix? = nil,
+    overlays: [ProgramTextPresentation] = [],
     audio: [ProgramAudioPresentation]
   ) {
     self.time = time
     self.duration = duration
+    self.previewDuration = previewDuration ?? duration
     self.visual = visual
     self.visualTransform = visualTransform
     self.visualEffects = visualEffects
     self.transition = transition
+    self.overlays = overlays
     self.audio = audio
   }
 }
@@ -81,24 +99,37 @@ public enum ProgramPreview {
     at time: TimeInterval,
     project: H3ddleProject,
     visualMuted: Bool = false,
-    audioMuted: Bool = false
+    audioMuted: Bool = false,
+    textMuted: Bool = false,
+    transformOverrides: [UUID: CanvasObjectTransform] = [:]
   ) -> ProgramPreviewFrame {
     let plan = ProgramCompositionPlan(project: project)
-    let query = queryTime(time, duration: plan.duration)
+    let previewDuration = max(
+      project.timeline.visualDuration,
+      project.timeline.audioTrackEnd,
+      project.timeline.textTrackEnd
+    )
+    let query = queryTime(time, duration: previewDuration)
     var visual: ProgramVisualPresentation = .empty
     var visualTransform = VisualCanvasTransform.identity
     var visualEffects: [VisualEffectInstance] = []
     var transition: ProgramVisualMix?
 
     if let segment = segment(at: query, in: plan) {
-      visualTransform = segment.item.canvasTransform
+      visualTransform = transformOverrides[segment.item.id] ?? segment.item.canvasTransform
       visualEffects = segment.item.effects
       if !visualMuted, segment.item.isEnabled, let asset = project.asset(id: segment.item.assetID) {
         let localTime = max(0, query - segment.startTime) + segment.item.sourceOffset
         visual = presentation(asset: asset, item: segment.item, localTime: localTime)
       }
       if !visualMuted {
-        transition = mix(at: query, incoming: segment, project: project, plan: plan)
+        transition = mix(
+          at: query,
+          incoming: segment,
+          project: project,
+          plan: plan,
+          transformOverrides: transformOverrides
+        )
       }
     }
 
@@ -118,13 +149,30 @@ public enum ProgramPreview {
       }
     }
 
+    let overlays: [ProgramTextPresentation]
+    if textMuted {
+      overlays = []
+    } else {
+      overlays = plan.textItems.compactMap { item in
+        guard item.isEnabled, query >= item.startTime, query < item.endTime else {
+          return nil
+        }
+        return ProgramTextPresentation(
+          item: item,
+          transform: transformOverrides[item.id] ?? item.canvasTransform
+        )
+      }
+    }
+
     return ProgramPreviewFrame(
-      time: ProgramClock.clamp(time, duration: plan.duration),
+      time: query,
       duration: plan.duration,
+      previewDuration: previewDuration,
       visual: visual,
       visualTransform: visualTransform,
       visualEffects: visualEffects,
       transition: transition,
+      overlays: overlays,
       audio: audio
     )
   }
@@ -134,7 +182,12 @@ public enum ProgramPreview {
     project: H3ddleProject
   ) -> TimeInterval? {
     let plan = ProgramCompositionPlan(project: project)
-    return segment(at: queryTime(time, duration: plan.duration), in: plan)?.startTime
+    let previewDuration = max(
+      project.timeline.visualDuration,
+      project.timeline.audioTrackEnd,
+      project.timeline.textTrackEnd
+    )
+    return segment(at: queryTime(time, duration: previewDuration), in: plan)?.startTime
   }
 
   private static func queryTime(_ time: TimeInterval, duration: TimeInterval) -> TimeInterval {
@@ -157,7 +210,8 @@ public enum ProgramPreview {
     at time: TimeInterval,
     incoming: PlannedVisualSegment,
     project: H3ddleProject,
-    plan: ProgramCompositionPlan
+    plan: ProgramCompositionPlan,
+    transformOverrides: [UUID: CanvasObjectTransform]
   ) -> ProgramVisualMix? {
     guard incoming.item.isEnabled, incoming.item.gapBefore == 0,
       let authored = incoming.item.transition
@@ -195,10 +249,10 @@ public enum ProgramPreview {
     let incomingLocal = incoming.item.sourceOffset + elapsed
     return ProgramVisualMix(
       outgoing: presentation(asset: outgoingAsset, item: outgoing.item, localTime: outgoingLocal),
-      outgoingTransform: outgoing.item.canvasTransform,
+      outgoingTransform: transformOverrides[outgoing.item.id] ?? outgoing.item.canvasTransform,
       outgoingEffects: outgoing.item.effects,
       incoming: presentation(asset: incomingAsset, item: incoming.item, localTime: incomingLocal),
-      incomingTransform: incoming.item.canvasTransform,
+      incomingTransform: transformOverrides[incoming.item.id] ?? incoming.item.canvasTransform,
       incomingEffects: incoming.item.effects,
       progress: progress,
       kind: authored.kind

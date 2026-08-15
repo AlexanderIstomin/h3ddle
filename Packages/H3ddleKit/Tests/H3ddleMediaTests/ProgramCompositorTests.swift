@@ -251,6 +251,68 @@ struct ProgramCompositorTests {
     #expect(alpha(buffer, x: 4, yFromBottom: 4) < 8)
   }
 
+  @Test("Translation moves the fitted still")
+  func translationMovesStill() throws {
+    let fixture = try solidImage(width: 32, height: 16, red: 220, green: 40, blue: 20)
+    defer { fixture.remove() }
+    let compositor = ProgramCompositor(width: 32, height: 32, background: (0, 0, 0))
+    guard
+      let buffer = compositor.pixelBuffer(
+        placing: fixture.image,
+        transform: CanvasObjectTransform(fit: .fit, translationY: 0.25)
+      )
+    else {
+      Issue.record("Expected a translated buffer")
+      return
+    }
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 2), r: 220, g: 40, b: 20))
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 24), r: 0, g: 0, b: 0))
+  }
+
+  @Test("Uniform scale 2 fills a letterboxed still")
+  func scaleFillsLetterbox() throws {
+    let fixture = try solidImage(width: 32, height: 16, red: 20, green: 180, blue: 80)
+    defer { fixture.remove() }
+    let compositor = ProgramCompositor(width: 32, height: 32, background: (0, 0, 0))
+    guard
+      let buffer = compositor.pixelBuffer(
+        placing: fixture.image,
+        transform: CanvasObjectTransform(fit: .fit, scale: 2)
+      )
+    else {
+      Issue.record("Expected a scaled buffer")
+      return
+    }
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 2), r: 20, g: 180, b: 80))
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 30), r: 20, g: 180, b: 80))
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 16), r: 20, g: 180, b: 80))
+  }
+
+  @Test("A 45 degree fit keeps the center lit")
+  func fortyFiveKeepsCenter() throws {
+    let fixture = try solidImage(width: 32, height: 16, red: 40, green: 80, blue: 220)
+    defer { fixture.remove() }
+    let compositor = ProgramCompositor(width: 32, height: 32, background: (0, 0, 0))
+    guard
+      let buffer = compositor.pixelBuffer(
+        placing: fixture.image,
+        transform: CanvasObjectTransform(fit: .fit, rotationRadians: .pi / 4)
+      )
+    else {
+      Issue.record("Expected a rotated buffer")
+      return
+    }
+    #expect(isNear(rgb(buffer, x: 16, yFromBottom: 16), r: 40, g: 80, b: 220))
+  }
+
+  @Test("Layout size defaults to the buffer so composeScale is 1")
+  func layoutDefaultsToBuffer() {
+    let compositor = ProgramCompositor(width: 64, height: 36, background: (0, 0, 0))
+    #expect(compositor.layoutWidth == 64)
+    #expect(compositor.layoutHeight == 36)
+    #expect(abs(compositor.composeScale - 1) < 0.000_1)
+  }
+
   @Test("An injected video frame is placed instead of the file")
   func injectedVideoFrameIsUsed() async throws {
     let fixture = try solidImage(width: 16, height: 16, red: 10, green: 200, blue: 40)

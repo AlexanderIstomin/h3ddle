@@ -11,10 +11,19 @@ import VideoToolbox
 public final class ProgramCompositor: @unchecked Sendable {
   public let width: Int
   public let height: Int
+  /// Authoring canvas from `ProjectSettings`. Defaults to the buffer so
+  /// existing tests keep `composeScale == 1`.
+  public let layoutWidth: Int
+  public let layoutHeight: Int
   public let background: (CGFloat, CGFloat, CGFloat)
   public let backgroundAlpha: CGFloat
 
+  public var composeScale: Double {
+    Double(width) / Double(max(layoutWidth, 1))
+  }
+
   private var images: [URL: CGImage] = [:]
+  private var textImages: [TextRasterKey: CGImage] = [:]
   private var generators: [URL: AVAssetImageGenerator] = [:]
   private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
 
@@ -22,27 +31,46 @@ public final class ProgramCompositor: @unchecked Sendable {
     width: Int,
     height: Int,
     background: (CGFloat, CGFloat, CGFloat) = (0, 0, 0),
-    backgroundAlpha: CGFloat = 1
+    backgroundAlpha: CGFloat = 1,
+    layoutWidth: Int? = nil,
+    layoutHeight: Int? = nil
   ) {
     self.width = max(1, width)
     self.height = max(1, height)
+    self.layoutWidth = max(1, layoutWidth ?? width)
+    self.layoutHeight = max(1, layoutHeight ?? height)
     self.background = background
     self.backgroundAlpha = min(max(backgroundAlpha, 0), 1)
   }
 
   public convenience init(settings: ProjectSettings) {
-    self.init(width: settings.width, height: settings.height, background: settings.background)
+    self.init(
+      width: settings.width,
+      height: settings.height,
+      background: settings.background,
+      layoutWidth: settings.width,
+      layoutHeight: settings.height
+    )
   }
 
   public convenience init(
     width: Int,
     height: Int,
     background: ProjectBackground,
-    fillsBackground: Bool = true
+    fillsBackground: Bool = true,
+    layoutWidth: Int? = nil,
+    layoutHeight: Int? = nil
   ) {
     let color = background.compositorColor
     let alpha: CGFloat = (!fillsBackground && background.isClear) ? 0 : 1
-    self.init(width: width, height: height, background: color, backgroundAlpha: alpha)
+    self.init(
+      width: width,
+      height: height,
+      background: color,
+      backgroundAlpha: alpha,
+      layoutWidth: layoutWidth,
+      layoutHeight: layoutHeight
+    )
   }
 
   public func pixelBuffer(
@@ -69,14 +97,20 @@ public final class ProgramCompositor: @unchecked Sendable {
         effects: mix.incomingEffects,
         time: frame.time
       )
-      return pixelBuffer(
-        placing: outgoingPlaced,
-        transform: .identity,
-        incoming: incomingPlaced,
-        incomingTransform: .identity,
-        progress: mix.progress,
-        kind: mix.kind
-      )
+      guard
+        let buffer = pixelBuffer(
+          placing: outgoingPlaced,
+          transform: .identity,
+          incoming: incomingPlaced,
+          incomingTransform: .identity,
+          progress: mix.progress,
+          kind: mix.kind
+        )
+      else {
+        return nil
+      }
+      draw(frame.overlays, onto: buffer)
+      return buffer
     }
     let image: CGImage?
     if case .video = frame.visual, let videoFrame {
@@ -88,6 +122,7 @@ public final class ProgramCompositor: @unchecked Sendable {
       return nil
     }
     apply(frame.visualEffects, to: buffer, at: frame.time)
+    draw(frame.overlays, onto: buffer)
     return buffer
   }
 
@@ -271,28 +306,96 @@ public final class ProgramCompositor: @unchecked Sendable {
     in context: CGContext,
     transform: VisualCanvasTransform
   ) {
-    let dest = CanvasLayout.destination(
+    let placement = CanvasLayout.placed(
       sourceWidth: Double(image.width),
       sourceHeight: Double(image.height),
       canvasWidth: Double(width),
       canvasHeight: Double(height),
       transform: transform
     )
-    let draw = CanvasLayout.unrotatedSize(
-      destination: dest,
-      rotationTurns: transform.rotationTurns
-    )
     context.saveGState()
-    context.translateBy(x: dest.midX, y: dest.midY)
+    context.translateBy(x: placement.centerX, y: placement.centerY)
     // Bitmap contexts are y-up; match SwiftUI's clockwise rotationEffect.
-    context.rotate(by: -CGFloat(transform.rotationRadians))
+    context.rotate(by: -CGFloat(placement.rotationRadians))
     context.draw(
       image,
       in: CGRect(
-        x: -draw.width / 2,
-        y: -draw.height / 2,
-        width: draw.width,
-        height: draw.height
+        x: -placement.drawWidth / 2,
+        y: -placement.drawHeight / 2,
+        width: placement.drawWidth,
+        height: placement.drawHeight
+      )
+    )
+    context.restoreGState()
+  }
+
+  private func draw(_ overlays: [ProgramTextPresentation], onto buffer: CVPixelBuffer) {
+    guard !overlays.isEmpty else { return }
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let data = CVPixelBufferGetBaseAddress(buffer),
+      let context = CGContext(
+        data: data,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+          | CGBitmapInfo.byteOrder32Little.rawValue
+      )
+    else {
+      return
+    }
+    for overlay in overlays {
+      draw(overlay, in: context)
+    }
+  }
+
+  private func draw(_ overlay: ProgramTextPresentation, in context: CGContext) {
+    let pixelScale = composeScale * overlay.transform.scale
+    let bucket = Int((pixelScale * 20).rounded())
+    let key = TextRasterKey(
+      itemID: overlay.item.id,
+      text: overlay.item.text,
+      style: overlay.item.style,
+      layoutWidth: layoutWidth,
+      layoutHeight: layoutHeight,
+      scaleBucket: bucket
+    )
+    let image: CGImage
+    let layout: TextLayout
+    if let cached = textImages[key] {
+      image = cached
+      layout = TextRasterizer.layout(
+        overlay.item,
+        layoutSize: (layoutWidth, layoutHeight)
+      )
+    } else if let raster = TextRasterizer.raster(
+      overlay.item,
+      layoutSize: (layoutWidth, layoutHeight),
+      pixelScale: pixelScale
+    ) {
+      textImages[key] = raster.image
+      image = raster.image
+      layout = raster.layout
+    } else {
+      return
+    }
+    let drawWidth = layout.expandedSize.width * pixelScale
+    let drawHeight = layout.expandedSize.height * pixelScale
+    let centerX = Double(width) / 2 + overlay.transform.translationX * Double(width)
+    let centerY = Double(height) / 2 + overlay.transform.translationY * Double(height)
+    context.saveGState()
+    context.translateBy(x: centerX, y: centerY)
+    context.rotate(by: -CGFloat(overlay.transform.rotationRadians))
+    context.draw(
+      image,
+      in: CGRect(
+        x: -drawWidth / 2,
+        y: -drawHeight / 2,
+        width: drawWidth,
+        height: drawHeight
       )
     )
     context.restoreGState()
@@ -511,6 +614,15 @@ public final class ProgramCompositor: @unchecked Sendable {
     let t = min(max((x - edge0) / max(edge1 - edge0, 0.000_1), 0), 1)
     return t * t * (3 - 2 * t)
   }
+}
+
+private struct TextRasterKey: Hashable {
+  var itemID: UUID
+  var text: String
+  var style: TextStyle
+  var layoutWidth: Int
+  var layoutHeight: Int
+  var scaleBucket: Int
 }
 
 extension ProjectBackground {

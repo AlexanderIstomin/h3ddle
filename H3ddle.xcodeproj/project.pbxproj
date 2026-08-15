@@ -9,8 +9,11 @@
 /* Begin PBXBuildFile section */
 		0D81F2CA59DE2D3AA339DDF8 /* H3ddleEngineClient in Frameworks */ = {isa = PBXBuildFile; productRef = 5B5B1FCE86203351735AC704 /* H3ddleEngineClient */; };
 		11C62E1DE57A2B37750329AA /* H3ddleDesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = 53643B1E43A41BCDA80826AC /* H3ddleDesignSystem */; };
+		1A11C0FCE6740ACFF083AB72 /* CanvasGizmoGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */; };
 		1FD10BD8234B5B28446C7C97 /* CanvasViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */; };
+		2340DB253E47E718A1EAE4C8 /* CanvasInteractionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */; };
 		2F326CFAF21C4DD0992E083F /* TimeRulerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */; };
+		32E499B7269BB7EBFDE89192 /* CanvasGizmoOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */; };
 		388EF6D763445F890EE23922 /* ExportModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDE22F1F6245036A1DE4230C /* ExportModalView.swift */; };
 		3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */; };
 		4143C0887613C548157CE456 /* GeneratedAssetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E7E87AF0B2CCE306CCA94F /* GeneratedAssetPreview.swift */; };
@@ -29,6 +32,7 @@
 		8703DF36598D5F6DDC69697A /* H3ddleGeneration in Frameworks */ = {isa = PBXBuildFile; productRef = 536EF32BBB28C07D9EABEE98 /* H3ddleGeneration */; };
 		8F8AD1AF67979F6F90EA4B85 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A6AF6F040C7256464607C94 /* AppModel.swift */; };
 		9098009C6BDCA4F8A02BFE44 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AAFB2977E8BADEB471E371 /* ModelSettingsView.swift */; };
+		9A494F4E5CF63338D4A4CE53 /* CanvasMediaSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DFFC4BC7C71D5D3E9C35E2 /* CanvasMediaSize.swift */; };
 		9E78D049843D79C6B77799A5 /* DockAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135192F096FB7C2428444B61 /* DockAttention.swift */; };
 		9F2F6176508A41C319B8787B /* EffectsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95DFE38643B882953196C533 /* EffectsPanelView.swift */; };
 		A72D97AED6C7E11D25D87D04 /* TimelineTransitionHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7041DEC2A89781B53AB90DC7 /* TimelineTransitionHandle.swift */; };
@@ -71,6 +75,7 @@
 		4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewport.swift; sourceTree = "<group>"; };
 		478777F017228F58ABA67D3B /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		5BBF3667FF8EC32438B53498 /* ProgramFramePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramFramePresenter.swift; sourceTree = "<group>"; };
+		62DFFC4BC7C71D5D3E9C35E2 /* CanvasMediaSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMediaSize.swift; sourceTree = "<group>"; };
 		667AFE15DAB75F795768ED4F /* TransportBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarView.swift; sourceTree = "<group>"; };
 		69CF5EDC9BBD36B9A69334DE /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		69F35D81C9968F32C725B215 /* EditorSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSession.swift; sourceTree = "<group>"; };
@@ -82,12 +87,15 @@
 		95DFE38643B882953196C533 /* EffectsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectsPanelView.swift; sourceTree = "<group>"; };
 		9B7724423128E4923FB4119B /* ProgramCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramCanvasView.swift; sourceTree = "<group>"; };
 		A243FE7139311CDC8EA5CE1C /* ExportControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportControlsView.swift; sourceTree = "<group>"; };
+		A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoGeometry.swift; sourceTree = "<group>"; };
 		A9DA773D7D30C51874013C19 /* TimelineAppendMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineAppendMenu.swift; sourceTree = "<group>"; };
 		AF565E218B6B2DD1C5907376 /* TimelineEffectPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineEffectPill.swift; sourceTree = "<group>"; };
+		C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasInteractionProbe.swift; sourceTree = "<group>"; };
 		C78ACDBA5C3E48FC3FD91769 /* H3ddleKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = H3ddleKit; path = Packages/H3ddleKit; sourceTree = SOURCE_ROOT; };
 		CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationStudioView.swift; sourceTree = "<group>"; };
 		CFB197A56139F880CD4A81C7 /* H3ddle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = H3ddle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeRulerView.swift; sourceTree = "<group>"; };
+		D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoOverlay.swift; sourceTree = "<group>"; };
 		DF87CD329EDE32AD0A1ACB8F /* H3ddleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = H3ddleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EDE22F1F6245036A1DE4230C /* ExportModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportModalView.swift; sourceTree = "<group>"; };
 		EE1A8789B11B5C010EED4C4E /* H3ddleUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H3ddleUITests.swift; sourceTree = "<group>"; };
@@ -199,6 +207,10 @@
 		8A6F344EB4997F4C458F2CD0 /* Canvas */ = {
 			isa = PBXGroup;
 			children = (
+				A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */,
+				D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */,
+				C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */,
+				62DFFC4BC7C71D5D3E9C35E2 /* CanvasMediaSize.swift */,
 				4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */,
 				9B7724423128E4923FB4119B /* ProgramCanvasView.swift */,
 				5BBF3667FF8EC32438B53498 /* ProgramFramePresenter.swift */,
@@ -415,6 +427,10 @@
 			files = (
 				8F8AD1AF67979F6F90EA4B85 /* AppModel.swift in Sources */,
 				CC4F9A5AA9DD7E28C23E15FA /* AudioPreviewPlayer.swift in Sources */,
+				1A11C0FCE6740ACFF083AB72 /* CanvasGizmoGeometry.swift in Sources */,
+				32E499B7269BB7EBFDE89192 /* CanvasGizmoOverlay.swift in Sources */,
+				2340DB253E47E718A1EAE4C8 /* CanvasInteractionProbe.swift in Sources */,
+				9A494F4E5CF63338D4A4CE53 /* CanvasMediaSize.swift in Sources */,
 				1FD10BD8234B5B28446C7C97 /* CanvasViewport.swift in Sources */,
 				9E78D049843D79C6B77799A5 /* DockAttention.swift in Sources */,
 				45129FAA941B44DFCBD13A6B /* EditorSession.swift in Sources */,

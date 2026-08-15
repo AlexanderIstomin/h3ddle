@@ -26,6 +26,33 @@ enum TimelineItemID: Hashable {
   case audio(UUID)
 }
 
+struct CanvasGestureSession: Equatable {
+  enum Kind: Equatable {
+    case move
+    case scale(CanvasCorner)
+    case rotate
+  }
+
+  var target: TimelineItemID
+  var kind: Kind
+  var origin: CanvasObjectTransform
+  var current: CanvasObjectTransform
+  var startProgram: (x: Double, y: Double)
+  var shiftDown: Bool
+  var commandDown: Bool
+
+  static func == (lhs: CanvasGestureSession, rhs: CanvasGestureSession) -> Bool {
+    lhs.target == rhs.target
+      && lhs.kind == rhs.kind
+      && lhs.origin == rhs.origin
+      && lhs.current == rhs.current
+      && lhs.startProgram.x == rhs.startProgram.x
+      && lhs.startProgram.y == rhs.startProgram.y
+      && lhs.shiftDown == rhs.shiftDown
+      && lhs.commandDown == rhs.commandDown
+  }
+}
+
 enum ProgramAspectRatio: String, CaseIterable, Identifiable {
   case sixteenNine = "16:9"
   case nineSixteen = "9:16"

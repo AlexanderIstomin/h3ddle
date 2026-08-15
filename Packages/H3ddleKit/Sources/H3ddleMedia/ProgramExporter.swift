@@ -178,7 +178,9 @@ private enum ExportSessionWriter {
     let renderer = ProgramCompositor(
       width: size.width,
       height: size.height,
-      background: project.settings.background.compositorColor
+      background: project.settings.background.compositorColor,
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
     )
     let timescale = CMTimeScale(max(1, settings.framesPerSecond.rounded()))
     var lastPreview = ContinuousClock.now - .seconds(1)
@@ -220,7 +222,9 @@ private enum ExportSessionWriter {
     let renderer = ProgramCompositor(
       width: size.width,
       height: size.height,
-      background: project.settings.background.compositorColor
+      background: project.settings.background.compositorColor,
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
     )
     let timescale = CMTimeScale(max(1, settings.framesPerSecond.rounded()))
     let frameDuration = CMTime(value: 1, timescale: timescale)
@@ -403,7 +407,11 @@ private enum ExportSessionWriter {
       span.outSec - 0.000_1,
       span.inSec + (Double(index) + 0.5) / settings.framesPerSecond
     )
-    return ProgramPreview.frame(at: programTime, project: project)
+    return ProgramPreview.frame(
+      at: programTime,
+      project: project,
+      textMuted: !settings.includeTextLane
+    )
   }
 
   private static func waitUntilReady(_ input: AVAssetWriterInput) async throws {

@@ -15,6 +15,8 @@ public struct PlannedVisualSegment: Hashable, Sendable {
 public struct ProgramCompositionPlan: Hashable, Sendable {
   public var visualSegments: [PlannedVisualSegment]
   public var audioItems: [AudioItem]
+  public var textItems: [TextItem]
+  /// Export span when the text lane is included (`max(visual, text)`).
   public var duration: TimeInterval
   public var trailingAudioDuration: TimeInterval
 
@@ -23,8 +25,16 @@ public struct ProgramCompositionPlan: Hashable, Sendable {
       PlannedVisualSegment(item: placement.item, startTime: placement.startTime)
     }
     audioItems = project.timeline.audioItems
-    duration = project.timeline.visualDuration
-    trailingAudioDuration = project.timeline.trailingAudioDuration
+    textItems = project.timeline.textItems
+    duration = project.timeline.exportDuration(includeTextLane: true)
+    trailingAudioDuration = max(0, project.timeline.audioTrackEnd - duration)
+  }
+
+  public func exportDuration(includeTextLane: Bool) -> TimeInterval {
+    let visual = visualSegments.last.map { $0.startTime + $0.item.duration } ?? 0
+    guard includeTextLane else { return visual }
+    let textEnd = textItems.map(\.endTime).max() ?? 0
+    return max(visual, textEnd)
   }
 }
 

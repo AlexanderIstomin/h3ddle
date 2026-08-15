@@ -20,6 +20,9 @@ struct TimelineRulerTests {
   func contentDurationHasAFloor() {
     #expect(TimelineRuler.contentDuration(visualDuration: 4, audioTrackEnd: 6) == 180)
     #expect(TimelineRuler.contentDuration(visualDuration: 200, audioTrackEnd: 40) == 200)
+    #expect(
+      TimelineRuler.contentDuration(visualDuration: 4, audioTrackEnd: 6, textTrackEnd: 220) == 220
+    )
   }
 
   @Test("Zoom is clamped to the pinch range")

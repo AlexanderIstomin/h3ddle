@@ -162,6 +162,8 @@ public struct ProgramExportSettings: Hashable, Sendable {
   public var usesHardwareAcceleration: Bool
   /// When false, A1 and native clip soundtracks are omitted from the file.
   public var includeAudioLane: Bool
+  /// When false, T1 overlays are omitted from the file.
+  public var includeTextLane: Bool
 
   public init(
     preset: ProgramExportPreset = .recommended,
@@ -174,7 +176,8 @@ public struct ProgramExportSettings: Hashable, Sendable {
     normalizeLoudness: Bool = false,
     range: ProgramExportRange = ProgramExportRange(),
     usesHardwareAcceleration: Bool = true,
-    includeAudioLane: Bool = true
+    includeAudioLane: Bool = true,
+    includeTextLane: Bool = true
   ) {
     self.preset = preset
     self.format = format
@@ -187,6 +190,7 @@ public struct ProgramExportSettings: Hashable, Sendable {
     self.range = range
     self.usesHardwareAcceleration = usesHardwareAcceleration
     self.includeAudioLane = includeAudioLane
+    self.includeTextLane = includeTextLane
   }
 
   public static func makeDefault(project: H3ddleProject) -> ProgramExportSettings {
@@ -204,9 +208,10 @@ public struct ProgramExportSettings: Hashable, Sendable {
       range: ProgramExportRange(
         mode: .full,
         inSec: 0,
-        outSec: project.timeline.visualDuration
+        outSec: project.timeline.exportDuration(includeTextLane: true)
       ),
-      usesHardwareAcceleration: true
+      usesHardwareAcceleration: true,
+      includeTextLane: true
     )
   }
 
@@ -300,6 +305,7 @@ public struct ProgramExportSettings: Hashable, Sendable {
       next.normalizeLoudness = current.normalizeLoudness
       next.usesHardwareAcceleration = current.usesHardwareAcceleration
       next.includeAudioLane = current.includeAudioLane
+      next.includeTextLane = current.includeTextLane
       next.range = current.range
       return next
     case .recommended, .high, .smaller:
@@ -308,6 +314,7 @@ public struct ProgramExportSettings: Hashable, Sendable {
       next.normalizeLoudness = current.normalizeLoudness
       next.usesHardwareAcceleration = current.usesHardwareAcceleration
       next.includeAudioLane = current.includeAudioLane
+      next.includeTextLane = current.includeTextLane
       next.range = current.range
       let scale: Double = preset == .high ? 1.5 : preset == .smaller ? 0.6 : 1
       next.videoBitrateKbps = clampBitrate(seed.videoBitrateKbps * scale)

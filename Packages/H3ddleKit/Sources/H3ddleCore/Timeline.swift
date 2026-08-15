@@ -12,15 +12,36 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
   public var gapBefore: TimeInterval
   /// How this clip fills the program canvas.
   public var canvasFit: CanvasFit
-  /// Quarter-turns clockwise in `0...3`.
+  /// Nearest quarter-turn hint. `rotationRadians` is the source of truth.
   public var rotationTurns: Int
+  /// Normalized translation. +x is right, +y is up.
+  public var translationX: Double
+  public var translationY: Double
+  public var uniformScale: Double
+  public var rotationRadians: Double
   /// Mix from the previous adjacent visual into this clip.
   public var transition: VisualTransition?
   /// Ordered filter stack drawn after canvas placement.
   public var effects: [VisualEffectInstance]
 
-  public var canvasTransform: VisualCanvasTransform {
-    VisualCanvasTransform(fit: canvasFit, rotationTurns: rotationTurns)
+  public var canvasTransform: CanvasObjectTransform {
+    get {
+      CanvasObjectTransform(
+        fit: canvasFit,
+        translationX: translationX,
+        translationY: translationY,
+        scale: uniformScale,
+        rotationRadians: rotationRadians
+      )
+    }
+    set {
+      canvasFit = newValue.fit
+      translationX = newValue.translationX
+      translationY = newValue.translationY
+      uniformScale = newValue.scale
+      rotationRadians = newValue.rotationRadians
+      rotationTurns = newValue.rotationTurns
+    }
   }
 
   public init(
@@ -33,6 +54,10 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     gapBefore: TimeInterval = 0,
     canvasFit: CanvasFit = .fit,
     rotationTurns: Int = 0,
+    translationX: Double = 0,
+    translationY: Double = 0,
+    uniformScale: Double = 1,
+    rotationRadians: Double? = nil,
     transition: VisualTransition? = nil,
     effects: [VisualEffectInstance] = []
   ) {
@@ -44,7 +69,17 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     self.sourceOffset = max(0, sourceOffset)
     self.gapBefore = max(0, gapBefore)
     self.canvasFit = canvasFit
-    self.rotationTurns = CanvasLayout.normalizedTurns(rotationTurns)
+    self.translationX = translationX
+    self.translationY = translationY
+    self.uniformScale = max(uniformScale, 0.01)
+    if let rotationRadians {
+      self.rotationRadians = rotationRadians
+      self.rotationTurns = CanvasObjectTransform(rotationRadians: rotationRadians).rotationTurns
+    } else {
+      let turns = CanvasLayout.normalizedTurns(rotationTurns)
+      self.rotationTurns = turns
+      self.rotationRadians = Double(turns) * .pi / 2
+    }
     self.transition = transition
     self.effects = effects
   }
@@ -65,9 +100,22 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
       try container.decodeIfPresent(TimeInterval.self, forKey: .gapBefore) ?? 0
     )
     canvasFit = try container.decodeIfPresent(CanvasFit.self, forKey: .canvasFit) ?? .fit
-    rotationTurns = CanvasLayout.normalizedTurns(
+    let decodedTurns = CanvasLayout.normalizedTurns(
       try container.decodeIfPresent(Int.self, forKey: .rotationTurns) ?? 0
     )
+    translationX = try container.decodeIfPresent(Double.self, forKey: .translationX) ?? 0
+    translationY = try container.decodeIfPresent(Double.self, forKey: .translationY) ?? 0
+    uniformScale = max(
+      try container.decodeIfPresent(Double.self, forKey: .uniformScale) ?? 1,
+      0.01
+    )
+    if let radians = try container.decodeIfPresent(Double.self, forKey: .rotationRadians) {
+      rotationRadians = radians
+      rotationTurns = CanvasObjectTransform(rotationRadians: radians).rotationTurns
+    } else {
+      rotationTurns = decodedTurns
+      rotationRadians = Double(decodedTurns) * .pi / 2
+    }
     transition = try container.decodeIfPresent(VisualTransition.self, forKey: .transition)
     effects = try container.decodeIfPresent([VisualEffectInstance].self, forKey: .effects) ?? []
   }
@@ -82,6 +130,10 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     case gapBefore
     case canvasFit
     case rotationTurns
+    case translationX
+    case translationY
+    case uniformScale
+    case rotationRadians
     case transition
     case effects
   }
@@ -210,6 +262,37 @@ public struct AudioItem: Identifiable, Hashable, Codable, Sendable {
   }
 }
 
+public struct TextTrim: Equatable, Sendable {
+  public var startTime: TimeInterval
+  public var duration: TimeInterval
+
+  public init(startTime: TimeInterval, duration: TimeInterval) {
+    self.startTime = max(0, startTime)
+    self.duration = max(0, duration)
+  }
+}
+
+public enum TextTrimMath: Sendable {
+  public static func apply(
+    edge: TimelineTrimEdge,
+    delta: TimeInterval,
+    startTime: TimeInterval,
+    duration: TimeInterval,
+    minimumDuration: TimeInterval
+  ) -> TextTrim {
+    let floor = max(minimumDuration, 0.001)
+    switch edge {
+    case .trailing:
+      return TextTrim(startTime: startTime, duration: max(floor, duration + delta))
+    case .leading:
+      let endTime = startTime + duration
+      var nextStart = max(0, startTime + delta)
+      nextStart = min(endTime - floor, nextStart)
+      return TextTrim(startTime: nextStart, duration: endTime - nextStart)
+    }
+  }
+}
+
 public struct AudioTrim: Equatable, Sendable {
   public var startTime: TimeInterval
   public var duration: TimeInterval
@@ -273,13 +356,29 @@ public enum TimelineError: Error, Equatable, Sendable {
 public struct ProjectTimeline: Hashable, Codable, Sendable {
   public private(set) var visualItems: [VisualItem]
   public private(set) var audioItems: [AudioItem]
+  public private(set) var textItems: [TextItem]
 
   public init(
     visualItems: [VisualItem] = [],
-    audioItems: [AudioItem] = []
+    audioItems: [AudioItem] = [],
+    textItems: [TextItem] = []
   ) {
     self.visualItems = visualItems
     self.audioItems = audioItems
+    self.textItems = textItems
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    visualItems = try container.decodeIfPresent([VisualItem].self, forKey: .visualItems) ?? []
+    audioItems = try container.decodeIfPresent([AudioItem].self, forKey: .audioItems) ?? []
+    textItems = try container.decodeIfPresent([TextItem].self, forKey: .textItems) ?? []
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case visualItems
+    case audioItems
+    case textItems
   }
 
   public var visualDuration: TimeInterval {
@@ -321,6 +420,19 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
 
   public var trailingAudioDuration: TimeInterval {
     max(0, audioTrackEnd - visualDuration)
+  }
+
+  public var textTrackEnd: TimeInterval {
+    textItems.map(\.endTime).max() ?? 0
+  }
+
+  public var trailingTextDuration: TimeInterval {
+    max(0, textTrackEnd - visualDuration)
+  }
+
+  public func exportDuration(includeTextLane: Bool) -> TimeInterval {
+    guard includeTextLane else { return visualDuration }
+    return max(visualDuration, textTrackEnd)
   }
 
   @discardableResult
@@ -368,14 +480,36 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
 
   public mutating func setVisualCanvasFit(_ id: UUID, _ fit: CanvasFit) {
     guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
-    visualItems[index].canvasFit = fit
+    var transform = visualItems[index].canvasTransform
+    transform.fit = fit
+    transform.translationX = 0
+    transform.translationY = 0
+    transform.scale = 1
+    visualItems[index].canvasTransform = transform
   }
 
   public mutating func rotateVisual(_ id: UUID, by turns: Int = 1) {
     guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
-    visualItems[index].rotationTurns = CanvasLayout.normalizedTurns(
-      visualItems[index].rotationTurns + turns
-    )
+    visualItems[index].canvasTransform = visualItems[index].canvasTransform.rotated(by: turns)
+  }
+
+  public mutating func setVisualCanvasTransform(_ id: UUID, _ transform: CanvasObjectTransform) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    visualItems[index].canvasTransform = transform
+  }
+
+  public mutating func resetVisualTransform(_ id: UUID) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    var transform = visualItems[index].canvasTransform
+    transform.translationX = 0
+    transform.translationY = 0
+    transform.scale = 1
+    visualItems[index].canvasTransform = transform
+  }
+
+  public mutating func setVisualIncludesNativeAudio(_ id: UUID, includes: Bool) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    visualItems[index].includesNativeAudio = includes
   }
 
   public func canApplyVisualTransition(_ id: UUID) -> Bool {
@@ -547,6 +681,10 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
       gapBefore: 0,
       canvasFit: item.canvasFit,
       rotationTurns: item.rotationTurns,
+      translationX: item.translationX,
+      translationY: item.translationY,
+      uniformScale: item.uniformScale,
+      rotationRadians: item.rotationRadians,
       transition: nil,
       effects: item.effects.map { $0.copying() }
     )
@@ -671,6 +809,10 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
       gapBefore: 0,
       canvasFit: item.canvasFit,
       rotationTurns: item.rotationTurns,
+      translationX: item.translationX,
+      translationY: item.translationY,
+      uniformScale: item.uniformScale,
+      rotationRadians: item.rotationRadians,
       transition: nil,
       effects: item.effects.map { $0.copying() }
     )
@@ -709,6 +851,113 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     )
     audioItems.insert(right, at: index + 1)
     return (item.id, right.id)
+  }
+
+  @discardableResult
+  public mutating func insertText(_ item: TextItem) -> TextItem {
+    var item = item
+    item.startTime = max(0, item.startTime)
+    item.duration = max(0, item.duration)
+    textItems.append(item)
+    return item
+  }
+
+  public mutating func setTextEnabled(_ id: UUID, isEnabled: Bool) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].isEnabled = isEnabled
+  }
+
+  public mutating func setTextTrim(_ id: UUID, _ trim: TextTrim) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].startTime = max(0, trim.startTime)
+    textItems[index].duration = max(0, trim.duration)
+  }
+
+  public mutating func setTextStart(_ id: UUID, startTime: TimeInterval) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].startTime = max(0, startTime)
+  }
+
+  public mutating func setTextStyle(_ id: UUID, _ style: TextStyle) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].style = style
+  }
+
+  public mutating func setTextContent(_ id: UUID, _ text: String) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].text = text
+  }
+
+  public mutating func setTextTransform(_ id: UUID, _ transform: CanvasObjectTransform) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].canvasTransform = transform
+  }
+
+  public mutating func resetTextTransform(_ id: UUID) {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return }
+    textItems[index].canvasTransform = .identity
+  }
+
+  @discardableResult
+  public mutating func duplicateText(_ id: UUID) -> TextItem? {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let item = textItems[index]
+    let copy = TextItem(
+      startTime: item.endTime,
+      duration: item.duration,
+      isEnabled: item.isEnabled,
+      text: item.text,
+      style: item.style,
+      canvasTransform: item.canvasTransform
+    )
+    textItems.insert(copy, at: index + 1)
+    return copy
+  }
+
+  public func canSplitText(_ id: UUID, at time: TimeInterval, framesPerSecond: Double) -> Bool {
+    guard let item = textItems.first(where: { $0.id == id }) else { return false }
+    return TimelineSplit.canSplit(
+      startTime: item.startTime,
+      duration: item.duration,
+      at: time,
+      framesPerSecond: framesPerSecond
+    )
+  }
+
+  @discardableResult
+  public mutating func splitText(
+    _ id: UUID,
+    at time: TimeInterval,
+    framesPerSecond: Double
+  ) -> (left: UUID, right: UUID)? {
+    guard let index = textItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let item = textItems[index]
+    guard
+      TimelineSplit.canSplit(
+        startTime: item.startTime,
+        duration: item.duration,
+        at: time,
+        framesPerSecond: framesPerSecond
+      )
+    else {
+      return nil
+    }
+    let leftDuration = time - item.startTime
+    textItems[index].duration = leftDuration
+    let right = TextItem(
+      startTime: time,
+      duration: item.duration - leftDuration,
+      isEnabled: item.isEnabled,
+      text: item.text,
+      style: item.style,
+      canvasTransform: item.canvasTransform
+    )
+    textItems.insert(right, at: index + 1)
+    return (item.id, right.id)
+  }
+
+  public mutating func removeText(_ id: UUID) {
+    textItems.removeAll { $0.id == id }
   }
 }
 

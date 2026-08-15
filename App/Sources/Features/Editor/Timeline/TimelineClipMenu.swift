@@ -126,6 +126,14 @@ struct TimelineClipMenu: View {
         action: .rotate
       )
     )
+    rows.append(
+      TimelineClipMenuItem(
+        id: "reset-transform",
+        label: "Reset transform",
+        symbol: "arrow.counterclockwise",
+        action: .resetTransform
+      )
+    )
     rows.append(.separator("remove"))
     rows.append(
       TimelineClipMenuItem(
@@ -180,6 +188,7 @@ enum TimelineClipMenuAction: Equatable {
   case coverCanvas
   case fitToCanvas
   case rotate
+  case resetTransform
   case remove
 }
 

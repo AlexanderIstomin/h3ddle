@@ -46,9 +46,10 @@ public enum TimelineRuler {
 
   public static func contentDuration(
     visualDuration: TimeInterval,
-    audioTrackEnd: TimeInterval
+    audioTrackEnd: TimeInterval,
+    textTrackEnd: TimeInterval = 0
   ) -> TimeInterval {
-    max(visualDuration, audioTrackEnd, fallbackWindow)
+    max(visualDuration, audioTrackEnd, textTrackEnd, fallbackWindow)
   }
 
   public static func majorInterval(pointsPerSecond: Double) -> TimeInterval {

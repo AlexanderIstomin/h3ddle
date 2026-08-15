@@ -83,6 +83,19 @@ struct EditorView: View {
       model.splitSelectedAtPlayhead()
       return .handled
     }
+    .onKeyPress(keys: ["z", "Z"], phases: .down) { press in
+      guard press.modifiers.contains(.command) else { return .ignored }
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      if NSApp.keyWindow?.firstResponder is NSTextView { return .ignored }
+      if press.modifiers.contains(.shift) {
+        guard model.canRedo else { return .ignored }
+        model.redo()
+      } else {
+        guard model.canUndo else { return .ignored }
+        model.undo()
+      }
+      return .handled
+    }
     .onKeyPress(keys: ["d", "D"], phases: .down) { press in
       guard press.modifiers.contains(.command) else { return .ignored }
       guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
@@ -261,6 +274,8 @@ struct EditorView: View {
         model.setVisualCanvasFit(id, .fit)
       case .rotate:
         model.rotateVisual(id)
+      case .resetTransform:
+        model.resetVisualTransform(id)
       case .remove:
         model.removeVisual(id)
       }
@@ -275,7 +290,7 @@ struct EditorView: View {
         model.split(.audio(id))
       case .remove:
         model.removeAudio(id)
-      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate:
+      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .resetTransform:
         break
       }
     }

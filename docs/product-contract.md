@@ -33,9 +33,12 @@
 - Disabling keeps an item recoverable. Removing audio does not shift later audio.
 - Each visual video can include or mute its native soundtrack.
 - The program canvas shows the composed visual at the playhead, fitted to the
-  project aspect on the project background. A visual clip can fit or cover that
-  canvas and rotate in 90° steps. Adjacent visual cuts can dissolve, fade, or
-  wipe. Applying a transition overlaps the incoming clip over the outgoing
+  project aspect on the project background. A selected visual can be moved,
+  scaled (corner handles; Command scales about center), and rotated (handle;
+  Shift snaps to 15°) on the monitor. Empty-canvas drag pans the viewer;
+  Option-drag force-pans. Fit and cover remain snap-to-frame presets; Reset
+  transform zeros translation and scale and keeps rotation. Adjacent visual
+  cuts can dissolve, fade, or wipe. Applying a transition overlaps the incoming clip over the outgoing
   tail by the transition duration and shortens the program by that amount.
   The cut + opens the Transitions panel (same 320px slot as Effects);
   clicking an existing transition opens its settings. Visual clips can carry

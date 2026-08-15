@@ -736,7 +736,9 @@ private struct ExportPosterView: View {
       canvas: posterSize,
       scale: NSScreen.main?.backingScaleFactor ?? 2,
       background: project.settings.background,
-      videoFrame: nil
+      videoFrame: nil,
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
     )
   }
 }
