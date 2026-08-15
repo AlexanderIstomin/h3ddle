@@ -106,18 +106,15 @@ private let engineCapabilities = EngineCapabilities(
   engineName: "h3.c",
   engineVersion: String(cString: h3ddle_h3_version()),
   features: {
-    // Audio renders write their own WAV, so the audio lane no longer depends
-    // on an FFmpeg process; only the video mux still does.
-    var features: [EngineFeature] = [
-      .modelInspection, .imageGeneration, .embeddedAudio, .cancellation,
-      .denoisingPreviews,
-      .referenceInputs,
+    // Nothing here depends on an installed FFmpeg any more: audio writes its
+    // own WAV, and video muxes through AVFoundation, which ships with macOS.
+    // FFmpeg remains a fallback inside the engine for media it reads better,
+    // so its absence no longer costs a capability.
+    [
+      .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
+      .cancellation, .denoisingPreviews, .referenceInputs,
       .standaloneAudioGeneration,
     ]
-    if executableIsAvailable(named: "ffmpeg", override: "H3_FFMPEG") {
-      features.append(.videoGeneration)
-    }
-    return features
   }()
 )
 
