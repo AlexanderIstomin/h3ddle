@@ -92,6 +92,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           denoisingSteps: request.denoisingSteps,
           activeDiTLayers: request.activeDiTLayers,
           coreReuse: request.coreReuse,
+          blockCache: request.blockCache,
           previewDenoise: request.previewDenoise,
           useBetaSchedule: request.useBetaSchedule,
           seed: request.seed,

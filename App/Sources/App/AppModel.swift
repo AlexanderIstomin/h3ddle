@@ -114,7 +114,12 @@ final class AppModel {
   var playback = ProgramPlaybackController()
   var timelineZoom = 1.0
   var timelineMode = TimelinePresentationMode.expanded
-  var showsEffectLanes = false
+  var showsEffectLanes = true
+  var fxLanesExpanded = false
+  var showsEffectsPanel = false
+  var selectedEffectID: UUID?
+  var showsTransitionsPanel = false
+  var browsesTransitionCatalog = false
   var selectedTimelineItem: TimelineItemID?
   var visualTrackMuted = false
   var audioTrackMuted = false
@@ -367,6 +372,7 @@ final class AppModel {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
+    blockCache: Bool = false,
     previewDenoise: Bool = false,
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
@@ -386,6 +392,7 @@ final class AppModel {
       denoisingSteps: denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
+      blockCache: blockCache,
       previewDenoise: previewDenoise
     ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
       + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
@@ -425,6 +432,7 @@ final class AppModel {
       denoisingSteps: denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
+      blockCache: blockCache,
       previewDenoise: previewDenoise,
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
       seed: seed,
@@ -1016,6 +1024,144 @@ final class AppModel {
     project.timeline.rotateVisual(id)
   }
 
+  var effectLaneItems: [EffectLaneItem] {
+    project.timeline.visualPlacements.flatMap { placement in
+      placement.item.effects.map { effect in
+        EffectLaneItem(
+          clipID: placement.item.id,
+          startTime: placement.startTime,
+          duration: placement.item.duration,
+          effect: effect,
+          clipEnabled: placement.item.isEnabled
+        )
+      }
+    }
+  }
+
+  var effectsHostClip: VisualItem? {
+    if case .visual(let id) = selectedTimelineItem {
+      return project.timeline.visualItems.first { $0.id == id }
+    }
+    return project.timeline.visualItems.last
+  }
+
+  func openEffectsCatalog() {
+    showsProjectSettings = false
+    closeTransitionsPanel()
+    showsEffectsPanel = true
+    selectedEffectID = nil
+    showsEffectLanes = true
+    if case .visual = selectedTimelineItem {
+    } else if let host = project.timeline.visualItems.last {
+      selectedTimelineItem = .visual(host.id)
+    }
+  }
+
+  func openEffectSettings(clipID: UUID, effectID: UUID) {
+    showsProjectSettings = false
+    closeTransitionsPanel()
+    showsEffectsPanel = true
+    showsEffectLanes = true
+    selectedTimelineItem = .visual(clipID)
+    selectedEffectID = effectID
+  }
+
+  func addVisualEffect(_ kind: VisualEffectKind) {
+    guard let host = effectsHostClip,
+      let effect = project.timeline.addVisualEffect(host.id, kind: kind)
+    else {
+      return
+    }
+    selectedTimelineItem = .visual(host.id)
+    selectedEffectID = effect.id
+  }
+
+  func updateVisualEffect(_ effect: VisualEffectInstance) {
+    guard let host = effectsHostClip else { return }
+    project.timeline.setVisualEffect(host.id, effect: effect)
+  }
+
+  func removeSelectedEffect() {
+    guard let host = effectsHostClip, let selectedEffectID else { return }
+    project.timeline.removeVisualEffect(host.id, effectID: selectedEffectID)
+    self.selectedEffectID = nil
+    if effectLaneItems.isEmpty {
+      fxLanesExpanded = false
+    }
+  }
+
+  var transitionHostClip: VisualItem? {
+    guard case .visual(let id) = selectedTimelineItem,
+      let index = project.timeline.visualItems.firstIndex(where: { $0.id == id })
+    else {
+      return nil
+    }
+    if project.timeline.canApplyVisualTransition(id) {
+      return project.timeline.visualItems[index]
+    }
+    if index + 1 < project.timeline.visualItems.count {
+      let incoming = project.timeline.visualItems[index + 1]
+      if project.timeline.canApplyVisualTransition(incoming.id) {
+        return incoming
+      }
+    }
+    return nil
+  }
+
+  func openTransitions(for id: UUID) {
+    showsProjectSettings = false
+    showsEffectsPanel = false
+    selectedEffectID = nil
+    selectedTimelineItem = .visual(id)
+    showsTransitionsPanel = true
+    let hasTransition = project.timeline.visualItems.first { $0.id == id }?.transition != nil
+    browsesTransitionCatalog = !hasTransition
+  }
+
+  func browseTransitionCatalog() {
+    showsTransitionsPanel = true
+    browsesTransitionCatalog = true
+  }
+
+  func closeTransitionsPanel() {
+    showsTransitionsPanel = false
+    browsesTransitionCatalog = false
+  }
+
+  func applyVisualTransition(_ kind: VisualTransitionKind) {
+    guard let host = transitionHostClip else { return }
+    setVisualTransition(host.id, kind: kind)
+    browsesTransitionCatalog = false
+  }
+
+  func setVisualTransition(_ id: UUID, kind: VisualTransitionKind) {
+    let current = project.timeline.visualItems.first(where: { $0.id == id })?.transition
+    let duration = current?.duration ?? VisualTransitionMath.defaultDuration
+    project.timeline.setVisualTransition(id, VisualTransition(kind: kind, duration: duration))
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func setVisualTransitionDuration(_ id: UUID, duration: TimeInterval) {
+    guard let current = project.timeline.visualItems.first(where: { $0.id == id })?.transition
+    else {
+      return
+    }
+    project.timeline.setVisualTransition(
+      id,
+      VisualTransition(kind: current.kind, duration: duration)
+    )
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func removeVisualTransition(_ id: UUID) {
+    project.timeline.setVisualTransition(id, nil)
+    browsesTransitionCatalog = true
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
   func toggleAudio(_ id: UUID) {
     guard let item = project.timeline.audioItems.first(where: { $0.id == id }) else {
       return
@@ -1088,6 +1234,52 @@ final class AppModel {
     if selectedTimelineItem == .audio(id) {
       selectedTimelineItem = nil
     }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+  }
+
+  func duplicateVisual(_ id: UUID) {
+    guard let copy = project.timeline.duplicateVisual(id) else { return }
+    selectedTimelineItem = .visual(copy.id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func duplicateAudio(_ id: UUID) {
+    guard let copy = project.timeline.duplicateAudio(id) else { return }
+    selectedTimelineItem = .audio(copy.id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func duplicateSelectedTimelineItem() {
+    guard let selectedTimelineItem else { return }
+    switch selectedTimelineItem {
+    case .visual(let id):
+      duplicateVisual(id)
+    case .audio(let id):
+      duplicateAudio(id)
+    }
+  }
+
+  func moveVisual(_ id: UUID, toIndex: Int) {
+    project.timeline.moveVisual(id, toIndex: toIndex)
+    selectedTimelineItem = .visual(id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func moveAudio(_ id: UUID, toIndex: Int) {
+    project.timeline.moveAudio(id, toIndex: toIndex)
+    selectedTimelineItem = .audio(id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func setAudioStart(_ id: UUID, startTime: TimeInterval) {
+    project.timeline.setAudioStart(id, startTime: startTime)
+    selectedTimelineItem = .audio(id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
   }
 
   var canSplitSelectedAtPlayhead: Bool {
@@ -1211,6 +1403,7 @@ final class AppModel {
     denoisingSteps: Int?,
     activeDiTLayers: Int?,
     coreReuse: Int?,
+    blockCache: Bool,
     previewDenoise: Bool
   ) -> String {
     guard kind == .video || kind == .image || kind == .audio else {
@@ -1220,13 +1413,14 @@ final class AppModel {
       kind == .audio ? Self.audioCanvasLabel : "\(quality.canvasSize)×\(quality.canvasSize)"
     let steps = denoisingSteps ?? quality.denoisingSteps
     let layers = activeDiTLayers ?? quality.activeDiTLayers
-    let core = coreReuse ?? 1
-    let reuse = core > 1 || steps < 10 ? 1 : quality.denoiseReuse
+    let core = blockCache ? 1 : coreReuse ?? 1
+    let reuse = blockCache || core > 1 || steps < 10 ? 1 : quality.denoiseReuse
     return String(
       format:
-        "%@ · %@ · %@ · passes %d · blocks %d · core-reuse %d · reuse %d · preview %@ · %.2fs",
+        "%@ · %@ · %@ · passes %d · blocks %d · core-reuse %d · reuse %d · "
+        + "cache %@ · preview %@ · %.2fs",
       kind.rawValue, quality.rawValue, canvas, steps, layers, core, reuse,
-      previewDenoise ? "on" : "off", duration
+      blockCache ? "on" : "off", previewDenoise ? "on" : "off", duration
     )
   }
 

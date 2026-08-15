@@ -706,6 +706,13 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.core_reuse = Int32(coreReuse)
         parameters.denoise_reuse = 1
       }
+      if request.blockCache {
+        // The block cache replaces both reuse ladders; the engine refuses
+        // the combinations outright, so resolve them here.
+        parameters.block_cache = 1
+        parameters.core_reuse = 1
+        parameters.denoise_reuse = 1
+      }
       parameters.use_beta_schedule = request.useBetaSchedule ? 1 : 0
       if let seed = request.seed {
         parameters.seed = seed

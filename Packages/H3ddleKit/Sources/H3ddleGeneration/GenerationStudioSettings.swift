@@ -63,17 +63,41 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   public var denoisingSteps: Int
   public var activeDiTLayers: Int
   public var coreReuse: Int
+  /// Replay cached tail-block residuals on schedule-gated steps. Faster at
+  /// standard step counts; the result is a different sample of the same
+  /// quality, so it stays a deliberate choice.
+  public var blockCache: Bool
 
   public init(
     canvas: GenerationCanvas,
     denoisingSteps: Int,
     activeDiTLayers: Int,
-    coreReuse: Int
+    coreReuse: Int,
+    blockCache: Bool = false
   ) {
     self.canvas = canvas
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
+    self.blockCache = blockCache
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case canvas
+    case denoisingSteps
+    case activeDiTLayers
+    case coreReuse
+    case blockCache
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    canvas = try container.decode(GenerationCanvas.self, forKey: .canvas)
+    denoisingSteps = try container.decode(Int.self, forKey: .denoisingSteps)
+    activeDiTLayers = try container.decode(Int.self, forKey: .activeDiTLayers)
+    coreReuse = try container.decode(Int.self, forKey: .coreReuse)
+    // Settings persisted before the knob existed decode to off.
+    blockCache = try container.decodeIfPresent(Bool.self, forKey: .blockCache) ?? false
   }
 
   public static func preset(_ preset: GenerationPreset) -> GenerationKnobSnapshot {

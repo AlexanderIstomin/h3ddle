@@ -495,7 +495,8 @@ struct GenerationStudioView: View {
           Button {
             startGeneration(
               denoisingSteps: knobs.denoisingSteps,
-              coreReuse: knobs.coreReuse
+              coreReuse: knobs.coreReuse,
+              blockCache: knobs.blockCache
             )
           } label: {
             HStack(spacing: 10) {
@@ -685,6 +686,29 @@ struct GenerationStudioView: View {
         }
         .accessibilityIdentifier("generation-core-reuse")
       }
+      .opacity(knobs.blockCache ? 0.38 : 1)
+      .allowsHitTesting(!knobs.blockCache)
+
+      Toggle(isOn: Binding(
+        get: { knobs.blockCache },
+        set: { enabled in model.updateStudioKnobs { $0.blockCache = enabled } }
+      )) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Block cache")
+            .font(.system(size: 12, weight: .semibold))
+          Text(
+            "Replay cached transformer work on stable passes — about 40% "
+              + "faster at 20 passes. The result is a different take of the "
+              + "same quality, and it replaces core reuse.")
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .toggleStyle(.switch)
+      .controlSize(.small)
+      .tint(H3Color.accent)
+      .accessibilityIdentifier("generation-block-cache")
 
       if kind != .audio {
         Toggle(isOn: $model.previewDenoise) {
@@ -800,7 +824,9 @@ struct GenerationStudioView: View {
     )
   }
 
-  private func startGeneration(denoisingSteps: Int, coreReuse: Int) {
+  private func startGeneration(
+    denoisingSteps: Int, coreReuse: Int, blockCache: Bool = false
+  ) {
     modelMenuOpen = false
     resultIDAtStart = model.latestStudioResult?.id
     stage = .run
@@ -812,6 +838,7 @@ struct GenerationStudioView: View {
       denoisingSteps: denoisingSteps,
       activeDiTLayers: knobs.activeDiTLayers,
       coreReuse: coreReuse,
+      blockCache: blockCache,
       previewDenoise: model.previewDenoise,
       seed: usesNativeSettings ? model.studioSettings.seed : nil,
       canvasWidth: kind == .audio ? nil : size.width,

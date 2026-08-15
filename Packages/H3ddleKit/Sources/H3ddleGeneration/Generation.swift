@@ -29,6 +29,10 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var activeDiTLayers: Int?
   /// Transformer-core reuse interval; nil or 1 keeps the exact path.
   public var coreReuse: Int?
+  /// Replay cached tail-block residuals on schedule-gated steps: about 40%
+  /// faster at standard step counts for a different sample of the same
+  /// quality. Replaces both reuse ladders when enabled.
+  public var blockCache: Bool
   /// Decode a still after every denoising pass. Off by default; does not
   /// change the encoded video.
   public var previewDenoise: Bool
@@ -52,6 +56,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     denoisingSteps: Int? = nil,
     activeDiTLayers: Int? = nil,
     coreReuse: Int? = nil,
+    blockCache: Bool = false,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
@@ -68,6 +73,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
+    self.blockCache = blockCache
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
