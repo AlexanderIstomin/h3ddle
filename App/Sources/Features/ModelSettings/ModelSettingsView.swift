@@ -107,6 +107,11 @@ struct ModelSettingsView: View {
             }
           },
           pause: { model.cancelManagedModelDownload() },
+          discard: {
+            if case .managed(let manifest) = choice.source {
+              model.discardManagedModelDownload(manifest)
+            }
+          },
           remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
         )
       }
@@ -260,6 +265,7 @@ private struct ModelChoiceRow: View {
   var select: () -> Void
   var install: () -> Void
   var pause: () -> Void
+  var discard: (() -> Void)?
   var remove: (() -> Void)?
 
   var body: some View {
@@ -339,6 +345,17 @@ private struct ModelChoiceRow: View {
         Button("Pause", action: pause)
           .buttonStyle(H3QuietButtonStyle())
       case .available, .cancelled, .failed, .installed:
+        // A paused download keeps its partial files so resuming is free;
+        // discarding is the explicit way to get that disk back.
+        if status.state == .cancelled || status.progress > 0, let discard {
+          Button(action: discard) {
+            Image(systemName: "trash")
+              .foregroundStyle(H3Color.textSecondary)
+          }
+          .buttonStyle(.plain)
+          .help("Discard the paused download and free its partial files")
+          .accessibilityIdentifier("discard-managed-download")
+        }
         Button(installTitle, action: install)
           .buttonStyle(H3PrimaryButtonStyle())
           .accessibilityIdentifier("download-managed-model")

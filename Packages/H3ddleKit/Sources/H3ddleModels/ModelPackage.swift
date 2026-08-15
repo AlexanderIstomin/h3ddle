@@ -322,7 +322,15 @@ public enum ModelCatalog {
         sha256: "9ad5c98b533894c122050d32804a14f49fca8edc16c52564a281cdc5825ac934",
         sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
         sourceRevision: "4aea334367e4007d7b3630810ec28eb97639ae65",
-        sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
+        sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
+        localCandidatePath: URL.applicationSupportDirectory
+          .appendingPathComponent("H3ddle", isDirectory: true)
+          .appendingPathComponent("Conversion", isDirectory: true)
+          .appendingPathComponent(
+            "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
+            isDirectory: false
+          )
+          .path
       ),
       ModelPackageFile(
         role: .referenceTransformer,
@@ -331,7 +339,15 @@ public enum ModelCatalog {
         sha256: "e64cef63bc2785bcd72e6103c52aa78c6cd2c4f9870a7ce79675083fd65cf2e7",
         sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
         sourceRevision: "c0c8e368009ee8cbd498f620cd4716d4268e6f02",
-        sourcePath: "minimax_h3_ref2va_pruned_turbo_int8_convrot.safetensors"
+        sourcePath: "minimax_h3_ref2va_pruned_turbo_int8_convrot.safetensors",
+        localCandidatePath: URL.applicationSupportDirectory
+          .appendingPathComponent("H3ddle", isDirectory: true)
+          .appendingPathComponent("Conversion", isDirectory: true)
+          .appendingPathComponent(
+            "minimax_h3_ref2va_pruned_turbo_int8_convrot.safetensors",
+            isDirectory: false
+          )
+          .path
       )
     ] + sharedMinimaxH3Files
   )

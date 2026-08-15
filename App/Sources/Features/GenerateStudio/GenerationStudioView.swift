@@ -18,6 +18,7 @@ struct GenerationStudioView: View {
   @State private var modelMenuOpen = false
   @State private var modelPickerFrame: CGRect = .zero
   @State private var studioBodyFrame: CGRect = .zero
+  @State private var summaryCopied = false
 
   var body: some View {
     ZStack {
@@ -51,6 +52,7 @@ struct GenerationStudioView: View {
         let latest = model.latestStudioResult,
         latest.id != resultIDAtStart
       {
+        summaryCopied = false
         stage = .result
       } else {
         stage = .compose
@@ -617,13 +619,13 @@ struct GenerationStudioView: View {
         labeled("RESOLUTION") {
           Menu {
             ForEach(GenerationCanvas.allCases) { canvas in
-              Button(canvas.label(isPortrait: isPortraitCanvas)) {
+              Button(canvasMenuLabel(canvas)) {
                 model.updateStudioKnobs { $0.canvas = canvas }
               }
             }
           } label: {
             HStack {
-              Text(knobs.canvas.label(isPortrait: isPortraitCanvas))
+              Text(knobs.canvas.label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
               Spacer()
               Image(systemName: "chevron.up.chevron.down")
@@ -788,6 +790,7 @@ struct GenerationStudioView: View {
             phase: model.generationPhase,
             elapsed: model.generationElapsedDescription,
             progress: model.generationProgress,
+            remaining: model.generationRemainingDescription,
             preview: model.generationPreviewImage
           )
         } else if let result = model.latestStudioResult {
@@ -816,6 +819,25 @@ struct GenerationStudioView: View {
           }
           .buttonStyle(H3QuietButtonStyle())
           Button {
+            saveResult(result)
+          } label: {
+            Label("Download", systemImage: "arrow.down.circle")
+          }
+          .buttonStyle(H3QuietButtonStyle())
+          .accessibilityIdentifier("download-result")
+          if model.generationSummary(for: result.asset) != nil {
+            Button {
+              copySummary(for: result)
+            } label: {
+              Label(
+                summaryCopied ? "Copied" : "Copy statistics",
+                systemImage: summaryCopied ? "checkmark" : "doc.on.doc"
+              )
+            }
+            .buttonStyle(H3QuietButtonStyle())
+            .accessibilityIdentifier("copy-statistics")
+          }
+          Button {
             model.insertToTimeline(result)
           } label: {
             Label("Insert to timeline", systemImage: "plus")
@@ -828,6 +850,35 @@ struct GenerationStudioView: View {
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(red: 15 / 255, green: 18 / 255, blue: 23 / 255))
+  }
+
+  /// Copies the generated file out of the app's working storage, where it
+  /// would otherwise be pruned, to wherever the user keeps their media.
+  private func saveResult(_ result: GenerationResult) {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = result.asset.url.lastPathComponent
+    panel.canCreateDirectories = true
+    panel.isExtensionHidden = false
+    guard panel.runModal() == .OK, let destination = panel.url else { return }
+    do {
+      if FileManager.default.fileExists(atPath: destination.path) {
+        try FileManager.default.removeItem(at: destination)
+      }
+      try FileManager.default.copyItem(at: result.asset.url, to: destination)
+    } catch {
+      model.errorMessage = "Could not save the file: \(error.localizedDescription)"
+    }
+  }
+
+  private func copySummary(for result: GenerationResult) {
+    guard let summary = model.generationSummary(for: result.asset) else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(summary, forType: .string)
+    summaryCopied = true
+    Task {
+      try? await Task.sleep(for: .seconds(2))
+      summaryCopied = false
+    }
   }
 
   private var menuOrigin: CGPoint {
@@ -844,7 +895,7 @@ struct GenerationStudioView: View {
     modelMenuOpen = false
     resultIDAtStart = model.latestStudioResult?.id
     stage = .run
-    let size = knobs.canvas.dimensions(isPortrait: isPortraitCanvas)
+    let size = knobs.canvas.dimensions(aspect: Double(model.studioAspect.fraction))
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
@@ -898,6 +949,13 @@ struct GenerationStudioView: View {
     }
   }
 
+  /// Menu rows spell out what a tier becomes at the chosen aspect, so the
+  /// short-edge name stays honest rather than hiding the real pixels.
+  private func canvasMenuLabel(_ canvas: GenerationCanvas) -> String {
+    let size = canvas.dimensions(aspect: Double(model.studioAspect.fraction))
+    return "\(canvas.label)  ·  \(size.width)×\(size.height)"
+  }
+
   private func aspectChip(_ ratio: ProgramAspectRatio) -> some View {
     let selected = model.studioAspect == ratio
     return Button {
@@ -948,9 +1006,6 @@ struct GenerationStudioView: View {
     model.studioSettings.knobs
   }
 
-  private var isPortraitCanvas: Bool {
-    model.studioAspect.fraction < 1
-  }
 
   private var alignedFrames: Int {
     Self.h3MinimumFrames + Self.h3FrameChunk * Int(model.studioSettings.alignedDurationStep)
@@ -1032,19 +1087,25 @@ private struct GenerationProgressCanvas: View {
   var phase: String
   var elapsed: String
   var progress: Double
+  var remaining: String?
   var preview: CGImage?
 
   var body: some View {
     ZStack {
       Color(red: 23 / 255, green: 26 / 255, blue: 32 / 255)
       if let preview {
+        // Fit, not fill: filling reports an ideal size larger than the space
+        // offered, which grew this pane until the Cancel button below it was
+        // pushed out of the window. Fitting also shows the whole frame, which
+        // is the point of a preview.
         Image(decorative: preview, scale: 1)
           .resizable()
-          .scaledToFill()
+          .scaledToFit()
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
           .opacity(0.28)
       }
       VStack(spacing: 16) {
-        ScanningGauge(progress: progress)
+        ScanningGauge(progress: progress, remaining: remaining)
         VStack(spacing: 3) {
           Text(phase.isEmpty ? "Generating \(verb)…" : phase)
             .font(.system(size: 13.5, weight: .semibold))
@@ -1062,6 +1123,7 @@ private struct GenerationProgressCanvas: View {
 
 private struct ScanningGauge: View {
   var progress: Double
+  var remaining: String?
 
   var body: some View {
     TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
@@ -1103,8 +1165,16 @@ private struct ScanningGauge: View {
           .trim(from: 0, to: min(max(progress, 0.02), 1))
           .stroke(H3Color.accent, style: StrokeStyle(lineWidth: 16, lineCap: .butt))
           .rotationEffect(.degrees(-90))
-        Text("\(Int((progress * 100).rounded()))%")
-          .font(.system(size: 26, weight: .semibold, design: .monospaced))
+        VStack(spacing: 2) {
+          Text("\(Int((progress * 100).rounded()))%")
+            .font(.system(size: 26, weight: .semibold, design: .monospaced))
+          if let remaining {
+            Text(remaining)
+              .font(.system(size: 10, weight: .medium, design: .monospaced))
+              .foregroundStyle(H3Color.textSecondary)
+              .accessibilityIdentifier("generation-remaining")
+          }
+        }
       }
       .frame(width: 130, height: 130)
     }

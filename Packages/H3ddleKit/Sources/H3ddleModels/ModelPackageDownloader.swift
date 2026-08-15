@@ -377,6 +377,16 @@ public actor ModelPackageDownloader {
       || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
   }
 
+  /// Throws away a paused download's partial files. Pausing deliberately
+  /// keeps them so a resume costs nothing; discarding is the separate,
+  /// explicit act of reclaiming that disk.
+  public func discardStagedDownload(for manifest: ModelPackageManifest) throws {
+    let fileManager = FileManager.default
+    let stagingURL = store.stagingURL(for: manifest)
+    guard fileManager.fileExists(atPath: stagingURL.path) else { return }
+    try fileManager.removeItem(at: stagingURL)
+  }
+
   public func stagedByteCount(for manifest: ModelPackageManifest) throws -> Int64 {
     let stagingURL = store.stagingURL(for: manifest)
     var count: Int64 = 0

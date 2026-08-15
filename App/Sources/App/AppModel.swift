@@ -73,6 +73,8 @@ final class AppModel {
   var isGenerating = false
   var generationPhase = ""
   var generationProgress = 0.0
+  /// Completion across the whole run, as distinct from the current phase.
+  var generationOverallProgress = 0.0
   var generationElapsed: TimeInterval = 0
   var generationPreviewImage: CGImage?
   var generationPrompt = ""
@@ -107,6 +109,9 @@ final class AppModel {
   var managedModelStatusMessage: String { status(for: managedModel).message }
   var managedModelInstalledURL: URL? { status(for: managedModel).installedURL }
   var generationDurations: [AssetID: TimeInterval] = [:]
+  /// What each finished generation cost and used, kept so a result can still
+  /// describe itself after later runs have overwritten the live settings.
+  var generationStatistics: [AssetID: GenerationStatistics] = [:]
   var previewDenoise = false {
     didSet {
       userDefaults.set(previewDenoise, forKey: Self.previewDenoiseKey)
@@ -156,6 +161,7 @@ final class AppModel {
   private var modelDownloadTask: Task<Void, Never>?
   private var phaseTimeline = GenerationPhaseTimeline()
   private var activeGenerationSettings = ""
+  private var pendingStatistics: GenerationStatistics?
   private static let generationLog = Logger(
     subsystem: "com.h3ddle.app",
     category: "generation"
@@ -289,6 +295,7 @@ final class AppModel {
     errorMessage = nil
     generationPhase = ""
     generationProgress = 0
+    generationOverallProgress = 0
     generationElapsed = 0
     generationPreviewImage = nil
     activeGenerationKind = kind
@@ -404,6 +411,19 @@ final class AppModel {
       + (seed.map { " · seed \($0)" } ?? "")
 
 
+    pendingStatistics = GenerationStatistics(
+      kind: kind,
+      seconds: 0,
+      canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
+      canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
+      denoisingSteps: denoisingSteps ?? quality.denoisingSteps,
+      clipSeconds: duration,
+      modelName: selectedModelChoice?.displayName ?? "a local model folder",
+      blockCache: blockCache,
+      deviceName: modelReport?.device.name,
+      deviceMemoryBytes: modelReport?.device.physicalMemory
+    )
+
     let generationID = UUID()
     let clock = ContinuousClock()
     let startedAt = clock.now
@@ -474,6 +494,13 @@ final class AppModel {
           case .progress(let phase, let fractionComplete):
             generationPhase = phase
             generationProgress = fractionComplete
+            // The reported fraction is phase-local; the run's own position
+            // comes from the denoising step counter when one is present.
+            if let overall = GenerationRemaining.overallProgress(
+              phase: phase, phaseFraction: fractionComplete)
+            {
+              generationOverallProgress = overall
+            }
             phaseTimeline.record(
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
@@ -504,6 +531,30 @@ final class AppModel {
 
   var generationElapsedDescription: String {
     Self.formatElapsed(generationElapsed)
+  }
+
+  /// Time left, extrapolated from this run's own measured pace rather than
+  /// any hardware assumption, so it self-corrects as the run proceeds.
+  /// Withheld until enough progress exists for the estimate to mean
+  /// something — an early guess swings wildly and reads as a broken clock.
+  var generationRemainingDescription: String? {
+    guard isGenerating else { return nil }
+    if let remaining = GenerationRemaining.estimate(
+      elapsed: generationElapsed, progress: generationOverallProgress)
+    {
+      return GenerationRemaining.phrase(remaining)
+    }
+    // Denoising is done and the decoder is finishing: there is no step
+    // counter left to project from.
+    if generationOverallProgress >= 0.999 { return "finishing" }
+    // Too early to project — the first step has to land before the pace
+    // means anything. Say so rather than showing nothing, because a label
+    // that only appears minutes in looks like a fault.
+    return "calculating"
+  }
+
+  static func formatRemaining(_ remaining: TimeInterval) -> String {
+    GenerationRemaining.phrase(remaining)
   }
 
   var previewAsset: AssetReference? {
@@ -669,6 +720,14 @@ final class AppModel {
 
   func generationDurationDescription(for asset: AssetReference) -> String? {
     generationDurations[asset.id].map(Self.formatElapsed)
+  }
+
+  /// A plain-language account of how a result was produced, shaped to be
+  /// pasted into a post: what was made, how long it took, on what machine,
+  /// and the settings someone would need to compare against their own run.
+  func generationSummary(for asset: AssetReference) -> String? {
+    guard let statistics = generationStatistics[asset.id] else { return nil }
+    return statistics.socialSummary
   }
 
   var nativeVideoGenerationIsReady: Bool {
@@ -841,6 +900,33 @@ final class AppModel {
     for id in managedStatuses.keys where managedStatuses[id]?.downloadIsActive == true {
       managedStatuses[id]?.state = .cancelled
       managedStatuses[id]?.message = "Pausing… downloaded data will be kept."
+    }
+  }
+
+  /// Discards a paused download and reclaims its partial data. Distinct from
+  /// pausing, which keeps everything so resuming is free.
+  func discardManagedModelDownload(_ manifest: ModelPackageManifest) {
+    let downloader = modelDownloader
+    Task { [weak self] in
+      let staged = (try? await downloader.stagedByteCount(for: manifest)) ?? 0
+      do {
+        try await downloader.discardStagedDownload(for: manifest)
+        guard let self else { return }
+        var status = managedStatuses[manifest.id] ?? ManagedPackageStatus()
+        status.state = .available
+        status.progress = 0
+        status.completedBytes = 0
+        status.message = staged > 0
+          ? "Download discarded, "
+            + ByteCountFormatter.string(fromByteCount: staged, countStyle: .file)
+            + " freed."
+          : "Download discarded."
+        status.installedURL = nil
+        managedStatuses[manifest.id] = status
+      } catch {
+        self?.errorMessage =
+          "Could not discard the download: \(error.localizedDescription)"
+      }
     }
   }
 
@@ -1486,8 +1572,13 @@ final class AppModel {
     }
     if let completedAssetID {
       generationDurations[completedAssetID] = elapsed
+      if var statistics = pendingStatistics {
+        statistics.seconds = elapsed
+        generationStatistics[completedAssetID] = statistics
+      }
       DockAttention.markGenerationFinished()
     }
+    pendingStatistics = nil
     activeGenerationID = nil
     generationStartedAt = nil
     generationTask = nil
@@ -1553,14 +1644,13 @@ final class AppModel {
     return Double(components.seconds) + Double(components.attoseconds) / 1e18
   }
 
+  /// Whole seconds: tenths imply a precision that varies more than that
+  /// between identical runs, and they add noise to a number people read at a
+  /// glance or paste into a post.
   private static func formatElapsed(_ elapsed: TimeInterval) -> String {
-    let elapsed = max(0, elapsed)
-    if elapsed < 60 {
-      return String(format: "%.1f s", elapsed)
-    }
-    let minutes = Int(elapsed) / 60
-    let seconds = elapsed - Double(minutes * 60)
-    return String(format: "%d:%04.1f", minutes, seconds)
+    let total = Int(max(0, elapsed).rounded())
+    if total < 60 { return "\(total) s" }
+    return String(format: "%d:%02d", total / 60, total % 60)
   }
 
 }
