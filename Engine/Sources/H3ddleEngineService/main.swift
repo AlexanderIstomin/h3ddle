@@ -631,13 +631,14 @@ private final class EngineRuntime: @unchecked Sendable {
       }
 
       var parameters = h3ddle_h3_default_params()
-      // Community stills are a short H3 clip plus one decoded frame. h3.c
-      // rejects anything below one trained 22-frame VAE chunk.
+      // Community stills ride the trained 5-frame first chunk — the shortest
+      // legal H3 clip, about a third of the 22-frame sequence cost — and
+      // decode one representative frame.
       // Community audio is the same joint model rendered for its soundtrack.
       let stillRequested = request.kind == .image
       let audioRequested = request.kind == .audio
       parameters.frames =
-        stillRequested ? 22 : h3ddle_h3_frames_for_seconds(request.duration)
+        stillRequested ? 5 : h3ddle_h3_frames_for_seconds(request.duration)
       // A still keeps one frame, so decode one instead of the whole clip.
       parameters.still_frame_only = stillRequested ? 1 : 0
       // An audio job keeps no pictures at all, so skip the video decoder and
