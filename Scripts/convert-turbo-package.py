@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import mmap
+import os
 import struct
 import sys
 
@@ -167,7 +168,10 @@ def main():
                 "__metadata__": {
                     "base_model": "MiniMax-H3-pruned",
                     "conversion": "h3ddle convert-turbo-package.py",
-                    "lora": args.lora or "none",
+                    # Basename only: the full path names a directory on
+                    # whoever ran the conversion, and this metadata ships
+                    # inside a published file.
+                    "lora": os.path.basename(args.lora) if args.lora else "none",
                     "lora_strength": str(args.strength),
                 },
                 **header,

@@ -1094,7 +1094,11 @@ final class AppModel {
           subtitle: "Local folder",
           source: .localFolder(bookmark: bookmark),
           directory: url,
-          generationProfile: .standard
+          // A hand-added folder has no manifest to declare its profile, so
+          // ask the weights: a converted turbo checkpoint records the merge
+          // in its safetensors metadata. Without this, distilled weights run
+          // on the wrong schedule with no visible sign.
+          generationProfile: ModelFolderInspection.generationProfile(at: url)
         )
       )
     }
