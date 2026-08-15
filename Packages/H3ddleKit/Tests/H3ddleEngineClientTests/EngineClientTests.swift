@@ -138,18 +138,31 @@ struct EngineClientTests {
       session: session,
       modelDirectory: URL(fileURLWithPath: "/tmp/model", isDirectory: true)
     )
+    // The fake helper emits one progress event and then holds; cancelling on
+    // that event guarantees the job is in flight at any machine speed, where
+    // a timed sleep raced slow runners.
+    let (inFlight, inFlightSignal) = AsyncStream.makeStream(of: Void.self)
     let generation = Task {
       do {
         for try await _ in provider.events(
           for: GenerationRequest(kind: .video, prompt: "Hard cancel", duration: 1)
-        ) {}
+        ) {
+          inFlightSignal.yield(())
+        }
       } catch {}
+      inFlightSignal.finish()
     }
 
-    try await Task.sleep(for: .milliseconds(150))
+    var signals = inFlight.makeAsyncIterator()
+    _ = await signals.next()
     generation.cancel()
-    try await Task.sleep(for: .milliseconds(200))
     await generation.value
+    // The ignored cancel escalates to SIGKILL on an internal timer; wait for
+    // the process to actually die rather than sleeping past the timer.
+    for _ in 0..<200 where session.processIdentifier != nil {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(session.processIdentifier == nil)
 
     _ = try await session.capabilities()
     #expect(session.processIdentifier != nil)

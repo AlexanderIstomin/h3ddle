@@ -73,6 +73,12 @@ for raw in sys.stdin:
         accepted["capabilities"] = CAPABILITIES
         emit(accepted)
         if HOLD_GENERATE:
+            # One progress event before holding, so tests can synchronize on
+            # the job being in flight instead of sleeping and hoping.
+            progress = base(command, "progress")
+            progress["phase"] = "holding"
+            progress["fractionComplete"] = 0
+            emit(progress)
             continue
         generation = command.get("generation") or {}
         completed = base(command, "completed")
