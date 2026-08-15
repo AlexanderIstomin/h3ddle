@@ -53,8 +53,9 @@ measured across 32, 64, 128, and 256 square.
 - macOS 15 or newer
 - Xcode 26 or newer
 - XcodeGen 2.46 or newer
-- FFmpeg and FFprobe for real video generation and for reference media inputs;
-  audio generation writes its own WAV and needs neither
+- FFmpeg and FFprobe are optional. Generation, muxing, and the reference
+  media a Mac usually holds all go through the system frameworks; FFmpeg is
+  only consulted for containers those decline, such as Matroska
 
 ## Build
 

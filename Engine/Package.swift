@@ -35,6 +35,7 @@ let package = Package(
         "Vendor/h3.c/h3_metal.m",
         "Vendor/h3.c/h3_gpu.m",
         "Vendor/h3.c/h3_avwriter.m",
+        "Vendor/h3.c/h3_avreader.m",
         "Vendor/h3.c/h3_tokenizer.m",
       ],
       publicHeadersPath: "Sources/H3Native/include",
@@ -55,6 +56,8 @@ let package = Package(
         .linkedFramework("CoreVideo"),
         .linkedFramework("VideoToolbox"),
         .linkedFramework("AudioToolbox"),
+        .linkedFramework("ImageIO"),
+        .linkedFramework("CoreGraphics"),
         .linkedLibrary("icucore"),
         .linkedLibrary("m"),
       ]
