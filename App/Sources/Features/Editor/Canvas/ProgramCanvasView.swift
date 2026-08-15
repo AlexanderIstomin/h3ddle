@@ -1,4 +1,3 @@
-import AVFoundation
 import AppKit
 import H3ddleCore
 import H3ddleDesignSystem
@@ -7,12 +6,14 @@ import SwiftUI
 
 struct ProgramCanvasView: View {
   @Bindable var model: AppModel
+  @Binding var clipMenu: ClipMenuPlacement?
   @State private var viewport = CanvasViewport()
   @State private var lastPan: CGSize = .zero
   @State private var pinchBase: CGFloat?
   @State private var pointerInside = false
   @State private var eventMonitor: Any?
-  @State private var videoNaturalSizes: [URL: CGSize] = [:]
+  @State private var presenter = ProgramFramePresenter()
+  @State private var monitorSize: CGSize = .zero
 
   var body: some View {
     GeometryReader { proxy in
@@ -38,29 +39,44 @@ struct ProgramCanvasView: View {
           .simultaneousGesture(magnifyGesture)
           .simultaneousGesture(resetGesture)
           .onHover { pointerInside = $0 }
+          .overlay {
+            GeometryReader { proxy in
+              SecondaryClickProbe { local in
+                presentClipMenu(
+                  at: CGPoint(
+                    x: proxy.frame(in: .named("editor-root")).minX + local.x,
+                    y: proxy.frame(in: .named("editor-root")).minY + local.y
+                  )
+                )
+              }
+            }
+          }
           .accessibilityIdentifier("program-preview")
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .onAppear {
-      syncPlayback()
+      refreshPreview()
       installPanMonitor()
     }
     .onDisappear(perform: removePanMonitor)
     .onChange(of: model.playback.clock.currentTime) { _, _ in
-      syncPlayback()
+      refreshPreview()
     }
     .onChange(of: model.project.timeline) { _, _ in
-      syncPlayback()
+      refreshPreview()
     }
     .onChange(of: model.project.settings) { _, _ in
-      syncPlayback()
+      refreshPreview()
     }
     .onChange(of: model.visualLaneAudible) { _, _ in
-      syncPlayback()
+      refreshPreview()
     }
     .onChange(of: model.audioLaneAudible) { _, _ in
-      syncPlayback()
+      refreshPreview()
+    }
+    .onChange(of: monitorSize) { _, _ in
+      refreshPreview()
     }
   }
 
@@ -76,39 +92,24 @@ struct ProgramCanvasView: View {
       RoundedRectangle(cornerRadius: 4, style: .continuous)
         .stroke(H3Color.line, lineWidth: 1)
     }
+    .background {
+      GeometryReader { proxy in
+        Color.clear.preference(key: MonitorSizeKey.self, value: proxy.size)
+      }
+    }
+    .onPreferenceChange(MonitorSizeKey.self) { monitorSize = $0 }
   }
 
   @ViewBuilder
   private var mediaSurface: some View {
-    switch currentFrame.visual {
-    case .video(let asset, _, _):
-      PlacedCanvasMedia(
-        source: videoNaturalSizes[asset.url] ?? CGSize(width: 16, height: 9),
-        transform: currentFrame.visualTransform
-      ) {
-        ProgramPlayerLayer(player: model.playback.visualPlayer)
-      }
-      .task(id: asset.url) {
-        await rememberVideoSize(asset.url)
-      }
-    case .image(let asset):
-      if let image = NSImage(contentsOf: asset.url) {
-        PlacedCanvasMedia(source: image.size, transform: currentFrame.visualTransform) {
-          Image(nsImage: image)
-            .resizable()
-        }
-      }
-    case .empty:
-      if model.project.timeline.visualItems.isEmpty {
-        emptyState
-      }
+    if model.project.timeline.visualItems.isEmpty {
+      emptyState
+    } else if let image = presenter.image {
+      Image(nsImage: image)
+        .resizable()
+        .interpolation(.high)
+        .scaledToFit()
     }
-  }
-
-  private func rememberVideoSize(_ url: URL) async {
-    if videoNaturalSizes[url] != nil { return }
-    guard let size = await MediaSourceSize.video(at: url) else { return }
-    videoNaturalSizes[url] = size
   }
 
   @ViewBuilder
@@ -132,6 +133,20 @@ struct ProgramCanvasView: View {
         .foregroundStyle(H3Color.textSecondary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func presentClipMenu(at origin: CGPoint) {
+    let time = model.playback.clock.currentTime
+    guard
+      let id = model.project.timeline.visualPlacements.last(where: { placement in
+        time >= placement.startTime
+          && time < placement.startTime + placement.item.duration
+      })?.item.id
+    else {
+      return
+    }
+    model.selectedTimelineItem = .visual(id)
+    clipMenu = ClipMenuPlacement(target: .visual(id), origin: origin)
   }
 
   private var panGesture: some Gesture {
@@ -199,36 +214,42 @@ struct ProgramCanvasView: View {
     }
   }
 
-  private var currentFrame: ProgramPreviewFrame {
-    ProgramPreview.frame(
-      at: model.playback.clock.currentTime,
-      project: model.project,
-      visualMuted: !model.visualLaneAudible,
-      audioMuted: !model.audioLaneAudible
-    )
-  }
-
-  private func syncPlayback() {
+  private func refreshPreview() {
     model.playback.sync(
       project: model.project,
       visualMuted: !model.visualLaneAudible,
       audioMuted: !model.audioLaneAudible
     )
+    guard !model.project.timeline.visualItems.isEmpty else {
+      presenter.clear()
+      return
+    }
+    let frame = ProgramPreview.frame(
+      at: model.playback.clock.currentTime,
+      project: model.project,
+      visualMuted: !model.visualLaneAudible,
+      audioMuted: !model.audioLaneAudible
+    )
+    presenter.render(
+      frame: frame,
+      canvas: canvasSize,
+      scale: NSScreen.main?.backingScaleFactor ?? 2,
+      background: model.project.settings.background,
+      videoFrame: nil
+    )
+  }
+
+  private var canvasSize: CGSize {
+    if monitorSize.width > 2, monitorSize.height > 2 { return monitorSize }
+    let aspect = max(model.project.settings.aspectFraction, 0.3)
+    return CGSize(width: 1_280, height: 1_280 / aspect)
   }
 }
 
-private enum MediaSourceSize {
-  static func video(at url: URL) async -> CGSize? {
-    let asset = AVURLAsset(url: url)
-    guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
-      return nil
-    }
-    let natural = (try? await track.load(.naturalSize)) ?? .zero
-    let transform = (try? await track.load(.preferredTransform)) ?? .identity
-    let mapped = natural.applying(transform)
-    let width = abs(mapped.width)
-    let height = abs(mapped.height)
-    guard width > 1, height > 1 else { return nil }
-    return CGSize(width: width, height: height)
+private struct MonitorSizeKey: PreferenceKey {
+  static let defaultValue: CGSize = .zero
+
+  static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+    value = nextValue()
   }
 }

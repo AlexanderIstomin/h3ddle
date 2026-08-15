@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import H3ddleCore
 import H3ddleMedia
 import Observation
@@ -14,6 +15,7 @@ final class ProgramPlaybackController {
   private var currentVisualURL: URL?
   private var currentAudioURL: URL?
   private var lastVideoLocalTime: TimeInterval = 0
+  private var videoOutput: AVPlayerItemVideoOutput?
 
   var isPlaying: Bool { clock.isPlaying }
 
@@ -95,8 +97,25 @@ final class ProgramPlaybackController {
     pause()
     visualPlayer.replaceCurrentItem(with: nil)
     audioPlayer.replaceCurrentItem(with: nil)
+    videoOutput = nil
     currentVisualURL = nil
     currentAudioURL = nil
+  }
+
+  /// Live picture from the playing item, if it is still on `localTime`.
+  func copyVisualVideoImage(matching localTime: TimeInterval) -> CGImage? {
+    guard let videoOutput else { return nil }
+    let itemTime = visualPlayer.currentTime()
+    guard itemTime.isNumeric, abs(itemTime.seconds - localTime) < 0.08 else { return nil }
+    guard
+      let buffer = videoOutput.copyPixelBuffer(
+        forItemTime: itemTime,
+        itemTimeForDisplay: nil
+      )
+    else {
+      return nil
+    }
+    return ProgramCompositor.makeImage(from: buffer)
   }
 
   private func startTicking(duration: TimeInterval) {
@@ -141,6 +160,7 @@ final class ProgramPlaybackController {
       visualPlayer.pause()
       if currentVisualURL != nil {
         currentVisualURL = nil
+        videoOutput = nil
         visualPlayer.replaceCurrentItem(with: nil)
       }
     }
@@ -176,7 +196,15 @@ final class ProgramPlaybackController {
   private func replaceVisualItemIfNeeded(url: URL) -> Bool {
     guard currentVisualURL != url else { return false }
     currentVisualURL = url
-    visualPlayer.replaceCurrentItem(with: AVPlayerItem(url: url))
+    let item = AVPlayerItem(url: url)
+    let output = AVPlayerItemVideoOutput(
+      pixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+      ]
+    )
+    item.add(output)
+    videoOutput = output
+    visualPlayer.replaceCurrentItem(with: item)
     return true
   }
 

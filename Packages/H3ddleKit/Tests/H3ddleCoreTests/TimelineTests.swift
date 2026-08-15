@@ -379,6 +379,106 @@ struct TimelineTests {
     #expect(decoded.duration == 4)
     #expect(decoded.canvasFit == .fit)
     #expect(decoded.rotationTurns == 0)
+    #expect(decoded.transition == nil)
+  }
+
+  @Test("A transition lives on an adjacent incoming cut and is clamped")
+  func visualTransitionOnAdjacentCut() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "A", duration: 2))
+    let second = try timeline.appendVisual(videoAsset(name: "B", duration: 1))
+    #expect(!timeline.canApplyVisualTransition(first.id))
+    #expect(timeline.canApplyVisualTransition(second.id))
+    #expect(timeline.maximumVisualTransitionDuration(of: second.id) == 1)
+
+    timeline.setVisualTransition(
+      second.id,
+      VisualTransition(kind: .wipe, duration: 4)
+    )
+    #expect(timeline.visualItems[1].transition?.kind == .wipe)
+    #expect(abs((timeline.visualItems[1].transition?.duration ?? 0) - 1) < 0.000_1)
+    #expect(abs(timeline.transitionOverlap(of: second.id) - 1) < 0.000_1)
+    #expect(abs(timeline.visualPlacements[1].startTime - 1) < 0.000_1)
+    #expect(abs(timeline.visualDuration - 2) < 0.000_1)
+
+    timeline.setVisualTrim(
+      second.id,
+      VisualTrim(duration: 1, sourceOffset: 0, gapBefore: 0.2)
+    )
+    #expect(!timeline.canApplyVisualTransition(second.id))
+    #expect(timeline.transitionOverlap(of: second.id) == 0)
+
+    timeline.setVisualTrim(second.id, VisualTrim(duration: 1, sourceOffset: 0, gapBefore: 0))
+    _ = timeline.splitVisual(second.id, at: 1.5, sourceKind: .video, framesPerSecond: 24)
+    #expect(timeline.visualItems[1].transition?.kind == .wipe)
+    #expect(timeline.visualItems[2].transition == nil)
+  }
+
+  @Test("A transition overlaps the incoming clip into the outgoing tail")
+  func transitionOverlapsIncomingIntoOutgoing() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "A", duration: 4))
+    let second = try timeline.appendVisual(videoAsset(name: "B", duration: 4))
+    timeline.setVisualTransition(second.id, VisualTransition(kind: .dissolve, duration: 1))
+    #expect(abs(timeline.visualPlacements[0].startTime) < 0.000_1)
+    #expect(abs(timeline.visualPlacements[1].startTime - 3) < 0.000_1)
+    #expect(abs(timeline.visualDuration - 7) < 0.000_1)
+    #expect(timeline.visualItems[0].id == first.id)
+    timeline.setVisualTransition(second.id, nil)
+    #expect(abs(timeline.visualPlacements[1].startTime - 4) < 0.000_1)
+    #expect(abs(timeline.visualDuration - 8) < 0.000_1)
+  }
+
+  @Test("Legacy visual items decode without a transition")
+  func decodesLegacyVisualTransition() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 3,
+      includesNativeAudio: true,
+      transition: VisualTransition(kind: .dissolve, duration: 0.4)
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "transition")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.transition == nil)
+    #expect(decoded.effects.isEmpty)
+  }
+
+  @Test("Visual effects append, persist, and copy on split")
+  func visualEffectsCopyOnSplit() throws {
+    var timeline = ProjectTimeline()
+    let video = videoAsset(name: "Shot", duration: 4)
+    let item = try timeline.appendVisual(video)
+    let added = timeline.addVisualEffect(item.id, kind: .vignette)
+    #expect(added?.kind == .vignette)
+    #expect(timeline.visualItems[0].effects.count == 1)
+
+    _ = timeline.splitVisual(item.id, at: 2, sourceKind: .video, framesPerSecond: 24)
+    #expect(timeline.visualItems[0].effects.count == 1)
+    #expect(timeline.visualItems[1].effects.count == 1)
+    #expect(timeline.visualItems[0].effects[0].id != timeline.visualItems[1].effects[0].id)
+    #expect(timeline.visualItems[1].effects[0].kind == .vignette)
+
+    timeline.removeVisualEffect(item.id, effectID: timeline.visualItems[0].effects[0].id)
+    #expect(timeline.visualItems[0].effects.isEmpty)
+  }
+
+  @Test("Legacy visual items decode without effects")
+  func decodesLegacyVisualEffects() throws {
+    let item = VisualItem(
+      assetID: AssetID(),
+      duration: 3,
+      includesNativeAudio: true,
+      effects: [VisualEffectInstance(kind: .blur)]
+    )
+    var encoded = try JSONEncoder().encode(item)
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "effects")
+    encoded = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(VisualItem.self, from: encoded)
+    #expect(decoded.effects.isEmpty)
   }
 
   @Test("Visual canvas fit and rotation persist and wrap")
@@ -408,6 +508,153 @@ struct TimelineTests {
     #expect(timeline.visualItems[1].canvasFit == .cover)
     #expect(timeline.visualItems[0].rotationTurns == 1)
     #expect(timeline.visualItems[1].rotationTurns == 1)
+  }
+
+  @Test("Duplicate inserts a visual copy after the original")
+  func duplicatesVisualAfterOriginal() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "Shot", duration: 4))
+    try timeline.appendVisual(videoAsset(name: "Next", duration: 3))
+    timeline.setVisualCanvasFit(first.id, .cover)
+    timeline.rotateVisual(first.id)
+    timeline.setVisualTrim(
+      first.id,
+      VisualTrim(duration: 3.5, sourceOffset: 0.5, gapBefore: 0)
+    )
+    _ = timeline.addVisualEffect(first.id, kind: .vignette)
+    timeline.setVisualTransition(
+      timeline.visualItems[1].id,
+      VisualTransition(kind: .dissolve, duration: 0.4)
+    )
+
+    let copy = timeline.duplicateVisual(first.id)
+    #expect(copy != nil)
+    #expect(timeline.visualItems.count == 3)
+    #expect(timeline.visualItems[0].id == first.id)
+    #expect(timeline.visualItems[1].id == copy?.id)
+    #expect(timeline.visualItems[1].assetID == first.assetID)
+    #expect(timeline.visualItems[1].id != first.id)
+    #expect(abs(timeline.visualItems[1].duration - 3.5) < 0.000_1)
+    #expect(abs(timeline.visualItems[1].sourceOffset - 0.5) < 0.000_1)
+    #expect(timeline.visualItems[1].gapBefore == 0)
+    #expect(timeline.visualItems[1].canvasFit == .cover)
+    #expect(timeline.visualItems[1].rotationTurns == 1)
+    #expect(timeline.visualItems[1].includesNativeAudio)
+    #expect(timeline.visualItems[1].transition == nil)
+    #expect(timeline.visualItems[1].effects.count == 1)
+    #expect(timeline.visualItems[1].effects[0].id != timeline.visualItems[0].effects[0].id)
+    #expect(timeline.visualItems[2].transition?.kind == .dissolve)
+    #expect(abs(timeline.visualDuration - 9.6) < 0.000_1)
+  }
+
+  @Test("Visual reorder shuffles order and drops stale transitions")
+  func reordersVisualItems() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "A", duration: 2))
+    let second = try timeline.appendVisual(videoAsset(name: "B", duration: 3))
+    let third = try timeline.appendVisual(videoAsset(name: "C", duration: 4))
+    timeline.setVisualTransition(second.id, VisualTransition(kind: .wipe, duration: 0.5))
+    timeline.setVisualTransition(third.id, VisualTransition(kind: .fade, duration: 0.5))
+
+    timeline.moveVisual(first.id, toIndex: 2)
+    #expect(timeline.visualItems.map(\.id) == [second.id, third.id, first.id])
+    #expect(timeline.visualItems[0].transition == nil)
+    #expect(timeline.visualItems[1].transition?.kind == .fade)
+    #expect(timeline.visualItems[2].transition == nil)
+    #expect(abs(timeline.visualDuration - 8.5) < 0.000_1)
+
+    timeline.moveVisual(first.id, toIndex: 0)
+    #expect(timeline.visualItems.map(\.id) == [first.id, second.id, third.id])
+
+    timeline.moveVisual(first.id, toIndex: 0)
+    #expect(timeline.visualItems.map(\.id) == [first.id, second.id, third.id])
+  }
+
+  @Test("Removing the outgoing visual drops the incoming transition")
+  func removeVisualDropsFollowerTransition() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendVisual(videoAsset(name: "A", duration: 2))
+    let second = try timeline.appendVisual(videoAsset(name: "B", duration: 2))
+    timeline.setVisualTransition(second.id, VisualTransition(kind: .dissolve, duration: 0.5))
+    timeline.removeVisual(first.id)
+    #expect(timeline.visualItems.map(\.id) == [second.id])
+    #expect(timeline.visualItems[0].transition == nil)
+  }
+
+  @Test("Duplicate audio sits after the source and only ripples when needed")
+  func duplicatesAudioAfterSource() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendAudio(audioAsset(name: "One", duration: 4))
+    let packed = try timeline.appendAudio(audioAsset(name: "Two", duration: 3))
+    let copy = timeline.duplicateAudio(first.id)
+    #expect(copy != nil)
+    #expect(timeline.audioItems[0].id == first.id)
+    #expect(timeline.audioItems[1].id == copy?.id)
+    #expect(abs(timeline.audioItems[1].startTime - 4) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].duration - 4) < 0.000_1)
+    #expect(timeline.audioItems[1].sourceOffset == 0)
+    #expect(abs(timeline.audioItems[2].startTime - 8) < 0.000_1)
+    #expect(timeline.audioItems[2].id == packed.id)
+
+    var gapped = ProjectTimeline()
+    let early = try gapped.appendAudio(audioAsset(name: "Early", duration: 2))
+    let late = try gapped.appendAudio(audioAsset(name: "Late", duration: 2))
+    gapped.setAudioTrim(
+      late.id,
+      AudioTrim(startTime: 6, duration: 2, sourceOffset: 0)
+    )
+    _ = gapped.duplicateAudio(early.id)
+    #expect(abs(gapped.audioItems[1].startTime - 2) < 0.000_1)
+    #expect(abs(gapped.audioItems[2].startTime - 6) < 0.000_1)
+  }
+
+  @Test("Audio start slides inside neighbor bounds")
+  func slidesAudioInsideNeighbors() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendAudio(audioAsset(name: "One", duration: 3))
+    let second = try timeline.appendAudio(audioAsset(name: "Two", duration: 3))
+    timeline.setAudioTrim(
+      second.id,
+      AudioTrim(startTime: 5, duration: 3, sourceOffset: 0)
+    )
+
+    timeline.setAudioStart(first.id, startTime: 1)
+    #expect(abs(timeline.audioItems[0].startTime - 1) < 0.000_1)
+
+    timeline.setAudioStart(first.id, startTime: 4)
+    #expect(abs(timeline.audioItems[0].startTime - 2) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].startTime - 5) < 0.000_1)
+  }
+
+  @Test("Audio reorder packs the lane from its leftmost start")
+  func reordersAudioItems() throws {
+    var timeline = ProjectTimeline()
+    let first = try timeline.appendAudio(audioAsset(name: "One", duration: 2))
+    let second = try timeline.appendAudio(audioAsset(name: "Two", duration: 3))
+    let third = try timeline.appendAudio(audioAsset(name: "Three", duration: 4))
+
+    timeline.moveAudio(first.id, toIndex: 2)
+    #expect(timeline.audioItems.map(\.id) == [second.id, third.id, first.id])
+    #expect(abs(timeline.audioItems[0].startTime) < 0.000_1)
+    #expect(abs(timeline.audioItems[1].startTime - 3) < 0.000_1)
+    #expect(abs(timeline.audioItems[2].startTime - 7) < 0.000_1)
+    #expect(abs(timeline.audioTrackEnd - 9) < 0.000_1)
+
+    timeline.moveAudio(first.id, toIndex: 2)
+    #expect(timeline.audioItems.map(\.id) == [second.id, third.id, first.id])
+  }
+
+  @Test("Reorder math uses midpoints of the remaining clips")
+  func reorderDestinationUsesMidpoints() {
+    let others: [(start: TimeInterval, duration: TimeInterval)] = [
+      (0, 2),
+      (2, 2),
+      (4, 2),
+    ]
+    #expect(TimelineReorderMath.destinationIndex(dropTime: 0.4, others: others) == 0)
+    #expect(TimelineReorderMath.destinationIndex(dropTime: 2.2, others: others) == 1)
+    #expect(TimelineReorderMath.destinationIndex(dropTime: 5.2, others: others) == 3)
+    #expect(TimelineReorderMath.destinationIndex(dropTime: 1, others: []) == 0)
   }
 
   @Test("Legacy visual items decode without canvas fields")

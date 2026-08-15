@@ -14,9 +14,9 @@ this repository.
   protocol.
 - Keep UI development and CI independent from model weights through fake
   generation providers.
-- Visual and audio tracks share one clock. Visual items are ordered and
-  append-only. Audio items store explicit start times even while the UI only
-  supports append operations.
+- Visual and audio tracks share one clock. Visual items are ordered; start
+  times are derived from that order. Audio items store explicit start times.
+  Both lanes support append, duplicate, and reorder.
 
 ## Quality
 

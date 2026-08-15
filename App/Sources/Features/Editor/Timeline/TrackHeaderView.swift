@@ -1,3 +1,4 @@
+import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleMedia
 import SwiftUI
@@ -10,11 +11,20 @@ enum TimelineChrome {
   static let effectLaneHeight: CGFloat = 24
   static let appendButtonSize: CGFloat = 36
 
-  static func bodyHeight(showsEffectLanes: Bool) -> CGFloat {
+  static func bodyHeight(showsEffectLanes: Bool, expandedEffectCount: Int = 0) -> CGFloat {
     rulerHeight
       + visualLaneHeight
       + audioLaneHeight
-      + (showsEffectLanes ? effectLaneHeight * 2 : 0)
+      + effectLanesHeight(
+        showsEffectLanes: showsEffectLanes,
+        expandedEffectCount: expandedEffectCount
+      )
+  }
+
+  static func effectLanesHeight(showsEffectLanes: Bool, expandedEffectCount: Int) -> CGFloat {
+    guard showsEffectLanes else { return 0 }
+    let extra = expandedEffectCount > 0 ? expandedEffectCount : 0
+    return effectLaneHeight * CGFloat(1 + extra)
   }
 }
 
@@ -39,6 +49,11 @@ struct TrackHeaderColumn: View {
 
       if model.showsEffectLanes {
         effectHeader
+        if model.fxLanesExpanded {
+          ForEach(model.effectLaneItems) { item in
+            effectInstanceHeader(item)
+          }
+        }
       }
       TrackHeaderView(
         code: "V1",
@@ -49,9 +64,6 @@ struct TrackHeaderColumn: View {
         onToggleEnabled: { model.visualTrackMuted.toggle() }
       )
       .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-header-drop")
-      if model.showsEffectLanes {
-        effectHeader
-      }
       TrackHeaderView(
         code: "A1",
         title: "Audio",
@@ -70,16 +82,88 @@ struct TrackHeaderColumn: View {
   }
 
   private var effectHeader: some View {
-    HStack {
+    HStack(spacing: 5) {
+      Image(systemName: "sparkle")
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(Color(red: 47 / 255, green: 179 / 255, blue: 191 / 255))
       Text("FX")
         .font(.system(size: 8, weight: .bold, design: .monospaced))
         .tracking(1.4)
         .foregroundStyle(H3Color.textSecondary.opacity(0.7))
-      Spacer()
+      Spacer(minLength: 2)
+      if !model.effectLaneItems.isEmpty {
+        Button {
+          model.fxLanesExpanded.toggle()
+        } label: {
+          Image(systemName: model.fxLanesExpanded ? "chevron.up" : "chevron.down")
+            .font(.system(size: 8, weight: .bold))
+            .frame(width: 16, height: 16)
+            .background(H3Color.controlFill)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(H3Color.textSecondary)
+        .help(model.fxLanesExpanded ? "Collapse FX lanes" : "Expand FX lanes")
+        .accessibilityIdentifier("fx-expand")
+        .accessibilityLabel(model.fxLanesExpanded ? "Collapse FX lanes" : "Expand FX lanes")
+      }
+      Button {
+        model.openEffectsCatalog()
+      } label: {
+        Image(systemName: "plus")
+          .font(.system(size: 10, weight: .semibold))
+          .frame(width: 16, height: 16)
+          .background(H3Color.controlFill)
+          .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(H3Color.textSecondary)
+      .disabled(model.visualTrackMuted || model.project.timeline.visualItems.isEmpty)
+      .opacity(model.visualTrackMuted || model.project.timeline.visualItems.isEmpty ? 0.34 : 1)
+      .help(
+        model.project.timeline.visualItems.isEmpty
+          ? "Add a visual clip to apply effects"
+          : "Add effect"
+      )
+      .accessibilityIdentifier("append-effect")
     }
     .padding(.horizontal, 8)
     .frame(width: TimelineChrome.headerWidth, height: TimelineChrome.effectLaneHeight)
-    .background(H3Color.hairSoft)
+    .background(Color.white.opacity(0.045))
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(H3Color.hairSoft).frame(height: 1)
+    }
+    .opacity(model.visualTrackMuted ? 0.55 : 1)
+  }
+
+  private func effectInstanceHeader(_ item: EffectLaneItem) -> some View {
+    Button {
+      model.openEffectSettings(clipID: item.clipID, effectID: item.effect.id)
+    } label: {
+      HStack(spacing: 7) {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+          .fill(item.effect.kind.swatch)
+          .frame(width: 9, height: 9)
+        Text(item.effect.kind.label)
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .lineLimit(1)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 11)
+      .frame(width: TimelineChrome.headerWidth, height: TimelineChrome.effectLaneHeight, alignment: .leading)
+      .background(
+        model.selectedEffectID == item.effect.id
+          ? H3Color.controlHover
+          : Color.white.opacity(0.045)
+      )
+      .overlay(alignment: .bottom) {
+        Rectangle().fill(H3Color.hairSoft).frame(height: 1)
+      }
+    }
+    .buttonStyle(.plain)
+    .opacity(model.visualTrackMuted ? 0.55 : 1)
+    .accessibilityIdentifier("fx-effect-row")
   }
 }
 

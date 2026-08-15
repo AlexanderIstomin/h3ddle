@@ -18,9 +18,13 @@ struct EditorView: View {
         HStack(spacing: 0) {
           if model.showsProjectSettings {
             ProjectSettingsPanel(model: model)
+          } else if model.showsTransitionsPanel {
+            TransitionsPanelView(model: model)
+          } else if model.showsEffectsPanel {
+            EffectsPanelView(model: model)
           }
           VStack(spacing: 0) {
-            ProgramCanvasView(model: model)
+            ProgramCanvasView(model: model, clipMenu: $clipMenu)
               .frame(maxWidth: .infinity, maxHeight: .infinity)
             VStack(spacing: 0) {
               TransportBarView(model: model)
@@ -79,6 +83,13 @@ struct EditorView: View {
       model.splitSelectedAtPlayhead()
       return .handled
     }
+    .onKeyPress(keys: ["d", "D"], phases: .down) { press in
+      guard press.modifiers.contains(.command) else { return .ignored }
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      guard model.selectedTimelineItem != nil else { return .ignored }
+      model.duplicateSelectedTimelineItem()
+      return .handled
+    }
     .onKeyPress(.delete) {
       guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
       guard model.selectedTimelineItem != nil else { return .ignored }
@@ -95,6 +106,15 @@ struct EditorView: View {
       if clipMenu != nil || appendMenu != nil {
         clipMenu = nil
         appendMenu = nil
+        return .handled
+      }
+      if model.showsEffectsPanel {
+        model.showsEffectsPanel = false
+        model.selectedEffectID = nil
+        return .handled
+      }
+      if model.showsTransitionsPanel {
+        model.closeTransitionsPanel()
         return .handled
       }
       return .ignored
@@ -227,6 +247,8 @@ struct EditorView: View {
     case .visual(let id):
       model.selectedTimelineItem = .visual(id)
       switch action {
+      case .duplicate:
+        model.duplicateVisual(id)
       case .toggleEnabled:
         model.toggleVisual(id)
       case .toggleNativeAudio:
@@ -245,6 +267,8 @@ struct EditorView: View {
     case .audio(let id):
       model.selectedTimelineItem = .audio(id)
       switch action {
+      case .duplicate:
+        model.duplicateAudio(id)
       case .toggleEnabled:
         model.toggleAudio(id)
       case .split:
@@ -281,7 +305,13 @@ struct EditorView: View {
           .accessibilityIdentifier("editor-root")
 
         Button {
-          model.showsProjectSettings.toggle()
+          if model.showsProjectSettings {
+            model.showsProjectSettings = false
+          } else {
+            model.showsEffectsPanel = false
+            model.closeTransitionsPanel()
+            model.showsProjectSettings = true
+          }
         } label: {
           Image(systemName: "slider.vertical.3")
         }

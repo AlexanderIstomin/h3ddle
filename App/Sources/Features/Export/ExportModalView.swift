@@ -695,36 +695,30 @@ struct ExportModalView: View {
 private struct ExportPosterView: View {
   let project: H3ddleProject
   let time: TimeInterval
-  @State private var videoImage: NSImage?
+  @State private var presenter = ProgramFramePresenter()
+  @State private var posterSize: CGSize = .zero
 
   var body: some View {
-    let frame = ProgramPreview.frame(at: time, project: project)
     ZStack {
       posterBackground
-      switch frame.visual {
-      case .image(let asset):
-        if let image = NSImage(contentsOf: asset.url) {
-          PlacedCanvasMedia(source: image.size, transform: frame.visualTransform) {
-            Image(nsImage: image)
-              .resizable()
-          }
-        }
-      case .video(let asset, let localTime, _):
-        if let videoImage {
-          PlacedCanvasMedia(source: videoImage.size, transform: frame.visualTransform) {
-            Image(nsImage: videoImage)
-              .resizable()
-          }
-        } else {
-          Color.clear
-            .task(id: "\(asset.url.path)-\(localTime)") {
-              videoImage = await posterFrame(url: asset.url, time: localTime)
-            }
-        }
-      case .empty:
-        EmptyView()
+      if let image = presenter.image {
+        Image(nsImage: image)
+          .resizable()
+          .interpolation(.high)
+          .scaledToFit()
       }
     }
+    .background {
+      GeometryReader { proxy in
+        Color.clear.preference(key: ExportPosterSizeKey.self, value: proxy.size)
+      }
+    }
+    .onPreferenceChange(ExportPosterSizeKey.self) { posterSize = $0 }
+    .onAppear(perform: compose)
+    .onChange(of: time) { _, _ in compose() }
+    .onChange(of: posterSize) { _, _ in compose() }
+    .onChange(of: project.settings) { _, _ in compose() }
+    .task(id: project.timeline) { compose() }
   }
 
   @ViewBuilder
@@ -736,16 +730,22 @@ private struct ExportPosterView: View {
     }
   }
 
-  private func posterFrame(url: URL, time: TimeInterval) async -> NSImage? {
-    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-    generator.appliesPreferredTrackTransform = true
-    generator.requestedTimeToleranceBefore = .zero
-    generator.requestedTimeToleranceAfter = .zero
-    guard let result = try? await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600))
-    else {
-      return nil
-    }
-    return NSImage(cgImage: result.image, size: .zero)
+  private func compose() {
+    presenter.render(
+      frame: ProgramPreview.frame(at: time, project: project),
+      canvas: posterSize,
+      scale: NSScreen.main?.backingScaleFactor ?? 2,
+      background: project.settings.background,
+      videoFrame: nil
+    )
+  }
+}
+
+private struct ExportPosterSizeKey: PreferenceKey {
+  static let defaultValue: CGSize = .zero
+
+  static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+    value = nextValue()
   }
 }
 

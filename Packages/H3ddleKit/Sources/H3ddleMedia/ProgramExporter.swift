@@ -175,10 +175,10 @@ private enum ExportSessionWriter {
     }
     writer.startSession(atSourceTime: .zero)
 
-    let renderer = ExportFrameRenderer(
+    let renderer = ProgramCompositor(
       width: size.width,
       height: size.height,
-      background: project.settings.background.exportColor
+      background: project.settings.background.compositorColor
     )
     let timescale = CMTimeScale(max(1, settings.framesPerSecond.rounded()))
     var lastPreview = ContinuousClock.now - .seconds(1)
@@ -217,10 +217,10 @@ private enum ExportSessionWriter {
       height: size.height,
       settings: settings
     )
-    let renderer = ExportFrameRenderer(
+    let renderer = ProgramCompositor(
       width: size.width,
       height: size.height,
-      background: project.settings.background.exportColor
+      background: project.settings.background.compositorColor
     )
     let timescale = CMTimeScale(max(1, settings.framesPerSecond.rounded()))
     let frameDuration = CMTime(value: 1, timescale: timescale)
@@ -388,31 +388,9 @@ private enum ExportSessionWriter {
       index == 0
       || index == frameCount - 1
       || now - lastPreview >= .milliseconds(66)
-    guard shouldEmit, let image = previewImage(from: buffer) else { return }
+    guard shouldEmit, let image = ProgramCompositor.makeImage(from: buffer) else { return }
     lastPreview = now
     emit(.preview(ExportPreviewImage(image: image)))
-  }
-
-  private static func previewImage(from buffer: CVPixelBuffer) -> CGImage? {
-    CVPixelBufferLockBaseAddress(buffer, .readOnly)
-    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-    let width = CVPixelBufferGetWidth(buffer)
-    let height = CVPixelBufferGetHeight(buffer)
-    guard let base = CVPixelBufferGetBaseAddress(buffer),
-      let context = CGContext(
-        data: base,
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-          | CGBitmapInfo.byteOrder32Little.rawValue
-      )
-    else {
-      return nil
-    }
-    return context.makeImage()
   }
 
   private static func frame(
@@ -454,138 +432,6 @@ private enum ExportSessionWriter {
         }
       }
     }
-  }
-}
-
-private final class ExportFrameRenderer: @unchecked Sendable {
-  private let width: Int
-  private let height: Int
-  private let background: (CGFloat, CGFloat, CGFloat)
-  private var images: [URL: CGImage] = [:]
-  private var generators: [URL: AVAssetImageGenerator] = [:]
-
-  init(width: Int, height: Int, background: (CGFloat, CGFloat, CGFloat)) {
-    self.width = width
-    self.height = height
-    self.background = background
-  }
-
-  func pixelBuffer(for frame: ProgramPreviewFrame) async -> CVPixelBuffer? {
-    var buffer: CVPixelBuffer?
-    let status = CVPixelBufferCreate(
-      kCFAllocatorDefault,
-      width,
-      height,
-      kCVPixelFormatType_32BGRA,
-      [
-        kCVPixelBufferCGImageCompatibilityKey: true,
-        kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-      ] as CFDictionary,
-      &buffer
-    )
-    guard status == kCVReturnSuccess, let buffer else { return nil }
-    CVPixelBufferLockBaseAddress(buffer, [])
-    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-
-    guard let data = CVPixelBufferGetBaseAddress(buffer),
-      let context = CGContext(
-        data: data,
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-          | CGBitmapInfo.byteOrder32Little.rawValue
-      )
-    else {
-      return nil
-    }
-
-    context.setFillColor(
-      red: background.0,
-      green: background.1,
-      blue: background.2,
-      alpha: 1
-    )
-    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-
-    if let image = await sourceImage(for: frame.visual) {
-      draw(image, in: context, transform: frame.visualTransform)
-    }
-    return buffer
-  }
-
-  private func sourceImage(for visual: ProgramVisualPresentation) async -> CGImage? {
-    switch visual {
-    case .empty:
-      return nil
-    case .image(let asset):
-      return stillImage(at: asset.url)
-    case .video(let asset, let localTime, _):
-      return await videoImage(at: asset.url, time: localTime)
-    }
-  }
-
-  private func stillImage(at url: URL) -> CGImage? {
-    if let cached = images[url] { return cached }
-    guard FileManager.default.fileExists(atPath: url.path),
-      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-    else {
-      return nil
-    }
-    images[url] = image
-    return image
-  }
-
-  private func videoImage(at url: URL, time: TimeInterval) async -> CGImage? {
-    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-    let generator: AVAssetImageGenerator
-    if let cached = generators[url] {
-      generator = cached
-    } else {
-      let created = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-      created.appliesPreferredTrackTransform = true
-      created.requestedTimeToleranceBefore = .zero
-      created.requestedTimeToleranceAfter = .zero
-      generators[url] = created
-      generator = created
-    }
-    let cmTime = CMTime(seconds: max(0, time), preferredTimescale: 600)
-    return try? await generator.image(at: cmTime).image
-  }
-
-  private func draw(
-    _ image: CGImage,
-    in context: CGContext,
-    transform: VisualCanvasTransform
-  ) {
-    let dest = CanvasLayout.destination(
-      sourceWidth: Double(image.width),
-      sourceHeight: Double(image.height),
-      canvasWidth: Double(width),
-      canvasHeight: Double(height),
-      transform: transform
-    )
-    let draw = CanvasLayout.unrotatedSize(
-      destination: dest,
-      rotationTurns: transform.rotationTurns
-    )
-    context.saveGState()
-    context.translateBy(x: dest.midX, y: dest.midY)
-    // Bitmap contexts are y-up; match SwiftUI's clockwise rotationEffect.
-    context.rotate(by: -CGFloat(transform.rotationRadians))
-    context.draw(
-      image,
-      in: CGRect(
-        x: -draw.width / 2,
-        y: -draw.height / 2,
-        width: draw.width,
-        height: draw.height
-      )
-    )
-    context.restoreGState()
   }
 }
 
@@ -867,16 +713,3 @@ extension ProgramExportProfile {
   }
 }
 
-extension ProjectBackground {
-  fileprivate var exportColor: (CGFloat, CGFloat, CGFloat) {
-    if isClear { return (0, 0, 0) }
-    let cleaned = rawValue.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-    var value: UInt64 = 0
-    Scanner(string: cleaned).scanHexInt64(&value)
-    return (
-      CGFloat((value >> 16) & 0xFF) / 255,
-      CGFloat((value >> 8) & 0xFF) / 255,
-      CGFloat(value & 0xFF) / 255
-    )
-  }
-}

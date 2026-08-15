@@ -14,6 +14,10 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
   public var canvasFit: CanvasFit
   /// Quarter-turns clockwise in `0...3`.
   public var rotationTurns: Int
+  /// Mix from the previous adjacent visual into this clip.
+  public var transition: VisualTransition?
+  /// Ordered filter stack drawn after canvas placement.
+  public var effects: [VisualEffectInstance]
 
   public var canvasTransform: VisualCanvasTransform {
     VisualCanvasTransform(fit: canvasFit, rotationTurns: rotationTurns)
@@ -28,7 +32,9 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     sourceOffset: TimeInterval = 0,
     gapBefore: TimeInterval = 0,
     canvasFit: CanvasFit = .fit,
-    rotationTurns: Int = 0
+    rotationTurns: Int = 0,
+    transition: VisualTransition? = nil,
+    effects: [VisualEffectInstance] = []
   ) {
     self.id = id
     self.assetID = assetID
@@ -39,6 +45,8 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     self.gapBefore = max(0, gapBefore)
     self.canvasFit = canvasFit
     self.rotationTurns = CanvasLayout.normalizedTurns(rotationTurns)
+    self.transition = transition
+    self.effects = effects
   }
 
   public init(from decoder: any Decoder) throws {
@@ -60,6 +68,8 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     rotationTurns = CanvasLayout.normalizedTurns(
       try container.decodeIfPresent(Int.self, forKey: .rotationTurns) ?? 0
     )
+    transition = try container.decodeIfPresent(VisualTransition.self, forKey: .transition)
+    effects = try container.decodeIfPresent([VisualEffectInstance].self, forKey: .effects) ?? []
   }
 
   enum CodingKeys: String, CodingKey {
@@ -72,6 +82,8 @@ public struct VisualItem: Identifiable, Hashable, Codable, Sendable {
     case gapBefore
     case canvasFit
     case rotationTurns
+    case transition
+    case effects
   }
 }
 
@@ -271,17 +283,36 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
   }
 
   public var visualDuration: TimeInterval {
-    visualItems.reduce(0) { $0 + $1.gapBefore + $1.duration }
+    visualPlacements.last.map { $0.startTime + $0.item.duration } ?? 0
   }
 
   public var visualPlacements: [VisualPlacement] {
     var cursor: TimeInterval = 0
-    return visualItems.map { item in
+    return visualItems.enumerated().map { index, item in
       cursor += item.gapBefore
+      cursor = max(0, cursor - transitionOverlap(at: index))
       let startTime = cursor
       cursor += item.duration
       return VisualPlacement(item: item, startTime: startTime)
     }
+  }
+
+  /// How far the incoming clip pulls into the previous clip. Zero if the cut
+  /// cannot hold a transition.
+  public func transitionOverlap(of id: UUID) -> TimeInterval {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return 0 }
+    return transitionOverlap(at: index)
+  }
+
+  private func transitionOverlap(at index: Int) -> TimeInterval {
+    guard index > 0 else { return 0 }
+    let item = visualItems[index]
+    guard item.gapBefore == 0, let transition = item.transition else { return 0 }
+    return VisualTransitionMath.resolvedDuration(
+      transition.duration,
+      outgoing: visualItems[index - 1].duration,
+      incoming: item.duration
+    )
   }
 
   public var audioTrackEnd: TimeInterval {
@@ -347,6 +378,66 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     )
   }
 
+  public func canApplyVisualTransition(_ id: UUID) -> Bool {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }), index > 0 else {
+      return false
+    }
+    let incoming = visualItems[index]
+    let outgoing = visualItems[index - 1]
+    return incoming.gapBefore == 0 && outgoing.duration > 0 && incoming.duration > 0
+  }
+
+  public func maximumVisualTransitionDuration(of id: UUID) -> TimeInterval {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }), index > 0 else {
+      return 0
+    }
+    return VisualTransitionMath.maximumDuration(
+      outgoing: visualItems[index - 1].duration,
+      incoming: visualItems[index].duration
+    )
+  }
+
+  public mutating func setVisualTransition(_ id: UUID, _ transition: VisualTransition?) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    guard let transition else {
+      visualItems[index].transition = nil
+      return
+    }
+    guard canApplyVisualTransition(id) else { return }
+    let duration = VisualTransitionMath.resolvedDuration(
+      transition.duration,
+      outgoing: visualItems[index - 1].duration,
+      incoming: visualItems[index].duration
+    )
+    guard duration > 0.000_1 else {
+      visualItems[index].transition = nil
+      return
+    }
+    visualItems[index].transition = VisualTransition(kind: transition.kind, duration: duration)
+  }
+
+  @discardableResult
+  public mutating func addVisualEffect(_ id: UUID, kind: VisualEffectKind) -> VisualEffectInstance? {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let effect = VisualEffectInstance(kind: kind)
+    visualItems[index].effects.append(effect)
+    return effect
+  }
+
+  public mutating func setVisualEffect(_ id: UUID, effect: VisualEffectInstance) {
+    guard let clip = visualItems.firstIndex(where: { $0.id == id }),
+      let index = visualItems[clip].effects.firstIndex(where: { $0.id == effect.id })
+    else {
+      return
+    }
+    visualItems[clip].effects[index] = effect
+  }
+
+  public mutating func removeVisualEffect(_ id: UUID, effectID: UUID) {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    visualItems[index].effects.removeAll { $0.id == effectID }
+  }
+
   public mutating func setAudioEnabled(_ id: UUID, isEnabled: Bool) {
     guard let index = audioItems.firstIndex(where: { $0.id == id }) else { return }
     audioItems[index].isEnabled = isEnabled
@@ -357,6 +448,67 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     audioItems[index].startTime = max(0, trim.startTime)
     audioItems[index].duration = max(0, trim.duration)
     audioItems[index].sourceOffset = max(0, trim.sourceOffset)
+  }
+
+  /// Slides a clip without overlapping neighbors. Later clips stay put.
+  public mutating func setAudioStart(_ id: UUID, startTime: TimeInterval) {
+    guard let index = audioItems.firstIndex(where: { $0.id == id }) else { return }
+    let bounds = audioNeighborBounds(of: id)
+    let duration = audioItems[index].duration
+    var start = max(0, max(bounds.earliestStart, startTime))
+    if bounds.latestEnd.isFinite {
+      start = min(start, max(bounds.earliestStart, bounds.latestEnd - duration))
+    }
+    audioItems[index].startTime = start
+  }
+
+  /// Inserts a copy at the source's out-point. Later clips that would overlap
+  /// are pushed by the copy's duration; a large enough gap is left alone.
+  @discardableResult
+  public mutating func duplicateAudio(_ id: UUID) -> AudioItem? {
+    guard let index = audioItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let item = audioItems[index]
+    let start = item.endTime
+    let copyEnd = start + item.duration
+    let overlaps = audioItems.contains { other in
+      other.id != id
+        && other.startTime < copyEnd - 0.000_001
+        && other.endTime > start + 0.000_001
+    }
+    if overlaps {
+      for i in audioItems.indices
+      where audioItems[i].id != id && audioItems[i].startTime >= start - 0.000_001 {
+        audioItems[i].startTime += item.duration
+      }
+    }
+    let copy = AudioItem(
+      assetID: item.assetID,
+      startTime: start,
+      duration: item.duration,
+      isEnabled: item.isEnabled,
+      gain: item.gain,
+      sourceOffset: item.sourceOffset
+    )
+    audioItems.insert(copy, at: index + 1)
+    return copy
+  }
+
+  /// Reorders the audio lane by start time and packs the sequence from its
+  /// previous leftmost start so clips stay contiguous and non-overlapping.
+  public mutating func moveAudio(_ id: UUID, toIndex: Int) {
+    var sorted = audioItems.sorted(by: TimelineReorderMath.audioOrder)
+    guard let from = sorted.firstIndex(where: { $0.id == id }) else { return }
+    let dest = min(max(0, toIndex), sorted.count - 1)
+    if dest == from { return }
+    let sequenceStart = sorted.map(\.startTime).min() ?? 0
+    let item = sorted.remove(at: from)
+    sorted.insert(item, at: dest)
+    var cursor = sequenceStart
+    for i in sorted.indices {
+      sorted[i].startTime = cursor
+      cursor = sorted[i].endTime
+    }
+    audioItems = sorted
   }
 
   public func audioNeighborBounds(of id: UUID) -> (
@@ -379,8 +531,76 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     return (earliestStart, latestEnd)
   }
 
+  /// Inserts a copy immediately after the original. The copy keeps trim,
+  /// canvas transform, native-audio, and a new effect-id stack. It does not
+  /// inherit the original's incoming transition.
+  @discardableResult
+  public mutating func duplicateVisual(_ id: UUID) -> VisualItem? {
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return nil }
+    let item = visualItems[index]
+    let copy = VisualItem(
+      assetID: item.assetID,
+      duration: item.duration,
+      isEnabled: item.isEnabled,
+      includesNativeAudio: item.includesNativeAudio,
+      sourceOffset: item.sourceOffset,
+      gapBefore: 0,
+      canvasFit: item.canvasFit,
+      rotationTurns: item.rotationTurns,
+      transition: nil,
+      effects: item.effects.map { $0.copying() }
+    )
+    visualItems.insert(copy, at: index + 1)
+    return copy
+  }
+
+  /// Moves the clip so its index in the ordered list becomes `toIndex`.
+  /// Incoming transitions on the moved clip and its old/new neighbors are dropped.
+  public mutating func moveVisual(_ id: UUID, toIndex: Int) {
+    guard let from = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    let dest = min(max(0, toIndex), visualItems.count - 1)
+    if dest == from { return }
+    if from + 1 < visualItems.count {
+      visualItems[from + 1].transition = nil
+    }
+    var item = visualItems.remove(at: from)
+    item.transition = nil
+    visualItems.insert(item, at: dest)
+    if dest + 1 < visualItems.count {
+      visualItems[dest + 1].transition = nil
+    }
+    sanitizeVisualTransitions()
+  }
+
   public mutating func removeVisual(_ id: UUID) {
-    visualItems.removeAll { $0.id == id }
+    guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
+    if index + 1 < visualItems.count {
+      visualItems[index + 1].transition = nil
+    }
+    visualItems.remove(at: index)
+    sanitizeVisualTransitions()
+  }
+
+  private mutating func sanitizeVisualTransitions() {
+    guard !visualItems.isEmpty else { return }
+    visualItems[0].transition = nil
+    for index in visualItems.indices {
+      guard let transition = visualItems[index].transition else { continue }
+      let id = visualItems[index].id
+      if !canApplyVisualTransition(id) {
+        visualItems[index].transition = nil
+        continue
+      }
+      let duration = VisualTransitionMath.resolvedDuration(
+        transition.duration,
+        outgoing: visualItems[index - 1].duration,
+        incoming: visualItems[index].duration
+      )
+      visualItems[index].transition =
+        duration > 0.000_1
+        ? VisualTransition(kind: transition.kind, duration: duration)
+        : nil
+    }
   }
 
   /// Removing audio deliberately preserves every later item's absolute start time.
@@ -450,7 +670,9 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
       sourceOffset: sourceKind == .video ? item.sourceOffset + leftDuration : 0,
       gapBefore: 0,
       canvasFit: item.canvasFit,
-      rotationTurns: item.rotationTurns
+      rotationTurns: item.rotationTurns,
+      transition: nil,
+      effects: item.effects.map { $0.copying() }
     )
     visualItems.insert(right, at: index + 1)
     return (item.id, right.id)
@@ -487,6 +709,29 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
     )
     audioItems.insert(right, at: index + 1)
     return (item.id, right.id)
+  }
+}
+
+public enum TimelineReorderMath: Sendable {
+  /// Index of `dropTime` among `others`, using each item's midpoint.
+  /// The result is the destination after the moving item is removed.
+  public static func destinationIndex(
+    dropTime: TimeInterval,
+    others: [(start: TimeInterval, duration: TimeInterval)]
+  ) -> Int {
+    var dest = others.count
+    for (index, item) in others.enumerated() {
+      if dropTime < item.start + item.duration / 2 {
+        dest = index
+        break
+      }
+    }
+    return dest
+  }
+
+  public static func audioOrder(_ lhs: AudioItem, _ rhs: AudioItem) -> Bool {
+    if lhs.startTime != rhs.startTime { return lhs.startTime < rhs.startTime }
+    return lhs.id.uuidString < rhs.id.uuidString
   }
 }
 

@@ -10,17 +10,22 @@
   app-managed media folder and appends after the last clip on that lane.
   Finder files can be dropped onto the matching lane or its header.
   Disabling the audio track omits A1 and native clip soundtracks from export.
-- Both lanes begin without move or reorder interactions. Selected video,
-  image, and audio clips expose left and right trim handles. Images can
-  extend freely; video and audio stay inside the source. A leading trim keeps
-  the out point. Audio start times stay absolute — later audio does not move.
-  Split at playhead (S) divides the selected clip when the playhead is strictly
-  inside it; the left half keeps the original clip, the right half continues
-  the source. Delete / Backspace removes the selection. Visual delete closes
-  the gap; audio delete leaves later clips where they are.
-- Insert is append-after-last only: a generated or imported visual goes on the
-  visual end, audio on the current audio end. There is no insert-at-playhead,
-  replace mode, or media library. Imported stills hold for 3 seconds.
+- Selected video, image, and audio clips expose left and right trim handles.
+  Images can extend freely; video and audio stay inside the source. A leading
+  trim keeps the out point. Dragging a visual clip reorders the lane; dragging
+  an audio clip slides it inside neighboring bounds or, if dropped across
+  another clip, reorders and packs from the lane's leftmost start. Duplicate
+  (clip menu on video or image, including right-click on the monitor, Cmd-D)
+  inserts a copy after the source. Audio start times stay
+  absolute — later audio does not move on trim or delete. Split at playhead
+  (S) divides the selected clip when the playhead is strictly inside it; the
+  left half keeps the original clip, the right half continues the source.
+  Delete / Backspace removes the selection. Visual delete closes the gap;
+  audio delete leaves later clips where they are.
+- Insert of generated or imported media is append-after-last only: a visual
+  goes on the visual end, audio on the current audio end. There is no
+  insert-at-playhead, replace mode, or media library. Imported stills hold
+  for 3 seconds.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
 - Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
@@ -29,7 +34,14 @@
 - Each visual video can include or mute its native soundtrack.
 - The program canvas shows the composed visual at the playhead, fitted to the
   project aspect on the project background. A visual clip can fit or cover that
-  canvas and rotate in 90° steps. The viewer can pan and zoom the frame.
+  canvas and rotate in 90° steps. Adjacent visual cuts can dissolve, fade, or
+  wipe. Applying a transition overlaps the incoming clip over the outgoing
+  tail by the transition duration and shortens the program by that amount.
+  The cut + opens the Transitions panel (same 320px slot as Effects);
+  clicking an existing transition opens its settings. Visual clips can carry
+  a filter stack (grade, vignette, grain, sharpen, blur, bloom, chroma key)
+  shown as pills on one FX lane; + opens the Effects panel. The viewer can
+  pan and zoom the frame.
 - Project settings cover platform presets, custom aspect/resolution/frame rate,
   background, stored tone mapping and exposure, and master gain. Live AgX/ACES
   preview, live peak meters, and LUFS normalization are out of scope.

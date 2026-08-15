@@ -20,6 +20,10 @@ struct ProgramTimelineView: View {
   @State private var pointerInLanes: CGFloat?
   @State private var visualTrim: VisualTrimSession?
   @State private var audioTrim: AudioTrimSession?
+  @State private var visualMove: ClipMoveSession?
+  @State private var audioMove: ClipMoveSession?
+  @State private var transitionDrag: TransitionDragSession?
+
   private let editorSpace = "editor-root"
   private let pinchResponse = 3.0
   private let wheelSensitivity = 0.004
@@ -59,12 +63,14 @@ struct ProgramTimelineView: View {
             TimeRulerView(duration: contentDuration, metrics: metrics, onSeek: model.seekPlayback)
               .frame(height: TimelineChrome.rulerHeight)
             if model.showsEffectLanes {
-              effectLane
+              effectLane(items: model.fxLanesExpanded ? [] : model.effectLaneItems)
+              if model.fxLanesExpanded {
+                ForEach(model.effectLaneItems) { item in
+                  effectLane(items: [item])
+                }
+              }
             }
             visualLane
-            if model.showsEffectLanes {
-              effectLane
-            }
             audioLane
           }
           .frame(width: contentWidth, alignment: .topLeading)
@@ -93,7 +99,12 @@ struct ProgramTimelineView: View {
         }
       }
     }
-    .frame(height: TimelineChrome.bodyHeight(showsEffectLanes: model.showsEffectLanes))
+    .frame(
+      height: TimelineChrome.bodyHeight(
+        showsEffectLanes: model.showsEffectLanes,
+        expandedEffectCount: model.fxLanesExpanded ? model.effectLaneItems.count : 0
+      )
+    )
     .onAppear(perform: installZoomMonitor)
     .onDisappear(perform: removeZoomMonitor)
   }
@@ -163,6 +174,8 @@ struct ProgramTimelineView: View {
       laneBackground(alt: false)
       ForEach(visualPlacements, id: \.item.id) { placement in
         let asset = model.project.asset(id: placement.item.assetID)
+        let isMoving = visualMove?.itemID == placement.item.id
+        Group {
         TimelineClipView(
           title: asset?.displayName ?? "Visual",
           kind: asset?.kind ?? .video,
@@ -172,13 +185,20 @@ struct ProgramTimelineView: View {
           isSelected: model.selectedTimelineItem == .visual(placement.item.id),
           metrics: metrics,
           height: TimelineChrome.visualLaneHeight,
-          showsTrimHandles: model.selectedTimelineItem == .visual(placement.item.id),
+          showsTrimHandles: model.selectedTimelineItem == .visual(placement.item.id)
+            && visualMove == nil,
           onTrimChanged: { edge, translation in
             trimVisual(placement, edge: edge, translation: translation)
           },
-          onTrimEnded: { visualTrim = nil }
+          onTrimEnded: { visualTrim = nil },
+          onMoved: { translation in
+            dragVisual(placement, translation: translation)
+          },
+          onMoveEnded: endVisualMove
         )
-        .offset(x: metrics.x(for: placement.startTime))
+        .offset(x: metrics.x(for: placement.startTime) + (isMoving ? (visualMove?.translation ?? 0) : 0))
+        .zIndex(isMoving ? 12 : (placement.item.transition != nil ? 2 : 0))
+        .opacity(isMoving ? 0.92 : 1)
         .onTapGesture {
           model.selectedTimelineItem = .visual(placement.item.id)
         }
@@ -195,6 +215,51 @@ struct ProgramTimelineView: View {
             }
           }
         }
+        if visualMove == nil, model.project.timeline.canApplyVisualTransition(placement.item.id) {
+          let overlap = model.project.timeline.transitionOverlap(of: placement.item.id)
+          let hasTransition = placement.item.transition != nil
+          TimelineTransitionHandle(
+            duration: overlap,
+            kind: placement.item.transition?.kind,
+            isSelected: model.showsTransitionsPanel
+              && model.transitionHostClip?.id == placement.item.id,
+            metrics: metrics,
+            laneHeight: TimelineChrome.visualLaneHeight,
+            onSelect: {
+              clipMenu = nil
+              appendMenu = nil
+              model.openTransitions(for: placement.item.id)
+            },
+            onContextMenu: { origin in
+              presentClipMenu(.visual(placement.item.id), at: origin)
+            },
+            onDurationChanged: { translation in
+              dragTransition(placement.item, translation: translation)
+            },
+            onDurationEnded: { transitionDrag = nil }
+          )
+          .offset(
+            x: metrics.x(for: placement.startTime)
+              - (hasTransition ? 0 : TimelineTransitionHandle.buttonSize / 2),
+            y: hasTransition
+              ? 0
+              : (TimelineChrome.visualLaneHeight - TimelineTransitionHandle.buttonSize) / 2
+          )
+          .zIndex(10)
+        }
+        }
+      }
+      if let visualMove, visualMove.proposedIndex != visualMove.fromIndex {
+        insertionCaret(
+          x: insertionX(
+            dest: visualMove.proposedIndex,
+            movingID: visualMove.itemID,
+            placements: visualPlacements.map {
+              (id: $0.item.id, start: $0.startTime, duration: $0.item.duration)
+            }
+          ),
+          height: TimelineChrome.visualLaneHeight
+        )
       }
       appendControl(isVisual: true)
         .offset(
@@ -215,6 +280,7 @@ struct ProgramTimelineView: View {
     ZStack(alignment: .topLeading) {
       laneBackground(alt: true)
       ForEach(model.project.timeline.audioItems) { item in
+        let isMoving = audioMove?.itemID == item.id
         TimelineClipView(
           title: model.project.asset(id: item.assetID)?.displayName ?? "Audio",
           kind: .audio,
@@ -224,13 +290,20 @@ struct ProgramTimelineView: View {
           isSelected: model.selectedTimelineItem == .audio(item.id),
           metrics: metrics,
           height: TimelineChrome.audioLaneHeight,
-          showsTrimHandles: model.selectedTimelineItem == .audio(item.id),
+          showsTrimHandles: model.selectedTimelineItem == .audio(item.id)
+            && audioMove == nil,
           onTrimChanged: { edge, translation in
             trimAudio(item, edge: edge, translation: translation)
           },
-          onTrimEnded: { audioTrim = nil }
+          onTrimEnded: { audioTrim = nil },
+          onMoved: { translation in
+            dragAudio(item, translation: translation)
+          },
+          onMoveEnded: endAudioMove
         )
-        .offset(x: metrics.x(for: item.startTime))
+        .offset(x: metrics.x(for: item.startTime) + (isMoving ? (audioMove?.translation ?? 0) : 0))
+        .zIndex(isMoving ? 12 : 0)
+        .opacity(isMoving ? 0.92 : 1)
         .onTapGesture {
           model.selectedTimelineItem = .audio(item.id)
         }
@@ -248,6 +321,18 @@ struct ProgramTimelineView: View {
           }
         }
       }
+      if let audioMove, audioMove.proposedIndex != audioMove.fromIndex {
+        insertionCaret(
+          x: insertionX(
+            dest: audioMove.proposedIndex,
+            movingID: audioMove.itemID,
+            placements: orderedAudio.map {
+              (id: $0.id, start: $0.startTime, duration: $0.duration)
+            }
+          ),
+          height: TimelineChrome.audioLaneHeight
+        )
+      }
       appendControl(isVisual: false)
         .offset(
           x: metrics.x(for: model.project.timeline.audioTrackEnd) + 8,
@@ -263,18 +348,31 @@ struct ProgramTimelineView: View {
     .timelineMediaDrop(lane: .audio, model: model, accessibilityID: "audio-lane-drop")
   }
 
-  private var effectLane: some View {
-    ZStack(alignment: .leading) {
-      H3Color.canvas.opacity(0.35)
-      Text("Drop effects here")
-        .font(.system(size: 8.5, design: .monospaced))
-        .tracking(0.8)
-        .foregroundStyle(H3Color.textSecondary.opacity(0.45))
-        .padding(.leading, 9)
+  private func effectLane(items: [EffectLaneItem]) -> some View {
+    ZStack(alignment: .topLeading) {
+      Color.white.opacity(0.045)
+      ForEach(items) { item in
+        TimelineEffectPill(
+          title: item.effect.kind.label,
+          tint: item.effect.kind.swatch,
+          isSelected: model.selectedEffectID == item.effect.id,
+          isEnabled: item.effect.isEnabled && item.clipEnabled,
+          width: max(18, metrics.x(for: item.duration) - 4)
+        )
+        .offset(x: metrics.x(for: item.startTime), y: 3)
+        .onTapGesture {
+          model.openEffectSettings(clipID: item.clipID, effectID: item.effect.id)
+        }
+      }
     }
     .frame(height: TimelineChrome.effectLaneHeight)
     .overlay(alignment: .bottom) {
       Rectangle().fill(H3Color.hairSoft).frame(height: 1)
+    }
+    .overlay {
+      if model.visualTrackMuted {
+        Color.black.opacity(0.16).allowsHitTesting(false)
+      }
     }
   }
 
@@ -492,8 +590,143 @@ struct ProgramTimelineView: View {
     clipMenu = ClipMenuPlacement(target: target, origin: origin)
   }
 
+  private func dragTransition(_ item: VisualItem, translation: CGFloat) {
+    if transitionDrag?.itemID != item.id {
+      transitionDrag = TransitionDragSession(
+        itemID: item.id,
+        origin: item.transition?.duration ?? VisualTransitionMath.defaultDuration
+      )
+    }
+    guard let transitionDrag else { return }
+    if item.transition == nil {
+      model.setVisualTransition(item.id, kind: .dissolve)
+    }
+    model.setVisualTransitionDuration(
+      item.id,
+      duration: max(0, transitionDrag.origin + metrics.time(for: translation))
+    )
+  }
+
   private var visualPlacements: [VisualPlacement] {
     model.project.timeline.visualPlacements
+  }
+
+  private var orderedAudio: [AudioItem] {
+    model.project.timeline.audioItems.sorted(by: TimelineReorderMath.audioOrder)
+  }
+
+  private func dragVisual(_ placement: VisualPlacement, translation: CGFloat) {
+    clipMenu = nil
+    appendMenu = nil
+    model.selectedTimelineItem = .visual(placement.item.id)
+    let from = visualPlacements.firstIndex(where: { $0.item.id == placement.item.id }) ?? 0
+    if visualMove?.itemID != placement.item.id {
+      visualMove = ClipMoveSession(
+        itemID: placement.item.id,
+        fromIndex: from,
+        originStart: placement.startTime,
+        translation: 0,
+        proposedIndex: from
+      )
+      NSCursor.closedHand.push()
+    }
+    let dropTime =
+      placement.startTime + placement.item.duration / 2 + metrics.time(for: translation)
+    let others = visualPlacements
+      .filter { $0.item.id != placement.item.id }
+      .map { (start: $0.startTime, duration: $0.item.duration) }
+    guard var session = visualMove else { return }
+    session.translation = translation
+    session.proposedIndex = TimelineReorderMath.destinationIndex(
+      dropTime: dropTime,
+      others: others
+    )
+    visualMove = session
+  }
+
+  private func endVisualMove() {
+    defer {
+      if visualMove != nil {
+        NSCursor.pop()
+      }
+      visualMove = nil
+    }
+    guard let visualMove else { return }
+    if visualMove.proposedIndex != visualMove.fromIndex {
+      model.moveVisual(visualMove.itemID, toIndex: visualMove.proposedIndex)
+    }
+  }
+
+  private func dragAudio(_ item: AudioItem, translation: CGFloat) {
+    clipMenu = nil
+    appendMenu = nil
+    model.selectedTimelineItem = .audio(item.id)
+    let ordered = orderedAudio
+    let from = ordered.firstIndex(where: { $0.id == item.id }) ?? 0
+    if audioMove?.itemID != item.id {
+      audioMove = ClipMoveSession(
+        itemID: item.id,
+        fromIndex: from,
+        originStart: item.startTime,
+        translation: 0,
+        proposedIndex: from
+      )
+      NSCursor.closedHand.push()
+    }
+    let dropTime = item.startTime + item.duration / 2 + metrics.time(for: translation)
+    let others = ordered
+      .filter { $0.id != item.id }
+      .map { (start: $0.startTime, duration: $0.duration) }
+    guard var session = audioMove else { return }
+    session.translation = translation
+    session.proposedIndex = TimelineReorderMath.destinationIndex(
+      dropTime: dropTime,
+      others: others
+    )
+    audioMove = session
+  }
+
+  private func endAudioMove() {
+    defer {
+      if audioMove != nil {
+        NSCursor.pop()
+      }
+      audioMove = nil
+    }
+    guard let audioMove else { return }
+    if audioMove.proposedIndex != audioMove.fromIndex {
+      model.moveAudio(audioMove.itemID, toIndex: audioMove.proposedIndex)
+    } else {
+      model.setAudioStart(
+        audioMove.itemID,
+        startTime: audioMove.originStart + metrics.time(for: audioMove.translation)
+      )
+    }
+  }
+
+  private func insertionX(
+    dest: Int,
+    movingID: UUID,
+    placements: [(id: UUID, start: TimeInterval, duration: TimeInterval)]
+  ) -> CGFloat {
+    let others = placements.filter { $0.id != movingID }
+    if dest <= 0 {
+      return others.first.map { metrics.x(for: $0.start) } ?? 0
+    }
+    if dest >= others.count {
+      return others.last.map { metrics.x(for: $0.start + $0.duration) } ?? 0
+    }
+    return metrics.x(for: others[dest].start)
+  }
+
+  private func insertionCaret(x: CGFloat, height: CGFloat) -> some View {
+    RoundedRectangle(cornerRadius: 1, style: .continuous)
+      .fill(H3Color.accent)
+      .frame(width: 2, height: height - 4)
+      .offset(x: x - 1, y: 2)
+      .shadow(color: H3Color.accent.opacity(0.7), radius: 3)
+      .zIndex(14)
+      .allowsHitTesting(false)
   }
 
   private func trimVisual(
@@ -593,6 +826,19 @@ private struct AudioTrimSession {
   var sourceLimit: TimeInterval
   var earliestStart: TimeInterval
   var latestEnd: TimeInterval
+}
+
+private struct ClipMoveSession {
+  var itemID: UUID
+  var fromIndex: Int
+  var originStart: TimeInterval
+  var translation: CGFloat
+  var proposedIndex: Int
+}
+
+private struct TransitionDragSession {
+  var itemID: UUID
+  var origin: TimeInterval
 }
 
 private struct AppendButtonFrameKey: PreferenceKey {

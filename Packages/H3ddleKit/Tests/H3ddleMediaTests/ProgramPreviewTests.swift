@@ -51,6 +51,40 @@ struct ProgramPreviewTests {
     #expect(secondFrame.visualTransform.rotationTurns == 0)
   }
 
+  @Test("An incoming dissolve reports both sources and progress")
+  func dissolveReportsBothSources() throws {
+    var project = H3ddleProject()
+    let first = videoAsset(name: "A", duration: 4)
+    let second = videoAsset(name: "B", duration: 4)
+    project.addAsset(first)
+    project.addAsset(second)
+    try project.timeline.appendVisual(first)
+    let incoming = try project.timeline.appendVisual(second)
+    project.timeline.setVisualTransition(
+      incoming.id,
+      VisualTransition(kind: .dissolve, duration: 1)
+    )
+
+    #expect(ProgramPreview.frame(at: 2.9, project: project).transition == nil)
+    let mix = ProgramPreview.frame(at: 3.25, project: project).transition
+    #expect(mix?.kind == .dissolve)
+    #expect(abs((mix?.progress ?? -1) - 0.25) < 0.000_1)
+    guard case .video(let outgoing, let outgoingTime, _) = mix?.outgoing else {
+      Issue.record("Expected the outgoing video")
+      return
+    }
+    guard case .video(let incomingAsset, let incomingTime, _) = mix?.incoming else {
+      Issue.record("Expected the incoming video")
+      return
+    }
+    #expect(outgoing.id == first.id)
+    #expect(incomingAsset.id == second.id)
+    #expect(abs(outgoingTime - 3.25) < 0.000_1)
+    #expect(abs(incomingTime - 0.25) < 0.000_1)
+    #expect(ProgramPreview.frame(at: 4.1, project: project).transition == nil)
+    #expect(abs(ProgramPreview.frame(at: 3.25, project: project).duration - 7) < 0.000_1)
+  }
+
   @Test("Disabled visuals keep duration and render empty")
   func disabledVisualKeepsDuration() throws {
     var project = H3ddleProject()

@@ -68,6 +68,12 @@ struct TimelineClipMenu: View {
   ) -> [TimelineClipMenuItem] {
     var rows: [TimelineClipMenuItem] = [
       TimelineClipMenuItem(
+        id: "duplicate",
+        label: "Duplicate",
+        symbol: "plus.square.on.square",
+        action: .duplicate
+      ),
+      TimelineClipMenuItem(
         id: "enable",
         label: item.isEnabled ? "Disable" : "Enable",
         symbol: "power",
@@ -136,6 +142,12 @@ struct TimelineClipMenu: View {
   static func audioItems(item: AudioItem, canSplit: Bool) -> [TimelineClipMenuItem] {
     [
       TimelineClipMenuItem(
+        id: "duplicate",
+        label: "Duplicate",
+        symbol: "plus.square.on.square",
+        action: .duplicate
+      ),
+      TimelineClipMenuItem(
         id: "enable",
         label: item.isEnabled ? "Disable" : "Enable",
         symbol: "power",
@@ -161,6 +173,7 @@ struct TimelineClipMenu: View {
 }
 
 enum TimelineClipMenuAction: Equatable {
+  case duplicate
   case toggleEnabled
   case toggleNativeAudio
   case split

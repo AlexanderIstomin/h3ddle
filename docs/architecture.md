@@ -6,7 +6,7 @@ H3ddle is a native macOS application with three strict boundaries.
 SwiftUI application
 ├── H3ddleCore              versioned project and two-track timeline
 ├── H3ddleGeneration        provider-neutral generation workflow
-├── H3ddleMedia             preview and AVFoundation/VideoToolbox export
+├── H3ddleMedia             preview, program compositor, AVFoundation/VideoToolbox export
 ├── H3ddleModels            pinned catalogs, download and installation
 └── H3ddleEngineProtocol    JSON-lines IPC contract
         └── Engine service  h3.c, Metal, FFmpeg and model lifetime
@@ -14,21 +14,29 @@ SwiftUI application
 
 ## Timeline
 
-The visual track is the program backbone. Its items are ordered, non-overlapping,
-and derive their start time from the preceding visual items. Visual clips store
-canvas fit (letterbox or cover) and 90° rotation. The UI supports append, disable,
-trim, split, canvas placement, rotate, and remove.
+The visual track is the program backbone. Its items are ordered and derive
+their start time from the preceding visual items. A transition pulls the
+incoming clip over the outgoing tail so the two clips overlap for the
+transition duration. Visual clips store canvas fit (letterbox or cover) and
+90° rotation. The UI supports append, duplicate, reorder, disable, trim,
+split, canvas placement, rotate, overlapping cut transitions, clip effects,
+and remove.
 
-The audio track shares the program clock but stores explicit start times. The
-initial UI appends generated or imported audio at the current audio-track end.
-Imported files are copied into an app-managed media folder. Disabling an
+The audio track shares the program clock but stores explicit start times. New
+generated or imported audio still appends at the current audio-track end.
+Clips can be duplicated after the source and dragged to a new start time or
+order. Imported files are copied into an app-managed media folder. Disabling an
 audio item preserves its position and renders silence. Removing it also preserves
 later start times, leaving a gap rather than silently desynchronizing the mix.
 
 Program export ends at the visual duration. Audio shorter than the visual track
 produces silence. Trailing audio is detected and must be surfaced before export.
 Generated video may contain native audio, controlled independently from the
-dedicated audio track.
+dedicated audio track. `ProgramCompositor` places the current visual on the
+program canvas so preview and export can share one draw path. Film grain and
+chroma key use stitchable Metal Core Image kernels compiled at first use. The program
+monitor displays those composed frames; `AVPlayer` is only used for audio and
+as a video-frame source.
 
 ## State and persistence
 

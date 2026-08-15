@@ -15,6 +15,8 @@ struct TimelineClipView: View {
   var showsTrimHandles: Bool = false
   var onTrimChanged: ((TimelineTrimEdge, CGFloat) -> Void)?
   var onTrimEnded: (() -> Void)?
+  var onMoved: ((CGFloat) -> Void)?
+  var onMoveEnded: (() -> Void)?
 
   private var clipWidth: CGFloat {
     max(8, metrics.x(for: duration) - 2)
@@ -45,6 +47,8 @@ struct TimelineClipView: View {
         .padding(.bottom, 4)
     }
     .frame(width: clipWidth, height: height)
+    .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    .gesture(moveDrag)
     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -224,6 +228,16 @@ struct TimelineClipView: View {
 
   private var accent: Color {
     kind == .audio ? H3Color.clipAudio : H3Color.clipVideo
+  }
+
+  private var moveDrag: some Gesture {
+    DragGesture(minimumDistance: 5, coordinateSpace: .global)
+      .onChanged { value in
+        onMoved?(value.translation.width)
+      }
+      .onEnded { _ in
+        onMoveEnded?()
+      }
   }
 }
 
