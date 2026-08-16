@@ -156,7 +156,7 @@ public actor ModelPackageDownloader {
     guard
       let data = try? Data(contentsOf: manifestURL),
       let installedManifest = try? JSONDecoder().decode(ModelPackageManifest.self, from: data),
-      installedManifest == manifest
+      installedManifest.describesSameFiles(as: manifest)
     else {
       return nil
     }
@@ -375,6 +375,20 @@ public actor ModelPackageDownloader {
       } ?? false
     return hasLocalCandidate
       || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
+  }
+
+  /// Deletes an installed package's files. Weights shared with another
+  /// install are hardlinks, so removing this copy leaves the other intact
+  /// and reclaims only what nothing else references.
+  public func removeInstalledPackage(
+    for manifest: ModelPackageManifest
+  ) throws {
+    let fileManager = FileManager.default
+    let installed = store.installedURL(for: manifest)
+    if fileManager.fileExists(atPath: installed.path) {
+      try fileManager.removeItem(at: installed)
+    }
+    try? discardStagedDownload(for: manifest)
   }
 
   /// Throws away a paused download's partial files. Pausing deliberately

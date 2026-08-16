@@ -344,12 +344,13 @@ struct EditorView: View {
           Circle()
             .fill(model.isGenerating ? H3Color.accent : modelStatusColor)
             .frame(width: 6, height: 6)
-          Text(model.isGenerating ? model.generationPhase : model.modelStatusTitle)
+          Text("Models")
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(H3Color.textSecondary)
         }
       }
       .buttonStyle(H3QuietButtonStyle())
+      .help(model.modelStatusTitle)
       .accessibilityIdentifier("model-status")
 
       Button("Export") {

@@ -35,5 +35,19 @@ xcodebuild \
     -quiet \
     build-for-testing
 
+# Building the UI tests was never the same as running them, and the gap
+# let app-layer regressions through a green suite for a long time. These
+# drive the real app, so they are the only check that covers the seam
+# between the interface and the engine.
+xcodebuild \
+    -project "$repository_root/H3ddle.xcodeproj" \
+    -scheme H3ddle \
+    -destination 'platform=macOS' \
+    -derivedDataPath "$repository_root/DerivedData" \
+    -only-testing:H3ddleUITests \
+    CODE_SIGNING_ALLOWED=NO \
+    -quiet \
+    test-without-building
+
 test -x "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Helpers/H3ddleEngineService"
 test -f "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Resources/H3Engine/h3_shaders.metal"

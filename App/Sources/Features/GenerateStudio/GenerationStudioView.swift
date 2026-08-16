@@ -66,9 +66,12 @@ struct GenerationStudioView: View {
     case .compose:
       ZStack(alignment: .topLeading) {
         HStack(spacing: 0) {
-          promptPane
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-          Divider().overlay(H3Color.line.opacity(0.75))
+          // Nothing to describe until something can generate it.
+          if hasUsableModel {
+            promptPane
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider().overlay(H3Color.line.opacity(0.75))
+          }
           settingsPane
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -83,7 +86,7 @@ struct GenerationStudioView: View {
             .accessibilityIdentifier("generation-model-dismiss")
 
           ModelDropdownMenu(
-            choices: model.installedModelChoices,
+            choices: model.installedModelChoices(for: kind),
             selectedID: model.selectedModelID
           ) { choice in
             model.selectModel(choice.id)
@@ -118,6 +121,21 @@ struct GenerationStudioView: View {
       Text(kind.rawValue.capitalized)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
+      if kind == .audio {
+        // Two different models, not two settings of one: H3 writes the
+        // joint soundtrack and leans toward speech; music and sound effects
+        // are one Stable Audio transformer trained on different material.
+        H3SegmentedControl(
+          selection: $model.audioMode,
+          segments: [
+            .init(value: .voice, title: "VOICE", systemImage: "mic"),
+            .init(value: .music, title: "MUSIC", systemImage: "music.note"),
+            .init(value: .soundEffects, title: "SFX", systemImage: "waveform"),
+          ],
+          isEnabled: !model.isGenerating
+        )
+        .padding(.leading, 4)
+      }
       Spacer()
       Button {
         model.activeGenerationKind = nil
@@ -137,6 +155,39 @@ struct GenerationStudioView: View {
     .padding(.horizontal, 18)
     .frame(height: 58)
     .background(H3Color.chrome)
+  }
+
+  /// Whether anything installed can produce this kind of output. Without
+  /// one there is nothing to describe and no length to choose, so the
+  /// controls would be asking for settings that cannot be used.
+  private var hasUsableModel: Bool {
+    !model.installedModelChoices(for: kind).isEmpty
+  }
+
+  private var noModelSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("No models installed")
+        .font(.system(size: 13, weight: .semibold))
+      Text("Generating \(kindNoun) needs a model on this Mac. "
+        + "Get one from the model library.")
+        .font(.system(size: 11))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Button("Open Models") {
+        model.showsModelSettings = true
+      }
+      .buttonStyle(H3PrimaryButtonStyle())
+      .accessibilityIdentifier("open-models-from-studio")
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var kindNoun: String {
+    switch kind {
+    case .video: "video"
+    case .image: "images"
+    case .audio: "audio"
+    }
   }
 
   private var promptPane: some View {
@@ -166,7 +217,7 @@ struct GenerationStudioView: View {
         }
       }
 
-      if kind != .image {
+      if kind != .image, model.audioMode == .voice {
         audioDesignSection
       }
 
@@ -444,16 +495,21 @@ struct GenerationStudioView: View {
             }
           }
 
-          if kind != .image {
-            durationSection
-          }
-
-          if !model.installedModelChoices.isEmpty {
+          if hasUsableModel {
+            if kind != .image {
+              durationSection
+            }
             modelSection
+          } else {
+            noModelSection
           }
 
-          if usesNativeSettings {
+          if usesNativeSettings, model.audioMode == .voice {
             generationControls
+          }
+
+          if usesNativeSettings, model.audioMode != .voice {
+            soundEffectControls
           }
 
           if let errorMessage = model.errorMessage {
@@ -467,7 +523,7 @@ struct GenerationStudioView: View {
 
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
-          if usesNativeSettings {
+          if usesNativeSettings, model.audioMode == .voice {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
@@ -556,12 +612,13 @@ struct GenerationStudioView: View {
             get: { model.studioSettings.duration },
             set: { model.studioSettings.duration = $0 }
           ),
-          in: 1...15,
-          step: 1
+          in: 1...maximumDuration
         )
         .tint(H3Color.accent)
       }
-      if kind == .audio, model.nativeAudioGenerationIsReady {
+      if kind == .audio, model.nativeAudioGenerationIsReady,
+        model.audioMode == .voice
+      {
         Text(
           "H3 has no audio-only model. It generates a \(AppModel.audioCanvasLabel) clip "
             + "and keeps the soundtrack, so audio costs about as much as video."
@@ -584,12 +641,49 @@ struct GenerationStudioView: View {
         .tracking(1.1)
         .foregroundStyle(H3Color.textSecondary)
       ModelDropdown(
-        choices: model.installedModelChoices,
+        choices: model.installedModelChoices(for: kind),
         selectedID: model.selectedModelID,
         isOpen: $modelMenuOpen,
         onFrameChange: { modelPickerFrame = $0 }
       )
     }
+  }
+
+  /// The one knob this model has. It is distilled to eight passes, so this
+  /// is for finding out what that trade actually costs rather than a
+  /// quality ladder to climb.
+  private var soundEffectControls: some View {
+    labeled("PASSES") {
+      HStack(spacing: 10) {
+        Slider(
+          value: Binding(
+            get: { Double(model.studioSettings.knobs.denoisingSteps) },
+            set: { value in
+              model.updateStudioKnobs { knobs in
+                knobs.denoisingSteps = Int(value.rounded())
+              }
+            }
+          ),
+          in: 1...24,
+          step: 1
+        )
+        .tint(H3Color.accent)
+        Text("\(model.studioSettings.knobs.denoisingSteps)")
+          .font(.system(size: 11, weight: .medium, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 22, alignment: .trailing)
+        Button("Reset") {
+          model.updateStudioKnobs { knobs in
+            knobs.denoisingSteps = AppModel.soundEffectDefaultSteps
+          }
+        }
+        .buttonStyle(H3QuietButtonStyle())
+      }
+      Text("Trained for 8. Fewer degrades quickly; more rarely helps.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+    .accessibilityIdentifier("sound-effect-passes")
   }
 
   private var generationControls: some View {
@@ -1019,9 +1113,18 @@ struct GenerationStudioView: View {
     model.usesNativeEngine(for: kind)
   }
 
+  /// Fifteen seconds is H3's ceiling, where every extra second costs a
+  /// transformer pass over more frames. Stable Audio was trained to two
+  /// minutes and holds about twice realtime throughout, so the same limit
+  /// would be borrowing a constraint it does not have.
+  private var maximumDuration: Double {
+    model.audioMode == .voice ? 15 : 120
+  }
+
   private var usesAlignedH3Duration: Bool {
     (kind == .video && model.nativeVideoGenerationIsReady)
-      || (kind == .audio && model.nativeAudioGenerationIsReady)
+      || (kind == .audio && model.nativeAudioGenerationIsReady
+        && model.audioMode == .voice)
   }
 
   private var requestedDuration: Double {

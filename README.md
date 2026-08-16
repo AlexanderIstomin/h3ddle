@@ -44,8 +44,10 @@ Audio renders the joint model for its soundtrack and writes a 32 kHz stereo WAV
 directly, with no FFmpeg process involved.
 
 Known limitation: prompts asking for ambience rather than speech tend to return
-speech. The cause is under investigation and is not the canvas size, which was
-measured across 32, 64, 128, and 256 square.
+speech. This is H3's own bias toward dialogue, not a defect in how the app
+drives it — the canvas size was ruled out by measuring 32, 64, 128, and 256
+square, and the audio lane's sigma schedule was checked against the reference
+and is correct. Dedicated sound-effect and ambience generation is in progress.
 
 ## Requirements
 
@@ -87,6 +89,38 @@ Run all non-UI checks and build the application with:
 ```sh
 Scripts/ci.sh
 ```
+
+## Credits
+
+H3ddle itself is Apache-2.0. It builds on other people's work, under their own
+terms — the app downloads these weights rather than bundling them, and links
+each licence before the download starts.
+
+**Engine.** The Metal engine is a fork of [h3.c](https://github.com/antirez/h3.c)
+by Salvatore Sanfilippo, MIT licensed, vendored under `Engine/Vendor/h3.c`.
+
+**MiniMax H3** — video, image, and joint audio generation. Weights by MiniMax
+under the MiniMax H3 Community License Agreement, fetched from
+`Comfy-Org/MiniMax-H3`. The two step-distilled transformers under `PulpCut`
+are conversions of those weights made for this project and carry the same
+licence.
+
+**MiniMax H3 TAE** — the 9 MB preview decoder behind live denoising previews,
+by Kijai, Apache-2.0.
+
+**Powered by Stability AI.** Sound effects and ambience come from
+[Stable Audio 3 Small SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx),
+© Stability AI Ltd., used under the Stability AI Community License — free for
+research and non-commercial use, and for commercial use below USD $1M annual
+revenue after registering with Stability AI. The weights H3ddle installs are
+repackaged from Stability's own MLX release into safetensors; tensor values are
+unchanged, and the licence and NOTICE ship inside the package. Its text encoder
+is **T5Gemma**, provided under and subject to the
+[Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+
+Model outputs belong to you, as far as each licence allows. Note that the
+Stability licence forbids using outputs to train competing foundational
+generative models.
 
 ## Repository boundary
 

@@ -63,3 +63,40 @@ public enum ModelFolderInspection {
     return metadata
   }
 }
+
+extension ModelFolderInspection {
+  /// Files that identify a sound-effect package. `sa3_load` opens exactly
+  /// these, so their absence is the same answer the engine would give, minutes
+  /// earlier and without a download.
+  public static let soundEffectNames = [
+    "dit.safetensors", "text_encoder.safetensors", "decoder.safetensors",
+    "tokenizer.json",
+  ]
+
+  /// Either H3 layout the engine accepts: the released tree, or the optimized
+  /// single-file package.
+  static let videoMarkers = [
+    "FL2VA/transformer/config.json",
+    "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+  ]
+
+  /// Whether a folder holds the kind of model a category expects.
+  ///
+  /// This is a existence check, not a validation: it catches a folder filed
+  /// under the wrong heading, which would otherwise sit in the list looking
+  /// installed until a generation failed. Whether the weights are complete and
+  /// loadable is still the engine's answer to give.
+  public static func matches(_ capability: ModelCapability, at directory: URL) -> Bool {
+    let manager = FileManager.default
+    func exists(_ relative: String) -> Bool {
+      manager.fileExists(atPath: directory.appendingPathComponent(relative).path)
+    }
+    switch capability {
+    case .audio:
+      return soundEffectNames.allSatisfy(exists)
+    case .video:
+      return videoMarkers.contains(where: exists)
+    }
+  }
+}

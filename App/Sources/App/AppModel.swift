@@ -17,6 +17,21 @@ enum ModelValidationState: Equatable {
   case failed
 }
 
+enum AudioGenerationMode: Hashable {
+  case voice
+  case music
+  case soundEffects
+
+  /// Which package this mode generates from, or nil for H3's own audio.
+  var audioRole: ModelAudioRole? {
+    switch self {
+    case .voice: nil
+    case .music: .music
+    case .soundEffects: .soundEffects
+    }
+  }
+}
+
 enum ManagedModelState: Equatable {
   case checking
   case available
@@ -56,6 +71,23 @@ struct ModelChoice: Identifiable, Equatable {
   var source: Source
   var directory: URL?
   var generationProfile: ModelGenerationProfile
+  var capability: ModelCapability
+  /// What the download costs, shown before the choice is made rather than
+  /// in the confirmation that follows it. Zero for a folder already on disk.
+  var downloadBytes: Int64
+  /// Unified memory the package asks for; zero when nothing is declared.
+  var requiredMemoryBytes: Int64
+  /// What the package occupies on disk once installed, which is the whole
+  /// manifest rather than the part still to fetch.
+  var installedBytes: Int64
+  /// Which audio model this is, for packages that make audio. The picker
+  /// filters on it: music and sound effects share a capability but are not
+  /// alternatives for one another.
+  var audioRole: ModelAudioRole?
+  /// The agreement this package arrives under. Packages no longer share
+  /// one, so it travels with the card that offers to install it.
+  var licenseName: String?
+  var licenseURL: URL?
 
   var isInstalled: Bool { directory != nil }
 
@@ -72,6 +104,10 @@ final class AppModel {
   var activeGenerationKind: GenerationKind?
   var isGenerating = false
   var generationPhase = ""
+  /// Audio studio only: which of three models is generating. H3 writes the
+  /// joint soundtrack; the other two are the same Stable Audio transformer
+  /// trained on different material.
+  var audioMode: AudioGenerationMode = .voice
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
   var generationOverallProgress = 0.0
@@ -94,8 +130,15 @@ final class AppModel {
     ModelCatalog.minimaxH3TurboInt8,
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
+    ModelCatalog.stableAudio3SmallSFX,
+    ModelCatalog.stableAudio3SmallMusic,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
+  /// What each package still has to fetch, which is less than it weighs
+  /// whenever another install already supplies its shared files. Answering
+  /// this touches the disk, so it is refreshed with the statuses rather
+  /// than asked for while drawing.
+  var pendingDownloadBytesByID: [String: Int64] = [:]
   var modelChoices: [ModelChoice] = []
   var selectedModelID: String? {
     didSet {
@@ -158,7 +201,14 @@ final class AppModel {
   private var activeGenerationID: UUID?
   private var generationStartedAt: ContinuousClock.Instant?
   private var modelValidationTask: Task<Void, Never>?
-  private var modelDownloadTask: Task<Void, Never>?
+  /// Re-reads what is installed and what is part-downloaded. Distinct from
+  /// the download tasks, which it must not cancel.
+  private var statusRefreshTask: Task<Void, Never>?
+  /// One install per category. Video packages share most of their weights
+  /// and can only hardlink from one that has finished, so two at once
+  /// would fetch the shared files twice; a video and an audio package
+  /// share nothing and are free to run together.
+  private var downloadTasks: [ModelCapability: Task<Void, Never>] = [:]
   private var phaseTimeline = GenerationPhaseTimeline()
   private var activeGenerationSettings = ""
   private var pendingStatistics: GenerationStatistics?
@@ -166,6 +216,12 @@ final class AppModel {
     subsystem: "com.h3ddle.app",
     category: "generation"
   )
+
+  private var localAudioModelBookmarks: [Data] = [] {
+    didSet {
+      userDefaults.set(localAudioModelBookmarks, forKey: Self.localAudioModelsKey)
+    }
+  }
 
   private var localModelBookmarks: [Data] = [] {
     didSet {
@@ -176,8 +232,18 @@ final class AppModel {
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
   private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
+  /// Stable Audio is distilled to this many passes. Fewer degrades it
+  /// sharply and more buys nothing, so it is a default rather than a
+  /// preset ladder — but it stays overridable for experimentation.
+  static let soundEffectDefaultSteps = 8
+
   private static let selectedModelKey = "H3ddle.selectedModelID"
+  private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
+  /// Audio folders are kept under their own key rather than tagged inside
+  /// the existing one, so bookmarks saved before this distinction existed
+  /// stay what they were: H3 trees.
+  private static let localAudioModelsKey = "H3ddle.localAudioModelBookmarks"
 
   init(
     generationProvider: any GenerationProvider = FakeGenerationProvider(),
@@ -249,7 +315,7 @@ final class AppModel {
   /// of their weights, so a manifest's total overstates the cost whenever
   /// another package already supplies those files.
   func pendingDownloadBytes(for manifest: ModelPackageManifest) -> Int64 {
-    manifest.totalByteCount
+    pendingDownloadBytesByID[manifest.id] ?? manifest.totalByteCount
   }
 
   func generationBackendDescription(
@@ -396,8 +462,16 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     phaseTimeline = GenerationPhaseTimeline()
+    let soundEffects = kind == .audio && audioMode != .voice
+    let runningModelName =
+      soundEffects
+      ? (managedManifests.first { $0.audioRole == audioMode.audioRole }?.displayName
+        ?? "a Stable Audio model")
+      : (selectedModelChoice?.displayName ?? "a local model folder")
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
+      soundEffects: soundEffects,
+      label: audioMode == .music ? "music" : "sound effects",
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -406,8 +480,9 @@ final class AppModel {
       blockCache: blockCache,
       fastStill: fastStill,
       previewDenoise: previewDenoise
-    ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
-      + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
+    ) + " · model \(runningModelName)"
+      + (soundEffects || !selectedGenerationProfile.usesBetaSchedule
+        ? "" : " · beta-schedule")
       + (seed.map { " · seed \($0)" } ?? "")
 
 
@@ -416,9 +491,11 @@ final class AppModel {
       seconds: 0,
       canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
       canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
-      denoisingSteps: denoisingSteps ?? quality.denoisingSteps,
+      denoisingSteps: soundEffects
+        ? (denoisingSteps ?? Self.soundEffectDefaultSteps)
+        : (denoisingSteps ?? quality.denoisingSteps),
       clipSeconds: duration,
-      modelName: selectedModelChoice?.displayName ?? "a local model folder",
+      modelName: runningModelName,
       blockCache: blockCache,
       deviceName: modelReport?.device.name,
       deviceMemoryBytes: modelReport?.device.physicalMemory
@@ -442,19 +519,26 @@ final class AppModel {
       }
     }
 
-    let request = GenerationRequest(
-      kind: kind,
-      prompt: H3StructuredPrompt.compose(
+    let composedPrompt =
+      soundEffects
+      ? resolveStudioPromptMentions(prompt)
+      : H3StructuredPrompt.compose(
         body: resolveStudioPromptMentions(prompt),
         soundscape: studioSoundscape,
         music: studioMusic,
         kind: kind,
         endFrameAlignmentSeconds: kind == .video && studioEndFrame != nil
           && studioStartFrame == nil ? duration : nil
-      ),
+      )
+
+    let request = GenerationRequest(
+      kind: kind,
+      usesSoundEffectModel: soundEffects,
+      prompt: composedPrompt,
       duration: duration,
       quality: quality,
-      denoisingSteps: denoisingSteps,
+      denoisingSteps: soundEffects
+        ? (denoisingSteps ?? Self.soundEffectDefaultSteps) : denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
       fastStill: fastStill,
@@ -468,7 +552,12 @@ final class AppModel {
       lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
       referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
     )
-    let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
+    // Sound effects load their own package; the H3 directory would be the
+    // wrong tree entirely.
+    let nativeModelDirectory =
+      soundEffects
+      ? soundEffectModelDirectory
+      : (usesNativeEngine(for: kind) ? modelDirectory : nil)
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
         EngineGenerationProvider(
@@ -752,8 +841,21 @@ final class AppModel {
     switch kind {
     case .video: nativeVideoGenerationIsReady
     case .image: nativeImageGenerationIsReady
-    case .audio: nativeAudioGenerationIsReady
+    case .audio:
+      audioMode == .voice ? nativeAudioGenerationIsReady : soundEffectModelDirectory != nil
     }
+  }
+
+  /// Where the chosen sound-effect package lives, or nil when none is
+  /// installed. It is loaded by its own engine path and never validated as
+  /// an H3 tree.
+  var soundEffectModelDirectory: URL? {
+    guard let role = audioMode.audioRole else { return nil }
+    // The mode names the package; a stale selection from the other mode
+    // would quietly generate the wrong kind of audio.
+    return managedManifests
+      .first { $0.audioRole == role }
+      .flatMap { managedStatuses[$0.id]?.installedURL }
   }
 
   func cancelGeneration() {
@@ -860,13 +962,14 @@ final class AppModel {
   }
 
   func downloadManagedModel(_ manifest: ModelPackageManifest) {
-    guard !anyManagedDownloadIsActive else { return }
-    modelDownloadTask?.cancel()
+    guard downloadIsPermitted(for: manifest) else { return }
+    let capability = manifest.capability
+    downloadTasks[capability]?.cancel()
     managedStatuses[manifest.id, default: ManagedPackageStatus()].state = .downloading
     managedStatuses[manifest.id]?.message = "Preparing the package…"
 
     let downloader = modelDownloader
-    modelDownloadTask = Task { [weak self] in
+    downloadTasks[capability] = Task { [weak self] in
       guard let self else { return }
       do {
         let installedURL = try await downloader.download(manifest) { [weak self] progress in
@@ -891,15 +994,59 @@ final class AppModel {
         managedStatuses[manifest.id]?.state = .failed
         managedStatuses[manifest.id]?.message = error.localizedDescription
       }
+      downloadTasks[capability] = nil
     }
   }
 
+  /// The package already downloading in this category, if any.
+  func packageBlockingDownload(
+    of manifest: ModelPackageManifest
+  ) -> ModelPackageManifest? {
+    managedManifests.first {
+      $0.id != manifest.id
+        && $0.capability == manifest.capability
+        && managedStatuses[$0.id]?.downloadIsActive == true
+    }
+  }
+
+  func downloadIsPermitted(for manifest: ModelPackageManifest) -> Bool {
+    packageBlockingDownload(of: manifest) == nil
+  }
+
   func cancelManagedModelDownload() {
-    modelDownloadTask?.cancel()
-    modelDownloadTask = nil
+    for task in downloadTasks.values { task.cancel() }
+    downloadTasks.removeAll()
     for id in managedStatuses.keys where managedStatuses[id]?.downloadIsActive == true {
       managedStatuses[id]?.state = .cancelled
       managedStatuses[id]?.message = "Pausing… downloaded data will be kept."
+    }
+  }
+
+  /// Deletes an installed package's weights. Files shared with another
+  /// install are hardlinks, so this reclaims only what nothing else holds.
+  func removeManagedModel(_ manifest: ModelPackageManifest) {
+    let downloader = modelDownloader
+    Task { [weak self] in
+      do {
+        try await downloader.removeInstalledPackage(for: manifest)
+      } catch {
+        self?.errorMessage =
+          "Could not remove the model: \(error.localizedDescription)"
+        return
+      }
+      guard let self else { return }
+      // Anything pointed at the deleted tree has to let go of it.
+      if selectedModelID == manifest.id {
+        selectedModelID = nil
+        clearModelDirectory()
+      }
+      if selectedAudioModelID == manifest.id { selectedAudioModelID = nil }
+      managedStatuses[manifest.id] = ManagedPackageStatus(
+        state: .available,
+        message: availableMessage(for: manifest)
+      )
+      refreshModelChoices()
+      refreshManagedModelStatus()
     }
   }
 
@@ -931,16 +1078,20 @@ final class AppModel {
   }
 
   func refreshManagedModelStatus() {
-    guard !anyManagedDownloadIsActive else { return }
-    modelDownloadTask?.cancel()
+    statusRefreshTask?.cancel()
     let manifests = managedManifests
     let downloader = modelDownloader
     for manifest in manifests where managedStatuses[manifest.id] == nil {
       managedStatuses[manifest.id] = ManagedPackageStatus()
     }
-    modelDownloadTask = Task { [weak self] in
+    statusRefreshTask = Task { [weak self] in
       for manifest in manifests {
         guard let self else { return }
+        // A package being fetched owns its own status; re-reading the disk
+        // underneath it would overwrite live progress with a stale answer.
+        if managedStatuses[manifest.id]?.downloadIsActive == true { continue }
+        pendingDownloadBytesByID[manifest.id] =
+          await downloader.pendingByteCount(for: manifest)
         if let installedURL = await downloader.installedPackageURL(for: manifest) {
           managedStatuses[manifest.id] = ManagedPackageStatus(
             state: .installed,
@@ -1013,12 +1164,47 @@ final class AppModel {
 
   // MARK: - Model library
 
+  /// Audio models are chosen independently of video ones: installing a
+  /// sound-effect package should not unpick the model that makes video,
+  /// and pointing the H3 engine at it would only fail validation.
+  var selectedAudioModelID: String? {
+    didSet {
+      userDefaults.set(selectedAudioModelID, forKey: Self.selectedAudioModelKey)
+    }
+  }
+
   var selectedModelChoice: ModelChoice? {
     modelChoices.first { $0.id == selectedModelID }
   }
 
+  var selectedAudioModelChoice: ModelChoice? {
+    modelChoices.first { $0.id == selectedAudioModelID }
+  }
+
+  /// Which identifier a category's selection is held in.
+  func selectedModelID(for capability: ModelCapability) -> String? {
+    capability == .audio ? selectedAudioModelID : selectedModelID
+  }
+
   var installedModelChoices: [ModelChoice] {
     modelChoices.filter(\.isInstalled)
+  }
+
+  /// Installed models that can produce this kind of output. H3 makes video,
+  /// stills and their soundtrack from one package, so all three ask for a
+  /// video model; sound effects come from a different one entirely.
+  func installedModelChoices(for kind: GenerationKind) -> [ModelChoice] {
+    let capability: ModelCapability =
+      switch kind {
+      // H3 makes video, stills and their soundtrack from one package.
+      case .video, .image: .video
+      case .audio: audioMode == .voice ? .video : .audio
+      }
+    let role = kind == .audio ? audioMode.audioRole : nil
+    return modelChoices.filter {
+      $0.isInstalled && $0.capability == capability
+        && (role == nil || $0.audioRole == role)
+    }
   }
 
   var selectedGenerationProfile: ModelGenerationProfile {
@@ -1030,11 +1216,27 @@ final class AppModel {
       let choice = modelChoices.first(where: { $0.id == id }),
       let directory = choice.directory
     else { return }
+    guard choice.capability != .audio else {
+      // Audio packages are read by their own engine path, so this must
+      // not become the directory the H3 loader is pointed at.
+      selectedAudioModelID = id
+      return
+    }
     selectedModelID = id
     selectModelDirectory(directory)
   }
 
-  func addLocalModelFolder(_ url: URL) {
+  /// The caller says which list the folder joins, because the folder itself
+  /// cannot be asked: an H3 tree and a sound-effect package share no file
+  /// that would distinguish them before either is loaded.
+  func addLocalModelFolder(_ url: URL, capability: ModelCapability = .video) {
+    // Filing a folder under the wrong heading would leave it looking
+    // installed until a generation failed, so say so at the moment the
+    // mistake is made.
+    guard ModelFolderInspection.matches(capability, at: url) else {
+      errorMessage = wrongFolderMessage(for: capability, at: url)
+      return
+    }
     guard
       let bookmark = try? url.bookmarkData(
         options: .withSecurityScope,
@@ -1045,10 +1247,36 @@ final class AppModel {
       errorMessage = "Cannot keep access to \(url.lastPathComponent); choose it again."
       return
     }
-    localModelBookmarks.append(bookmark)
+    if capability == .audio {
+      localAudioModelBookmarks.append(bookmark)
+    } else {
+      localModelBookmarks.append(bookmark)
+    }
     refreshModelChoices()
     if let added = modelChoices.last(where: { $0.isLocalFolder && $0.directory == url }) {
       selectModel(added.id)
+    }
+  }
+
+  /// Names what was expected, and what the folder looks like instead when
+  /// that is knowable, so the fix is obvious without opening it.
+  private func wrongFolderMessage(
+    for capability: ModelCapability,
+    at url: URL
+  ) -> String {
+    let name = url.lastPathComponent
+    let other: ModelCapability = capability == .audio ? .video : .audio
+    if ModelFolderInspection.matches(other, at: url) {
+      return "\(name) looks like a \(other.sectionTitle.lowercased()) model. "
+        + "Add it under \(other.sectionTitle) instead."
+    }
+    switch capability {
+    case .audio:
+      return "\(name) is missing the files a sound-effect model needs "
+        + "(\(ModelFolderInspection.soundEffectNames.joined(separator: ", ")))."
+    case .video:
+      return "\(name) does not hold an H3 model: expected either "
+        + "FL2VA/transformer/config.json or a diffusion_models folder."
     }
   }
 
@@ -1057,9 +1285,13 @@ final class AppModel {
       case .localFolder(let bookmark) = choice.source
     else { return }
     localModelBookmarks.removeAll { $0 == bookmark }
+    localAudioModelBookmarks.removeAll { $0 == bookmark }
     if selectedModelID == id {
       selectedModelID = nil
       clearModelDirectory()
+    }
+    if selectedAudioModelID == id {
+      selectedAudioModelID = nil
     }
     refreshModelChoices()
   }
@@ -1069,38 +1301,57 @@ final class AppModel {
       ModelChoice(
         id: manifest.id,
         displayName: manifest.displayName,
-        subtitle: manifest.generationProfile == .turbo
-          ? "Fastest · loose prompt control"
-          : "Balanced · follows prompts",
+        subtitle: manifest.detail,
         source: .managed(manifest),
         directory: managedStatuses[manifest.id]?.installedURL,
-        generationProfile: manifest.generationProfile
+        generationProfile: manifest.generationProfile,
+        capability: manifest.capability,
+        downloadBytes: pendingDownloadBytes(for: manifest),
+        requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
+        installedBytes: manifest.totalByteCount,
+        audioRole: manifest.audioRole,
+        licenseName: manifest.licenseName,
+        licenseURL: manifest.licenseURL
       )
     }
-    for bookmark in localModelBookmarks {
-      var isStale = false
-      guard
-        let url = try? URL(
-          resolvingBookmarkData: bookmark,
-          options: .withSecurityScope,
-          relativeTo: nil,
-          bookmarkDataIsStale: &isStale
+    for (bookmarks, capability) in [
+      (localModelBookmarks, ModelCapability.video),
+      (localAudioModelBookmarks, ModelCapability.audio),
+    ] {
+      for bookmark in bookmarks {
+        var isStale = false
+        guard
+          let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+          )
+        else { continue }
+        choices.append(
+          ModelChoice(
+            id: "local:" + url.path,
+            displayName: url.lastPathComponent,
+            subtitle: "Added from this Mac",
+            source: .localFolder(bookmark: bookmark),
+            directory: url,
+            // A hand-added folder has no manifest to declare its profile, so
+            // ask the weights: a converted turbo checkpoint records the merge
+            // in its safetensors metadata. Without this, distilled weights run
+            // on the wrong schedule with no visible sign.
+            generationProfile: ModelFolderInspection.generationProfile(at: url),
+            capability: capability,
+            downloadBytes: 0,
+            requiredMemoryBytes: 0,
+            installedBytes: 0,
+            // A hand-added audio folder is a sound-effect package: nothing
+            // else is loadable this way.
+            audioRole: capability == .audio ? .soundEffects : nil,
+            licenseName: nil,
+            licenseURL: nil
+          )
         )
-      else { continue }
-      choices.append(
-        ModelChoice(
-          id: "local:" + url.path,
-          displayName: url.lastPathComponent,
-          subtitle: "Local folder",
-          source: .localFolder(bookmark: bookmark),
-          directory: url,
-          // A hand-added folder has no manifest to declare its profile, so
-          // ask the weights: a converted turbo checkpoint records the merge
-          // in its safetensors metadata. Without this, distilled weights run
-          // on the wrong schedule with no visible sign.
-          generationProfile: ModelFolderInspection.generationProfile(at: url)
-        )
-      )
+      }
     }
     modelChoices = choices
   }
@@ -1108,7 +1359,10 @@ final class AppModel {
   private func restoreModelLibrary() {
     localModelBookmarks =
       userDefaults.array(forKey: Self.localModelsKey) as? [Data] ?? []
+    localAudioModelBookmarks =
+      userDefaults.array(forKey: Self.localAudioModelsKey) as? [Data] ?? []
     selectedModelID = userDefaults.string(forKey: Self.selectedModelKey)
+    selectedAudioModelID = userDefaults.string(forKey: Self.selectedAudioModelKey)
     // A pre-picker install selected one folder through a single bookmark;
     // carry it into the library as a local folder.
     if localModelBookmarks.isEmpty, selectedModelID == nil,
@@ -1593,6 +1847,8 @@ final class AppModel {
   /// different runs are directly comparable.
   private static func settingsDescription(
     kind: GenerationKind,
+    soundEffects: Bool = false,
+    label: String = "sound effects",
     duration: TimeInterval,
     quality: EngineGenerationQuality,
     denoisingSteps: Int?,
@@ -1602,6 +1858,11 @@ final class AppModel {
     fastStill: Bool,
     previewDenoise: Bool
   ) -> String {
+    if soundEffects {
+      // Eight fixed passes, no canvas, no reuse ladders: reciting H3's
+      // settings here would describe a model that was not run.
+      return String(format: "%@ · %.0fs", label, duration)
+    }
     guard kind == .video || kind == .image || kind == .audio else {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)
     }

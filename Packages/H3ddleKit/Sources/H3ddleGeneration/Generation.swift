@@ -20,6 +20,9 @@ public enum GenerationKind: String, CaseIterable, Codable, Identifiable, Sendabl
 
 public struct GenerationRequest: Hashable, Codable, Sendable {
   public var kind: GenerationKind
+  /// Audio only: render through the sound-effect model rather than H3's
+  /// joint soundtrack. Both produce a WAV, so nothing downstream differs.
+  public var usesSoundEffectModel = false
   public var prompt: String
   public var duration: TimeInterval
   public var quality: EngineGenerationQuality
@@ -53,6 +56,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
 
   public init(
     kind: GenerationKind,
+    usesSoundEffectModel: Bool = false,
     prompt: String,
     duration: TimeInterval,
     quality: EngineGenerationQuality = .preview,
@@ -71,6 +75,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     referenceImageURLs: [URL] = []
   ) {
     self.kind = kind
+    self.usesSoundEffectModel = usesSoundEffectModel
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     self.duration = max(0, duration)
     self.quality = quality

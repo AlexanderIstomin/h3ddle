@@ -29,7 +29,18 @@ struct TimelineMediaDrop: ViewModifier {
       } isTargeted: { hovering in
         isTargeted = hovering && MediaImport.containsCompatible(Self.draggingFileURLs, onto: lane)
       }
-      .accessibilityIdentifier(accessibilityID)
+      // The lane is a drop target that also contains controls of its own.
+      // Naming the whole region merged it with the append button inside,
+      // producing one element that answered to the lane's identifier and
+      // the button's label — so the button could never be activated. The
+      // name now rides on a marker of its own, which the drop tests can
+      // still find while the controls keep their identities.
+      .overlay {
+        Color.clear
+          .accessibilityElement()
+          .accessibilityIdentifier(accessibilityID)
+          .allowsHitTesting(false)
+      }
   }
 
   private static var draggingFileURLs: [URL] {

@@ -1,5 +1,4 @@
 import H3ddleDesignSystem
-import H3ddleEngineProtocol
 import H3ddleModels
 import SwiftUI
 import UniformTypeIdentifiers
@@ -8,24 +7,18 @@ struct ModelSettingsView: View {
   @Bindable var model: AppModel
 
   @State private var isChoosingModel = false
+  /// Which list the folder about to be chosen should join.
+  @State private var capabilityBeingAdded: ModelCapability = .video
   @State private var manifestPendingDownload: ModelPackageManifest?
-  @State private var detailsExpanded = false
+  @State private var manifestPendingRemoval: ModelPackageManifest?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
       Divider().overlay(H3Color.line)
       ScrollView {
-        VStack(alignment: .leading, spacing: 0) {
-          modelList
-          Divider().overlay(H3Color.line)
-          status
-          Divider().overlay(H3Color.line)
-          details
-        }
+        modelList
       }
-      Divider().overlay(H3Color.line)
-      footer
     }
     .frame(width: 610, height: 680)
     .background(H3Color.surface)
@@ -36,7 +29,30 @@ struct ModelSettingsView: View {
       allowsMultipleSelection: false
     ) { result in
       if case .success(let urls) = result, let directory = urls.first {
-        model.addLocalModelFolder(directory)
+        model.addLocalModelFolder(directory, capability: capabilityBeingAdded)
+      }
+    }
+    .confirmationDialog(
+      "Delete \(manifestPendingRemoval?.displayName ?? "model")?",
+      isPresented: Binding(
+        get: { manifestPendingRemoval != nil },
+        set: { if !$0 { manifestPendingRemoval = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      if let manifest = manifestPendingRemoval {
+        Button("Delete Files", role: .destructive) {
+          model.removeManagedModel(manifest)
+          manifestPendingRemoval = nil
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      if let manifest = manifestPendingRemoval {
+        Text(
+          "Removes \(ByteCountFormatter.string(fromByteCount: manifest.totalByteCount, countStyle: .file)) "
+            + "from this Mac. Weights shared with another installed package are kept."
+        )
       }
     }
     .confirmationDialog(
@@ -55,12 +71,19 @@ struct ModelSettingsView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text(
-        manifestPendingDownload?.generationProfile == .turbo
-          ? "Files already on this Mac are reused; only missing files are downloaded. By installing you agree to the linked MiniMax H3 Community License Agreement."
-          : "The files come from Hugging Face. By downloading them, you agree to the linked MiniMax H3 Community License Agreement."
-      )
+      if let manifest = manifestPendingDownload {
+        Text(licenseMessage(for: manifest))
+      }
     }
+  }
+
+  /// Each package carries its own licence, so the agreement being accepted
+  /// has to be named from the manifest rather than assumed to be H3's.
+  private func licenseMessage(for manifest: ModelPackageManifest) -> String {
+    let reuse = manifest.generationProfile == .turbo
+      ? "Files already on this Mac are reused; only missing files are downloaded. "
+      : "The files come from Hugging Face. "
+    return reuse + "By installing you agree to the linked \(manifest.licenseName)."
   }
 
   private func confirmActionTitle(for manifest: ModelPackageManifest) -> String {
@@ -86,58 +109,105 @@ struct ModelSettingsView: View {
       Button {
         model.showsModelSettings = false
       } label: {
+        // A bare glyph is only about twelve points across, so a click that
+        // misses it does nothing and reads as the window refusing to close.
         Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 34, height: 34)
+          .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .keyboardShortcut(.cancelAction)
+      .accessibilityIdentifier("close-models")
     }
     .padding(H3Spacing.large)
   }
 
   private var modelList: some View {
-    VStack(alignment: .leading, spacing: H3Spacing.small) {
-      ForEach(model.modelChoices) { choice in
-        ModelChoiceRow(
-          choice: choice,
-          isSelected: model.selectedModelID == choice.id,
-          status: managedStatus(for: choice),
-          select: { model.selectModel(choice.id) },
-          install: {
-            if case .managed(let manifest) = choice.source {
-              manifestPendingDownload = manifest
-            }
-          },
-          pause: { model.cancelManagedModelDownload() },
-          discard: {
-            if case .managed(let manifest) = choice.source {
-              model.discardManagedModelDownload(manifest)
-            }
-          },
-          remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
-        )
-      }
-
-      Button {
-        isChoosingModel = true
-      } label: {
-        HStack(spacing: 8) {
-          Image(systemName: "plus")
-            .font(.system(size: 11, weight: .semibold))
-          Text("Add Local Folder")
-            .font(.system(size: 13, weight: .semibold))
-          Spacer()
+    VStack(alignment: .leading, spacing: H3Spacing.large) {
+      // Every category is shown even when empty: the section carries its own
+      // way to add a folder, so an empty one is an invitation rather than a
+      // sign something failed to load.
+      ForEach(ModelCapability.allCases, id: \.self) { capability in
+        let choices = model.modelChoices.filter { $0.capability == capability }
+        VStack(alignment: .leading, spacing: H3Spacing.small) {
+          Text(capability.sectionTitle.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .tracking(1.1)
+            .foregroundStyle(H3Color.textSecondary)
+          ForEach(choices) { choice in
+            ModelChoiceRow(
+              choice: choice,
+              isSelected: model.selectedModelID(for: capability) == choice.id,
+              status: managedStatus(for: choice),
+              installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
+              select: { model.selectModel(choice.id) },
+              install: {
+                if case .managed(let manifest) = choice.source {
+                  manifestPendingDownload = manifest
+                }
+              },
+              pause: { model.cancelManagedModelDownload() },
+              discard: {
+                if case .managed(let manifest) = choice.source {
+                  model.discardManagedModelDownload(manifest)
+                }
+              },
+              remove: {
+                // Managed packages delete their weights behind a
+                // confirmation; a hand-added folder is only unlisted.
+                if case .managed(let manifest) = choice.source {
+                  manifestPendingRemoval = manifest
+                } else {
+                  model.removeLocalModel(choice.id)
+                }
+              }
+            )
+          }
+          addFolderButton(for: capability)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 40)
-        .background(H3Color.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(H3Color.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-        }
       }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("choose-model-folder")
     }
     .padding(H3Spacing.large)
+  }
+
+  private func addFolderButton(for capability: ModelCapability) -> some View {
+    Button {
+      capabilityBeingAdded = capability
+      isChoosingModel = true
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "plus")
+          .font(.system(size: 11, weight: .semibold))
+        Text("Add \(capability.sectionTitle.lowercased()) model from this Mac")
+          .font(.system(size: 12, weight: .medium))
+        Spacer()
+      }
+      .foregroundStyle(H3Color.textSecondary)
+      .padding(.horizontal, 12)
+      .frame(height: 36)
+      .background(
+        H3Color.canvas,
+        in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
+          .strokeBorder(H3Color.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("choose-model-folder-\(capability.rawValue)")
+  }
+
+  /// Names whichever package in the same category is already downloading.
+  private func blockingPackageName(for choice: ModelChoice) -> String? {
+    guard case .managed(let manifest) = choice.source else { return nil }
+    return model.packageBlockingDownload(of: manifest)?.displayName
   }
 
   private func managedStatus(for choice: ModelChoice) -> ManagedPackageStatus? {
@@ -147,173 +217,169 @@ struct ModelSettingsView: View {
     return nil
   }
 
-  private var status: some View {
-    HStack(alignment: .top, spacing: H3Spacing.medium) {
-      statusSymbol
-        .frame(width: 22, height: 22)
-      VStack(alignment: .leading, spacing: 5) {
-        Text(model.modelStatusTitle)
-          .font(.system(size: 13, weight: .semibold))
-        Text(model.modelValidationMessage)
-          .font(.system(size: 12))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      Spacer(minLength: 0)
-      if model.modelDirectory != nil {
-        Button("Check again") {
-          model.validateSelectedModel()
-        }
-        .buttonStyle(H3QuietButtonStyle())
-        .disabled(model.modelValidationState == .validating)
-      }
-    }
-    .padding(H3Spacing.large)
-    .animation(.easeOut(duration: 0.18), value: model.modelValidationState)
-  }
-
-  @ViewBuilder
-  private var statusSymbol: some View {
-    switch model.modelValidationState {
-    case .notSelected:
-      Image(systemName: "externaldrive")
-        .foregroundStyle(H3Color.textSecondary)
-    case .validating:
-      ProgressView()
-        .controlSize(.small)
-        .tint(H3Color.accent)
-    case .ready:
-      Image(systemName: "checkmark.circle.fill")
-        .foregroundStyle(H3Color.accent)
-        .symbolEffect(.bounce, value: model.modelValidationState)
-    case .failed:
-      Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(H3Color.danger)
-    }
-  }
-
-  private var details: some View {
-    DisclosureGroup(isExpanded: $detailsExpanded) {
-      VStack(spacing: 0) {
-        if let report = model.modelReport, let capabilities = model.engineCapabilities {
-          DetailRow(
-            label: "Engine", value: "\(capabilities.engineName) \(capabilities.engineVersion)")
-          DetailRow(label: "Device", value: report.device.name)
-          DetailRow(
-            label: "Model files",
-            value: ByteCountFormatter.string(
-              fromByteCount: Int64(report.totalBytes), countStyle: .file))
-          DetailRow(label: "Format", value: report.format.displayName)
-          DetailRow(
-            label: "Reference model",
-            value: report.hasReferenceTransformer ? "Available" : "Not installed"
-          )
-          DetailRow(
-            label: "Video output",
-            value: capabilities.supports(.videoGeneration) && report.supportsGeneration
-              ? "Available" : "Adapter required")
-          DetailRow(
-            label: "Audio-only output",
-            value: capabilities.supports(.standaloneAudioGeneration)
-              ? "Available" : "Requires a separate provider"
-          )
-          if let directory = model.modelDirectory {
-            DetailRow(label: "Location", value: directory.path(percentEncoded: false))
-          }
-        } else {
-          Text("Select a ready model to inspect engine and device details.")
-            .font(.system(size: 12))
-            .foregroundStyle(H3Color.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 10)
-        }
-      }
-    } label: {
-      Text("Details")
-        .font(.system(size: 13, weight: .semibold))
-    }
-    .tint(H3Color.textSecondary)
-    .padding(H3Spacing.large)
-  }
-
-  private var footer: some View {
-    HStack {
-      if let manifest = selectedManifest {
-        Link("Model license", destination: manifest.licenseURL)
-          .font(.system(size: 11, weight: .medium))
-      }
-      Spacer()
-    }
-    .padding(.horizontal, H3Spacing.large)
-    .frame(height: 50)
-  }
-
-  private var selectedManifest: ModelPackageManifest? {
-    if case .managed(let manifest) = model.selectedModelChoice?.source {
-      return manifest
-    }
-    return nil
-  }
 }
 
-/// One selectable model card: name and subtitle on the left, install state or
-/// selection tick on the right, mirroring the studio dropdown rows.
+/// One model in the library: what it is, what it costs, and the licence it
+/// arrives under, which differs per package and so belongs on the card
+/// rather than in a footer that could only ever name one of them.
 private struct ModelChoiceRow: View {
   var choice: ModelChoice
   var isSelected: Bool
   var status: ManagedPackageStatus?
+  /// Name of the package already downloading in this category, which this
+  /// one has to wait for.
+  var blockedBy: String?
+  /// This Mac's unified memory, compared against what the package asks for.
+  var installedMemoryBytes: Int64
   var select: () -> Void
   var install: () -> Void
   var pause: () -> Void
   var discard: (() -> Void)?
-  var remove: (() -> Void)?
+  /// Deletes a managed package's weights or unlists a local folder. Not
+  /// optional: every card can be removed, and an optional here once let a
+  /// call site pass nil, which compiled cleanly and silently erased the
+  /// button for every managed package.
+  var remove: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        Button(action: selectIfPossible) {
-          HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(choice.displayName)
-                .font(.system(size: 13, weight: .semibold))
-              Text(choice.subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(H3Color.textSecondary)
-            }
-            Spacer()
+      HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(choice.displayName)
+              .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 0)
+            trailingBadge
           }
-          .contentShape(Rectangle())
+          Text(choice.subtitle)
+            .font(.system(size: 11))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+          if !chips.isEmpty {
+            HStack(spacing: 6) {
+              ForEach(chips, id: \.text) { chip in
+                Text(chip.text)
+                  .font(.system(size: 10, weight: .medium))
+                  .padding(.horizontal, 6)
+                  .padding(.vertical, 2)
+                  .background(
+                    chip.warning ? H3Color.danger.opacity(0.16) : H3Color.controlFill,
+                    in: Capsule()
+                  )
+                  .foregroundStyle(chip.warning ? H3Color.danger : H3Color.textSecondary)
+              }
+            }
+            .padding(.top, 2)
+          }
         }
-        .buttonStyle(.plain)
 
-        trailing
+        actions
       }
       .padding(.horizontal, 12)
-      .frame(minHeight: 52)
+      .padding(.top, 10)
+      .padding(.bottom, choice.licenseURL == nil ? 10 : 0)
 
-      if let status, status.downloadIsActive || (status.progress > 0 && status.state != .installed)
+      if let licenseURL = choice.licenseURL {
+        Link(choice.licenseName ?? "Model license", destination: licenseURL)
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .padding(.horizontal, 12)
+          .padding(.bottom, 10)
+      }
+
+      if let blockedBy {
+        Text("Waiting on \(blockedBy): they share weights, and fetching "
+          + "both at once would download the shared files twice.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+          .padding(.bottom, 10)
+      } else if let status,
+        status.downloadIsActive || (status.progress > 0 && status.state != .installed)
       {
         VStack(spacing: 4) {
           ProgressView(value: status.progress)
             .tint(H3Color.accent)
-          Text(status.message)
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          HStack {
+            Text(status.message)
+            Spacer()
+            Text("\(Int(status.progress * 100))%")
+          }
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
       }
     }
+    .contentShape(Rectangle())
+    .onTapGesture(perform: selectIfPossible)
     .background(
-      isSelected ? H3Color.accent.opacity(0.12) : H3Color.canvas,
-      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      H3Color.canvas,
+      in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
     )
     .overlay {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
         .strokeBorder(isSelected ? H3Color.accent.opacity(0.5) : H3Color.line, lineWidth: 1)
     }
     .animation(.easeOut(duration: 0.18), value: isSelected)
+  }
+
+  /// Installed packages confirm themselves; everything else shows its price,
+  /// so the cost is visible right up until it is paid.
+  @ViewBuilder
+  private var trailingBadge: some View {
+    if choice.isInstalled {
+      Text(isSelected ? "In use" : "Installed")
+        .font(.system(size: 10, weight: .semibold))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+          isSelected ? H3Color.accent.opacity(0.18) : H3Color.controlFill,
+          in: Capsule()
+        )
+        .foregroundStyle(isSelected ? H3Color.accent : H3Color.textSecondary)
+    } else if choice.downloadBytes > 0 {
+      Text(byteText(choice.downloadBytes))
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+  }
+
+  private struct Chip {
+    var text: String
+    var warning = false
+  }
+
+  private var chips: [Chip] {
+    var result: [Chip] = []
+    if choice.generationProfile == .turbo {
+      result.append(Chip(text: "Turbo"))
+    }
+    // Disk is the real cost of a package: the weights stream from the file
+    // rather than being held in RAM, so what it occupies is the drive.
+    if choice.isInstalled, choice.installedBytes > 0 {
+      result.append(Chip(text: "\(byteText(choice.installedBytes)) on disk"))
+    }
+    // Memory only earns a chip when this Mac is short of it; otherwise it
+    // is a number nobody has to act on.
+    if choice.requiredMemoryBytes > 0, installedMemoryBytes > 0,
+      installedMemoryBytes < choice.requiredMemoryBytes
+    {
+      result.append(
+        Chip(text: "Needs \(byteText(choice.requiredMemoryBytes)) memory", warning: true)
+      )
+    }
+    if choice.isLocalFolder {
+      result.append(Chip(text: "Local folder"))
+    }
+    return result
+  }
+
+  private func byteText(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
   }
 
   private func selectIfPossible() {
@@ -323,20 +389,26 @@ private struct ModelChoiceRow: View {
   }
 
   @ViewBuilder
-  private var trailing: some View {
+  private var actions: some View {
     if choice.isInstalled {
-      if let remove {
-        Button(action: remove) {
-          Image(systemName: "xmark.circle")
+      Button(action: remove) {
+          Image(systemName: choice.isLocalFolder ? "xmark.circle" : "trash")
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(H3Color.textSecondary)
+            .frame(width: 28, height: 28)
+            .overlay {
+              RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(H3Color.line, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Remove from the list (files stay on disk)")
-      }
-      Image(systemName: "checkmark")
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(H3Color.accent)
-        .opacity(isSelected ? 1 : 0)
+        .help(
+          choice.isLocalFolder
+            ? "Remove from the list (files stay on disk)"
+            : "Delete the downloaded weights from this Mac"
+        )
+        .accessibilityIdentifier("remove-model")
     } else if let status {
       switch status.state {
       case .checking:
@@ -350,7 +422,14 @@ private struct ModelChoiceRow: View {
         if status.state == .cancelled || status.progress > 0, let discard {
           Button(action: discard) {
             Image(systemName: "trash")
+              .font(.system(size: 12, weight: .medium))
               .foregroundStyle(H3Color.textSecondary)
+              .frame(width: 28, height: 28)
+              .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                  .stroke(H3Color.line, lineWidth: 1)
+              }
+              .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
           .help("Discard the paused download and free its partial files")
@@ -358,6 +437,8 @@ private struct ModelChoiceRow: View {
         }
         Button(installTitle, action: install)
           .buttonStyle(H3PrimaryButtonStyle())
+          .disabled(blockedBy != nil)
+          .opacity(blockedBy == nil ? 1 : 0.4)
           .accessibilityIdentifier("download-managed-model")
       }
     }
@@ -368,36 +449,5 @@ private struct ModelChoiceRow: View {
       return "Resume"
     }
     return choice.generationProfile == .turbo ? "Install" : "Download"
-  }
-}
-
-private extension EngineModelFormat {
-  var displayName: String {
-    switch self {
-    case .unknown: "Unknown"
-    case .releasedDirectory: "Released directory"
-    case .optimizedINT8SingleFile: "Optimized INT8"
-    }
-  }
-}
-
-private struct DetailRow: View {
-  var label: String
-  var value: String
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline) {
-      Text(label)
-        .foregroundStyle(H3Color.textSecondary)
-      Spacer()
-      Text(value)
-        .multilineTextAlignment(.trailing)
-        .textSelection(.enabled)
-    }
-    .font(.system(size: 12, weight: .medium))
-    .frame(minHeight: 35)
-    .overlay(alignment: .bottom) {
-      Divider().overlay(H3Color.line.opacity(0.65))
-    }
   }
 }
