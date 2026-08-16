@@ -17,8 +17,11 @@
  * i+1 and codec_embedding[i] embeds what it produced — the two arrays are
  * indexed alike, which is the off-by-one worth being careful about.
  *
- * No key/value cache: the sequence never exceeds sixteen positions, so
- * recomputing costs less than the bookkeeping would. */
+ * The keys and values are cached across the fifteen steps. The sequence never
+ * exceeds sixteen positions, so it looked as though recomputing would cost less
+ * than the bookkeeping; it does not. Cached, a frame is 16 position-passes,
+ * recomputed it is 135, and since this dominates generation that difference is
+ * most of the run. */
 
 #define QWEN_CODE_GROUPS      16
 #define QWEN_PREDICTOR_LAYERS 5

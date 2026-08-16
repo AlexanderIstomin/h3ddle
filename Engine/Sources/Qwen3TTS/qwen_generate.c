@@ -1,6 +1,7 @@
 #include "qwen_generate.h"
 
 #include "qwen_codec.h"
+#include "qwen_gpu.h"
 #include "qwen_predictor.h"
 #include "qwen_speaker.h"
 #include "qwen_talker.h"
@@ -35,7 +36,41 @@ struct qwen_tts {
     qwen_predictor *predictor;
     qwen_codec *codec;
     qwen_speaker *speaker;
+    /* Set together or not at all. When they are set the transformers run on the
+     * GPU and the CPU talker is kept only for its embedding tables, which is
+     * why its own cache is loaded at one token — calling qwen_talker_forward on
+     * it would then fail with a clear message rather than run a second copy. */
+    qwen_gpu_talker *gpu_talker;
+    qwen_gpu_predictor *gpu_predictor;
 };
+
+/* The four calls the loop makes into whichever pair is in use. Everything else
+ * — the embedding tables, the codec decoder, the speaker encoder — is the same
+ * either way. */
+static void talker_reset(qwen_tts *tts) {
+    if (tts->gpu_talker) qwen_gpu_talker_reset(tts->gpu_talker);
+    else qwen_talker_reset(tts->talker);
+}
+
+static int talker_forward(qwen_tts *tts, const float *embeddings, int tokens,
+                          float *hidden, float *logits, char *error,
+                          size_t error_size) {
+    return tts->gpu_talker
+        ? qwen_gpu_talker_forward(tts->gpu_talker, embeddings, tokens, hidden,
+                                  logits, error, error_size)
+        : qwen_talker_forward(tts->talker, embeddings, tokens, hidden, logits,
+                              error, error_size);
+}
+
+static int predictor_run(qwen_tts *tts, const float *state, const float *next,
+                         uint32_t *groups, float temperature, uint64_t *seed,
+                         char *error, size_t error_size) {
+    return tts->gpu_predictor
+        ? qwen_gpu_predictor_run(tts->gpu_predictor, state, next, groups,
+                                 temperature, seed, error, error_size)
+        : qwen_predictor_run(tts->predictor, state, next, groups, temperature,
+                             seed, error, error_size);
+}
 
 qwen_tts *qwen_tts_load(const char *talker_path, const char *predictor_path,
                         const char *codec_path, const char *speaker_path,
@@ -60,8 +95,38 @@ qwen_tts *qwen_tts_load(const char *talker_path, const char *predictor_path,
     return tts;
 }
 
+qwen_tts *qwen_tts_load_metal(const char *talker_path,
+                              const char *predictor_path,
+                              const char *codec_path, const char *speaker_path,
+                              const char *shader_path, int max_tokens,
+                              char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!shader_path) {
+        snprintf(error, error_size, "the Metal path needs a shader source");
+        return NULL;
+    }
+    /* One token, because this copy is only ever asked for embeddings — see the
+     * note on the struct. It saves the 224 KB a token costs across 28 layers,
+     * which for a long utterance is most of a hundred megabytes. */
+    qwen_tts *tts = qwen_tts_load(talker_path, predictor_path, codec_path,
+                                  speaker_path, 1, error, error_size);
+    if (!tts) return NULL;
+    tts->gpu_talker = qwen_gpu_talker_load(talker_path, shader_path, max_tokens,
+                                           error, error_size);
+    if (tts->gpu_talker)
+        tts->gpu_predictor = qwen_gpu_predictor_load(predictor_path, shader_path,
+                                                     error, error_size);
+    if (!tts->gpu_predictor) {
+        qwen_tts_free(tts);
+        return NULL;
+    }
+    return tts;
+}
+
 void qwen_tts_free(qwen_tts *tts) {
     if (!tts) return;
+    qwen_gpu_talker_free(tts->gpu_talker);
+    qwen_gpu_predictor_free(tts->gpu_predictor);
     qwen_talker_free(tts->talker);
     qwen_predictor_free(tts->predictor);
     qwen_codec_free(tts->codec);
@@ -230,7 +295,7 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
     }
 
     /* ---- the loop ------------------------------------------------------ */
-    qwen_talker_reset(tts->talker);
+    talker_reset(tts);
     float *hidden = malloc((size_t)10 * WIDTH * sizeof(float));
     float *logits = malloc((size_t)10 * QWEN_TALKER_VOCAB * sizeof(float));
     uint32_t *codes = malloc((size_t)QWEN_CODEC_GROUPS * max_frames *
@@ -244,8 +309,7 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
         return 0;
     }
 
-    int ok = qwen_talker_forward(tts->talker, prefill, 10, hidden, logits,
-                                 error, error_size);
+    int ok = talker_forward(tts, prefill, 10, hidden, logits, error, error_size);
     /* the prefill's last position is the one that predicts the first frame */
     float *state = hidden + 9 * WIDTH;
     float *scores = logits + (size_t)9 * QWEN_TALKER_VOCAB;
@@ -263,8 +327,8 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
         if (!qwen_talker_embed_codec(tts->talker, &group0, 1, next,
                                      error, error_size)) { ok = 0; break; }
         uint32_t groups[QWEN_CODE_GROUPS - 1];
-        if (!qwen_predictor_run(tts->predictor, state, next, groups,
-                                request->temperature, &seed, error, error_size)) {
+        if (!predictor_run(tts, state, next, groups, request->temperature,
+                           &seed, error, error_size)) {
             ok = 0;
             break;
         }
@@ -282,8 +346,7 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
 
         frames++;
         if (progress) progress(frames, max_frames, opaque);
-        ok = qwen_talker_forward(tts->talker, next, 1, hidden, logits,
-                                 error, error_size);
+        ok = talker_forward(tts, next, 1, hidden, logits, error, error_size);
         state = hidden;
         scores = logits;
     }
