@@ -80,6 +80,10 @@ struct ModelChoice: Identifiable, Equatable {
   /// What the package occupies on disk once installed, which is the whole
   /// manifest rather than the part still to fetch.
   var installedBytes: Int64
+  /// Which audio model this is, for packages that make audio. The picker
+  /// filters on it: music and sound effects share a capability but are not
+  /// alternatives for one another.
+  var audioRole: ModelAudioRole?
   /// The agreement this package arrives under. Packages no longer share
   /// one, so it travels with the card that offers to install it.
   var licenseName: String?
@@ -1196,7 +1200,11 @@ final class AppModel {
       case .video, .image: .video
       case .audio: audioMode == .voice ? .video : .audio
       }
-    return modelChoices.filter { $0.isInstalled && $0.capability == capability }
+    let role = kind == .audio ? audioMode.audioRole : nil
+    return modelChoices.filter {
+      $0.isInstalled && $0.capability == capability
+        && (role == nil || $0.audioRole == role)
+    }
   }
 
   var selectedGenerationProfile: ModelGenerationProfile {
@@ -1301,6 +1309,7 @@ final class AppModel {
         downloadBytes: pendingDownloadBytes(for: manifest),
         requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
         installedBytes: manifest.totalByteCount,
+        audioRole: manifest.audioRole,
         licenseName: manifest.licenseName,
         licenseURL: manifest.licenseURL
       )
@@ -1335,6 +1344,9 @@ final class AppModel {
             downloadBytes: 0,
             requiredMemoryBytes: 0,
             installedBytes: 0,
+            // A hand-added audio folder is a sound-effect package: nothing
+            // else is loadable this way.
+            audioRole: capability == .audio ? .soundEffects : nil,
             licenseName: nil,
             licenseURL: nil
           )
