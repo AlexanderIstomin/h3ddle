@@ -206,7 +206,7 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
                       char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!tts || !request || !audio || !samples || !request->text_ids ||
-        !request->reference) {
+        (!request->reference && !request->speaker_embedding)) {
         snprintf(error, error_size, "invalid arguments");
         return 0;
     }
@@ -218,9 +218,15 @@ int qwen_tts_generate(qwen_tts *tts, const qwen_tts_request *request,
     const int max_frames = request->max_frames > 0 ? request->max_frames : 512;
 
     float *speaker = malloc(WIDTH * sizeof(float));
-    if (!speaker || !qwen_speaker_embed(tts->speaker, request->reference,
-                                        request->reference_samples, speaker,
-                                        error, error_size)) {
+    if (!speaker) {
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    if (request->speaker_embedding) {
+        memcpy(speaker, request->speaker_embedding, WIDTH * sizeof(float));
+    } else if (!qwen_speaker_embed(tts->speaker, request->reference,
+                                   request->reference_samples, speaker,
+                                   error, error_size)) {
         free(speaker);
         return 0;
     }

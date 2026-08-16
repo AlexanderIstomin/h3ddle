@@ -233,8 +233,76 @@ void h3ddle_qwen_release(void) {
 #define QWEN_FRAMES_PER_SECOND 12.5
 #define QWEN_REFERENCE_LIMIT   (QWEN_SPEAKER_SAMPLE_RATE * 60)
 
+/* Reads a saved voice. Wrong-sized files are refused rather than padded: a
+ * truncated one would speak in a voice nobody chose. */
+static int qwen_read_embedding(const char *path, float *embedding, char *error,
+                               size_t error_size) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        if (error && error_size)
+            snprintf(error, error_size, "cannot read the voice %s", path);
+        return 0;
+    }
+    const size_t read = fread(embedding, sizeof(float), QWEN_SPEAKER_DIM, file);
+    int extra = fgetc(file) != EOF;
+    fclose(file);
+    if (read != QWEN_SPEAKER_DIM || extra) {
+        if (error && error_size)
+            snprintf(error, error_size, "%s is not a voice: expected %d floats",
+                     path, QWEN_SPEAKER_DIM);
+        return 0;
+    }
+    return 1;
+}
+
+int h3ddle_qwen_write_embedding(const char *package_directory,
+                                const char *reference_path,
+                                const char *embedding_path,
+                                char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!package_directory || !reference_path || !embedding_path) {
+        if (error && error_size)
+            snprintf(error, error_size, "a package, clip and destination are "
+                     "required");
+        return 0;
+    }
+    char speaker[1200];
+    snprintf(speaker, sizeof(speaker), "%s/speaker_encoder.safetensors",
+             package_directory);
+    /* Loaded and dropped per call: 35 MB, used once when a voice is added. */
+    qwen_speaker *encoder = qwen_speaker_load(speaker, error, error_size);
+    if (!encoder) return 0;
+
+    float *reference = NULL;
+    int reference_samples = 0;
+    if (!h3ddle_read_mono_f32(reference_path, QWEN_SPEAKER_SAMPLE_RATE,
+                              QWEN_REFERENCE_LIMIT, &reference,
+                              &reference_samples, error, error_size)) {
+        qwen_speaker_free(encoder);
+        return 0;
+    }
+    float embedding[QWEN_SPEAKER_DIM];
+    const int ok = qwen_speaker_embed(encoder, reference, reference_samples,
+                                      embedding, error, error_size);
+    free(reference);
+    qwen_speaker_free(encoder);
+    if (!ok) return 0;
+
+    FILE *file = fopen(embedding_path, "wb");
+    if (!file || fwrite(embedding, sizeof(float), QWEN_SPEAKER_DIM, file) !=
+        QWEN_SPEAKER_DIM) {
+        if (file) fclose(file);
+        if (error && error_size)
+            snprintf(error, error_size, "cannot write %s", embedding_path);
+        return 0;
+    }
+    fclose(file);
+    return 1;
+}
+
 int h3ddle_qwen_generate(const char *package_directory, const char *text,
                          const char *language, const char *reference_path,
+                         const char *embedding_path,
                          double max_seconds, double temperature, int top_k,
                          double repetition_penalty, unsigned long long seed,
                          const char *output_path, h3ddle_qwen_frame on_frame,
@@ -246,12 +314,6 @@ int h3ddle_qwen_generate(const char *package_directory, const char *text,
         if (error && error_size)
             snprintf(error, error_size, "a package, text and destination are "
                      "required");
-        return 0;
-    }
-    if (!reference_path) {
-        if (error && error_size)
-            snprintf(error, error_size, "a reference clip is required: this "
-                     "model has no default voice");
         return 0;
     }
     uint32_t language_id = 0;
@@ -313,13 +375,28 @@ int h3ddle_qwen_generate(const char *package_directory, const char *text,
     free(templated);
     if (!ok) return 0;
 
+    /* A saved voice, a clip to take one from, or neither — the model's own
+     * unconditioned voice, which is what "no reference" has to mean for the
+     * request to be answerable at all. */
+    float embedding[QWEN_SPEAKER_DIM] = {0};
+    int haveEmbedding = 0;
     float *reference = NULL;
     int reference_samples = 0;
-    if (!h3ddle_read_mono_f32(reference_path, QWEN_SPEAKER_SAMPLE_RATE,
-                              QWEN_REFERENCE_LIMIT, &reference,
-                              &reference_samples, error, error_size)) {
-        h3_tokenizer_ids_free(ids);
-        return 0;
+    if (embedding_path && *embedding_path) {
+        if (!qwen_read_embedding(embedding_path, embedding, error, error_size)) {
+            h3_tokenizer_ids_free(ids);
+            return 0;
+        }
+        haveEmbedding = 1;
+    } else if (reference_path && *reference_path) {
+        if (!h3ddle_read_mono_f32(reference_path, QWEN_SPEAKER_SAMPLE_RATE,
+                                  QWEN_REFERENCE_LIMIT, &reference,
+                                  &reference_samples, error, error_size)) {
+            h3_tokenizer_ids_free(ids);
+            return 0;
+        }
+    } else {
+        haveEmbedding = 1;   /* the zeros above */
     }
 
     qwen_tts_request request = {
@@ -327,6 +404,7 @@ int h3ddle_qwen_generate(const char *package_directory, const char *text,
         .text_count = (int)id_count,
         .reference = reference,
         .reference_samples = reference_samples,
+        .speaker_embedding = haveEmbedding ? embedding : NULL,
         .language_id = language_id,
         .temperature = (float)temperature,
         .top_k = top_k,

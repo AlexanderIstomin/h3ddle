@@ -596,11 +596,8 @@ private final class EngineRuntime: @unchecked Sendable {
         EngineOutput.fail(command, message: "This engine cannot generate speech")
         return
       }
-      guard let speech = request.speech, speech.referenceAudioURL.isFileURL else {
-        EngineOutput.fail(
-          command,
-          message: "Speech needs a reference clip: the voice is cloned from it"
-        )
+      guard request.speech != nil else {
+        EngineOutput.fail(command, message: "Speech needs its voice settings")
         return
       }
     case .video:
@@ -747,16 +744,22 @@ private final class EngineRuntime: @unchecked Sendable {
     var error = [CChar](repeating: 0, count: 512)
     var produced = 0.0
     let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    // Exactly one of these carries the voice, and either may be absent: with
+    // neither, the model speaks unconditioned.
+    let referencePath = speech.referenceAudioURL?.path ?? ""
+    let embeddingPath = speech.voiceEmbeddingURL?.path ?? ""
     let wrote = packageDirectory.path.withCString { packagePath in
       request.prompt.withCString { text in
         speech.language.rawValue.withCString { language in
-          speech.referenceAudioURL.path.withCString { reference in
+          referencePath.withCString { reference in
+            embeddingPath.withCString { embedding in
             request.outputURL.path.withCString { outputPath in
               h3ddle_qwen_generate(
                 packagePath,
                 text,
                 language,
                 reference,
+                embedding,
                 request.duration,
                 speech.temperature,
                 Int32(speech.topK),
@@ -769,6 +772,7 @@ private final class EngineRuntime: @unchecked Sendable {
                 &error,
                 error.count
               )
+            }
             }
           }
         }

@@ -325,9 +325,9 @@ struct GenerationStudioView: View {
     .allowsHitTesting(!disabled)
   }
 
-  /// The clip the voice is cloned from. It is required rather than optional:
-  /// the model conditions on a speaker embedding taken from this and nothing
-  /// else, so there is no default voice to fall back to.
+  /// Which voice speaks. Neutral is the model unconditioned — no clip, no
+  /// data shipped — and everything else is a clip the user kept, cloned from
+  /// once and chosen by name thereafter.
   private var voiceReferenceSection: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
@@ -341,38 +341,53 @@ struct GenerationStudioView: View {
           .foregroundStyle(H3Color.textSecondary.opacity(0.55))
       }
       HStack(spacing: 10) {
-        Button {
-          pickVoiceReference()
+        Menu {
+          Button {
+            model.selectedVoiceID = nil
+          } label: {
+            Label("Neutral", systemImage: model.selectedVoiceID == nil
+              ? "checkmark" : "waveform")
+          }
+          if !model.savedVoices.isEmpty {
+            Divider()
+            ForEach(model.savedVoices) { voice in
+              Button {
+                model.selectedVoiceID = voice.id
+              } label: {
+                Label(
+                  voice.name,
+                  systemImage: model.selectedVoiceID == voice.id
+                    ? "checkmark" : "person.wave.2")
+              }
+            }
+          }
+          Divider()
+          Button("Add from a clip…") { pickVoiceReference() }
+          if let selected = model.selectedVoiceID {
+            Button("Remove \(model.selectedVoiceName)", role: .destructive) {
+              model.removeVoice(selected)
+            }
+          }
         } label: {
           HStack(spacing: 8) {
-            Image(systemName: model.studioVoiceReference == nil
-              ? "waveform.badge.plus" : "waveform")
+            Image(systemName: model.selectedVoiceID == nil
+              ? "waveform" : "person.wave.2")
               .font(.system(size: 13, weight: .medium))
-            Text(model.studioVoiceReference?.lastPathComponent ?? "Choose a clip…")
+            Text(model.selectedVoiceName)
               .font(.system(size: 12))
               .lineLimit(1)
               .truncationMode(.middle)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 12)
-          .frame(height: 38)
-          .background(H3Color.chrome)
-          .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-              .stroke(H3Color.line, lineWidth: 1)
-          }
-          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("speech-reference-clip")
-        if model.studioVoiceReference != nil {
-          Button("Clear") { model.studioVoiceReference = nil }
-            .buttonStyle(H3QuietButtonStyle())
-            .accessibilityIdentifier("speech-reference-clear")
-        }
+        .menuStyle(.borderlessButton)
+        .frame(height: 38)
+        .accessibilityIdentifier("speech-voice")
       }
-      Text("A few seconds of clean speech is enough — the encoder averages "
-        + "over the whole clip, so a longer one adds nothing.")
+      Text(model.selectedVoiceID == nil
+        ? "Neutral is the model's own voice, with nothing to clone from. Add a "
+          + "clip to speak in someone else's."
+        : "A few seconds of clean speech is enough — the encoder averages over "
+          + "the whole clip, so a longer one adds nothing.")
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -388,7 +403,7 @@ struct GenerationStudioView: View {
     panel.allowedContentTypes = [.audio, .movie]
     panel.prompt = "Use Voice"
     guard panel.runModal() == .OK, let url = panel.urls.first else { return }
-    model.studioVoiceReference = url
+    model.addVoice(from: url)
   }
 
   private var referenceSection: some View {
@@ -1214,10 +1229,6 @@ struct GenerationStudioView: View {
   private var canGenerate: Bool {
     !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !model.isGenerating
-      // Speech clones from a clip and has no default voice, so without one
-      // there is nothing to speak in.
-      && (model.audioMode != .speech || kind != .audio
-        || model.studioVoiceReference != nil)
   }
 
   private var knobs: GenerationKnobSnapshot {

@@ -45,9 +45,12 @@ int h3ddle_read_mono_f32(const char *path, int sample_rate, int max_samples,
  * and an unknown one is an error rather than a silent fallback, because the
  * wrong language token produces fluent speech in the wrong accent.
  *
- * `reference_path` is any file the system can decode; a few seconds of clean
- * speech is enough, since the encoder pools over the whole clip. Passing NULL
- * is an error: this model has no default voice.
+ * The voice comes from exactly one of three places, tried in that order:
+ * `embedding_path`, a file of QWEN_SPEAKER_DIM floats saved earlier;
+ * `reference_path`, any audio file the system can decode, from which one is
+ * computed; or neither, which speaks in the model's own unconditioned voice.
+ * A few seconds of clean speech is enough for a reference — the encoder pools
+ * over the whole clip, so a longer one adds nothing.
  *
  * `temperature` at or below zero takes the argmax, which makes a generation
  * reproducible and is a poor default: greedy decoding loops, and a six-word
@@ -60,11 +63,23 @@ typedef void (*h3ddle_qwen_frame)(int frames, int total, void *opaque);
 void h3ddle_qwen_release(void);
 int h3ddle_qwen_generate(const char *package_directory, const char *text,
                          const char *language, const char *reference_path,
+                         const char *embedding_path,
                          double max_seconds, double temperature, int top_k,
                          double repetition_penalty, unsigned long long seed,
                          const char *output_path, h3ddle_qwen_frame on_frame,
                          void *opaque, double *produced_seconds,
                          char *error, size_t error_size);
+
+/* Turns a reference clip into the voice it carries and writes it to
+ * `embedding_path` — 1024 little-endian floats.
+ *
+ * Saving this rather than the clip is what lets a voice be chosen once and
+ * reused: the model conditions on these numbers and on nothing else from the
+ * recording, so they are the whole of it, at four kilobytes. */
+int h3ddle_qwen_write_embedding(const char *package_directory,
+                                const char *reference_path,
+                                const char *embedding_path,
+                                char *error, size_t error_size);
 
 #ifdef __cplusplus
 }

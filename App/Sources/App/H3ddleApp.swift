@@ -19,7 +19,7 @@ struct H3ddleApp: App {
         .onReceive(
           NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
         ) { _ in
-          DockAttention.clear()
+          DockAttention.dismissFinishedMarker()
         }
         .onReceive(
           NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)

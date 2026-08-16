@@ -211,9 +211,68 @@ final class AppModel {
   /// omitted or become the guide's N/A marker; see H3StructuredPrompt.
   var studioSoundscape = ""
   var studioMusic = ""
-  /// The clip the speech model clones from. There is no default voice, so
-  /// without one the Speak button has nothing to speak in.
-  var studioVoiceReference: URL?
+  /// Which saved voice speaks, or nil for the model's own unconditioned one.
+  /// Held by identifier rather than by URL so a voice survives being renamed.
+  var selectedVoiceID: UUID? {
+    didSet { userDefaults.set(selectedVoiceID?.uuidString, forKey: Self.voiceKey) }
+  }
+  var savedVoices: [SavedVoice] = [] {
+    didSet { persistVoices() }
+  }
+
+  /// The clip the chosen voice is cloned from, or nil when speaking
+  /// unconditioned. A selection naming a voice that has since been removed
+  /// falls back rather than failing at generation.
+  var studioVoiceReference: URL? {
+    guard let selectedVoiceID,
+      let voice = savedVoices.first(where: { $0.id == selectedVoiceID })
+    else { return nil }
+    return VoiceLibrary.url(for: voice)
+  }
+
+  var selectedVoiceName: String {
+    guard let selectedVoiceID,
+      let voice = savedVoices.first(where: { $0.id == selectedVoiceID })
+    else { return "Neutral" }
+    return voice.name
+  }
+
+  func addVoice(from clip: URL) {
+    guard let voice = VoiceLibrary.add(
+      clip: clip, named: VoiceLibrary.suggestedName(for: clip))
+    else {
+      errorMessage = "Could not keep a copy of \(clip.lastPathComponent)."
+      return
+    }
+    savedVoices.append(voice)
+    selectedVoiceID = voice.id
+  }
+
+  func removeVoice(_ id: UUID) {
+    guard let voice = savedVoices.first(where: { $0.id == id }) else { return }
+    VoiceLibrary.remove(voice)
+    savedVoices.removeAll { $0.id == id }
+    if selectedVoiceID == id { selectedVoiceID = nil }
+  }
+
+  private static let voicesKey = "studio.savedVoices"
+  private static let voiceKey = "studio.selectedVoice"
+
+  private func persistVoices() {
+    guard let data = try? JSONEncoder().encode(savedVoices) else { return }
+    userDefaults.set(data, forKey: Self.voicesKey)
+  }
+
+  private func restoreVoices() {
+    if let data = userDefaults.data(forKey: Self.voicesKey),
+      let stored = try? JSONDecoder().decode([SavedVoice].self, from: data)
+    {
+      savedVoices = stored
+    }
+    if let raw = userDefaults.string(forKey: Self.voiceKey) {
+      selectedVoiceID = UUID(uuidString: raw)
+    }
+  }
   var studioSpeechLanguage = EngineSpeechLanguage.english
   var studioSpeechTemperature = EngineSpeechOptions.defaultTemperature
 
@@ -297,6 +356,7 @@ final class AppModel {
       persistStudioSettings()
     }
     restoreModelLibrary()
+    restoreVoices()
     refreshManagedModelStatus()
   }
 
@@ -496,6 +556,10 @@ final class AppModel {
   ) {
     guard let kind = activeGenerationKind else { return }
     GenerationNotifier.requestAuthorizationIfNeeded()
+    // Up front rather than on the first progress event: loading a model can
+    // take a minute before anything is reported, and a short run can finish
+    // before the first event arrives at all.
+    DockAttention.showProgress(0)
     generationTask?.cancel()
     isGenerating = true
     errorMessage = nil
@@ -581,14 +645,15 @@ final class AppModel {
       audioEngine: audioEngine,
       // The duration is a ceiling for speech, not a target: the model stops
       // when the line is spoken.
+      // Always present for speech, even with no clip: a nil reference means
+      // the model's own voice, where nil *options* would mean a request the
+      // engine cannot answer at all.
       speech: audioEngine == .speech
-        ? studioVoiceReference.map {
-          EngineSpeechOptions(
-            referenceAudioURL: $0,
-            language: studioSpeechLanguage,
-            temperature: studioSpeechTemperature
-          )
-        }
+        ? EngineSpeechOptions(
+          referenceAudioURL: studioVoiceReference,
+          language: studioSpeechLanguage,
+          temperature: studioSpeechTemperature
+        )
         : nil,
       prompt: composedPrompt,
       duration: duration,
@@ -1904,8 +1969,8 @@ final class AppModel {
       }
     } else {
       // Cancelled, or failed after the progress badge went up. Either way the
-      // percentage is stale and has to come off.
-      DockAttention.clear()
+      // percentage is stale and there is nothing to announce.
+      DockAttention.markGenerationStopped()
     }
     pendingStatistics = nil
     activeGenerationID = nil

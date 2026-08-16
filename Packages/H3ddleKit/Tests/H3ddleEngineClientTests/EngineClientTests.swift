@@ -227,6 +227,42 @@ struct EngineClientTests {
     #expect((speech["referenceAudioURL"] as? String)?.hasSuffix("/tmp/voice.wav") == true)
   }
 
+  /// The neutral voice: no clip, and the options still have to travel. An
+  /// empty `speech` block would be a request the engine refuses outright, so
+  /// "no reference" must not collapse into "no speech settings".
+  @Test("Speech with no reference clip still carries its speech settings")
+  func speechWithoutAReferenceStillCarriesSettings() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/speech-package", isDirectory: true)
+    )
+    var sent: [String: Any]?
+    for try await event in provider.events(
+      for: GenerationRequest(
+        kind: .audio,
+        audioEngine: .speech,
+        speech: EngineSpeechOptions(language: .german, temperature: 0.8),
+        prompt: "Sprich diesen Satz.",
+        duration: 8
+      )
+    ) {
+      if case .progress(let phase, _) = event,
+        let data = phase.data(using: .utf8),
+        let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        sent = decoded
+      }
+    }
+    let generation = try #require(sent)
+    #expect(generation["kind"] as? String == "speech")
+    let speech = try #require(generation["speech"] as? [String: Any])
+    #expect(speech["language"] as? String == "de")
+    #expect(speech["referenceAudioURL"] == nil)
+    #expect(speech["voiceEmbeddingURL"] == nil)
+  }
+
   /// Music and sound effects still reach the engine as sound-effect jobs, and
   /// H3's own soundtrack still reaches it as audio. Replacing a boolean with
   /// an enum is exactly the change that quietly reroutes one of them.

@@ -47,6 +47,7 @@
 		C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */; };
 		CC4F9A5AA9DD7E28C23E15FA /* AudioPreviewPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D0B6D125B77E05E7085FB2D /* AudioPreviewPlayer.swift */; };
 		D3BE0742930E61BBB40C1081 /* H3ddleUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1A8789B11B5C010EED4C4E /* H3ddleUITests.swift */; };
+		DF3BD1D9C2720C3DE35181F5 /* VoiceLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9E1D322A9044F5C380D736E /* VoiceLibrary.swift */; };
 		E16BDDB3D50E74C60BC7381B /* H3ddleEngineProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 8916055035142DBA446A0BE3 /* H3ddleEngineProtocol */; };
 		E88235986A061E97604DC337 /* H3ddleCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F420D87DF957DDFAD4E5936 /* H3ddleCore */; };
 		EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */; };
@@ -101,6 +102,7 @@
 		D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeRulerView.swift; sourceTree = "<group>"; };
 		D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoOverlay.swift; sourceTree = "<group>"; };
 		DF87CD329EDE32AD0A1ACB8F /* H3ddleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = H3ddleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E9E1D322A9044F5C380D736E /* VoiceLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLibrary.swift; sourceTree = "<group>"; };
 		EDE22F1F6245036A1DE4230C /* ExportModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportModalView.swift; sourceTree = "<group>"; };
 		EE1A8789B11B5C010EED4C4E /* H3ddleUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H3ddleUITests.swift; sourceTree = "<group>"; };
 		F7B3ED39A78FF1C070FC68E7 /* WindowChromeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowChromeInstaller.swift; sourceTree = "<group>"; };
@@ -158,6 +160,7 @@
 				135192F096FB7C2428444B61 /* DockAttention.swift */,
 				31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */,
 				0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */,
+				E9E1D322A9044F5C380D736E /* VoiceLibrary.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -486,6 +489,7 @@
 				AC44AEDF7277AC76B56F2D03 /* TrackHeaderView.swift in Sources */,
 				C2B9C48A2BBE05A72B922929 /* TransitionsPanelView.swift in Sources */,
 				73C88559CDE06B206D8097EC /* TransportBarView.swift in Sources */,
+				DF3BD1D9C2720C3DE35181F5 /* VoiceLibrary.swift in Sources */,
 				5A053AEC1E6AED63420FA167 /* WindowChromeInstaller.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

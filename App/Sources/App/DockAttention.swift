@@ -8,6 +8,11 @@ enum DockAttention {
   /// Last percentage drawn, so a run that reports progress many times a
   /// second redraws the tile only when the number would actually change.
   private static var shownPercent: Int?
+  /// Whether a generation is in flight. Coming back to the window is not a
+  /// reason to stop reporting one, and treating it as one is how the badge
+  /// came to be invisible: activating the app cleared the tile, and a short
+  /// run finished before the next progress event could put it back.
+  private static var isRunning = false
 
   /// A percentage on the Dock icon while a generation runs.
   ///
@@ -17,6 +22,7 @@ enum DockAttention {
   /// or the app switcher, which a thin arc does not.
   static func showProgress(_ fraction: Double) {
     let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
+    isRunning = true
     guard percent != shownPercent else { return }
     shownPercent = percent
     let tile = NSApp.dockTile
@@ -26,13 +32,29 @@ enum DockAttention {
   }
 
   static func markGenerationFinished() {
+    isRunning = false
     apply(showsDot: true)
     if !NSApp.isActive {
       NSApp.requestUserAttention(.informationalRequest)
     }
   }
 
+  /// A run that was cancelled or failed: the percentage is stale and there is
+  /// nothing to announce.
+  static func markGenerationStopped() {
+    isRunning = false
+    apply(showsDot: false)
+  }
+
+  /// Called when the user comes back to the app. It dismisses the marker left
+  /// by a finished run, and deliberately leaves a running one alone.
+  static func dismissFinishedMarker() {
+    guard !isRunning else { return }
+    apply(showsDot: false)
+  }
+
   static func clear() {
+    isRunning = false
     apply(showsDot: false)
   }
 

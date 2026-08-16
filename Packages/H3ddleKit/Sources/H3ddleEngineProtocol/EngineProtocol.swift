@@ -70,10 +70,14 @@ public struct EngineSpeechOptions: Hashable, Codable, Sendable {
   public static let defaultTopK = 50
   public static let defaultRepetitionPenalty = 1.05
 
-  /// Any audio file the system can decode. There is no default voice: the
-  /// model clones from this clip and nothing else, so a few seconds of clean
-  /// speech is both the minimum and about all it needs.
-  public var referenceAudioURL: URL
+  /// A clip to clone from: any audio file the system can decode. A few
+  /// seconds of clean speech is both the minimum and about all it needs,
+  /// since the encoder pools over the whole thing.
+  public var referenceAudioURL: URL?
+  /// A voice saved earlier — the 1024 numbers the encoder took from a clip,
+  /// which are the whole of what the model conditions on. Takes precedence
+  /// over a clip; with neither, the model speaks unconditioned.
+  public var voiceEmbeddingURL: URL?
   public var language: EngineSpeechLanguage
   public var temperature: Double
   /// 0 for no restriction.
@@ -82,13 +86,15 @@ public struct EngineSpeechOptions: Hashable, Codable, Sendable {
   public var repetitionPenalty: Double
 
   public init(
-    referenceAudioURL: URL,
+    referenceAudioURL: URL? = nil,
+    voiceEmbeddingURL: URL? = nil,
     language: EngineSpeechLanguage = .english,
     temperature: Double = EngineSpeechOptions.defaultTemperature,
     topK: Int = EngineSpeechOptions.defaultTopK,
     repetitionPenalty: Double = EngineSpeechOptions.defaultRepetitionPenalty
   ) {
     self.referenceAudioURL = referenceAudioURL
+    self.voiceEmbeddingURL = voiceEmbeddingURL
     self.language = language
     self.temperature = Self.temperatureRange.clamping(temperature)
     self.topK = Self.topKRange.clamping(topK)

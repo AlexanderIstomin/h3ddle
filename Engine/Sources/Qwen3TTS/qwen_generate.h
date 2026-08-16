@@ -68,6 +68,13 @@ typedef struct {
     int text_count;
     const float *reference;     /* mono at 24 kHz */
     int reference_samples;
+    /* A speaker embedding computed earlier, instead of a reference clip.
+     * QWEN_SPEAKER_DIM floats; when set, `reference` is not read.
+     *
+     * The whole voice is these numbers — cloning conditions on them and on
+     * nothing else from the clip — so a saved one is a saved voice, at four
+     * kilobytes rather than a wav. */
+    const float *speaker_embedding;
     uint32_t language_id;
     float temperature;          /* at or below zero takes the argmax */
     int top_k;                  /* 0 for no restriction */
