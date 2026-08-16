@@ -109,9 +109,21 @@ struct ModelSettingsView: View {
       Button {
         model.showsModelSettings = false
       } label: {
+        // A bare glyph is only about twelve points across, so a click that
+        // misses it does nothing and reads as the window refusing to close.
         Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 34, height: 34)
+          .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .keyboardShortcut(.cancelAction)
+      .accessibilityIdentifier("close-models")
     }
     .padding(H3Spacing.large)
   }
