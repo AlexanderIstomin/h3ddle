@@ -507,6 +507,10 @@ struct GenerationStudioView: View {
             generationControls
           }
 
+          if usesNativeSettings, model.audioUsesSoundEffects {
+            soundEffectControls
+          }
+
           if let errorMessage = model.errorMessage {
             Text(errorMessage)
               .font(.system(size: 11, weight: .medium))
@@ -641,6 +645,43 @@ struct GenerationStudioView: View {
         onFrameChange: { modelPickerFrame = $0 }
       )
     }
+  }
+
+  /// The one knob this model has. It is distilled to eight passes, so this
+  /// is for finding out what that trade actually costs rather than a
+  /// quality ladder to climb.
+  private var soundEffectControls: some View {
+    labeled("PASSES") {
+      HStack(spacing: 10) {
+        Slider(
+          value: Binding(
+            get: { Double(model.studioSettings.knobs.denoisingSteps) },
+            set: { value in
+              model.updateStudioKnobs { knobs in
+                knobs.denoisingSteps = Int(value.rounded())
+              }
+            }
+          ),
+          in: 1...24,
+          step: 1
+        )
+        .tint(H3Color.accent)
+        Text("\(model.studioSettings.knobs.denoisingSteps)")
+          .font(.system(size: 11, weight: .medium, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 22, alignment: .trailing)
+        Button("Reset") {
+          model.updateStudioKnobs { knobs in
+            knobs.denoisingSteps = AppModel.soundEffectDefaultSteps
+          }
+        }
+        .buttonStyle(H3QuietButtonStyle())
+      }
+      Text("Trained for 8. Fewer degrades quickly; more rarely helps.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+    .accessibilityIdentifier("sound-effect-passes")
   }
 
   private var generationControls: some View {

@@ -211,6 +211,11 @@ final class AppModel {
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
   private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
+  /// Stable Audio is distilled to this many passes. Fewer degrades it
+  /// sharply and more buys nothing, so it is a default rather than a
+  /// preset ladder — but it stays overridable for experimentation.
+  static let soundEffectDefaultSteps = 8
+
   private static let selectedModelKey = "H3ddle.selectedModelID"
   private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
@@ -463,7 +468,9 @@ final class AppModel {
       seconds: 0,
       canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
       canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
-      denoisingSteps: denoisingSteps ?? quality.denoisingSteps,
+      denoisingSteps: soundEffects
+        ? (denoisingSteps ?? Self.soundEffectDefaultSteps)
+        : (denoisingSteps ?? quality.denoisingSteps),
       clipSeconds: duration,
       modelName: runningModelName,
       blockCache: blockCache,
@@ -489,20 +496,26 @@ final class AppModel {
       }
     }
 
-    let request = GenerationRequest(
-      kind: kind,
-      usesSoundEffectModel: soundEffects,
-      prompt: H3StructuredPrompt.compose(
+    let composedPrompt =
+      soundEffects
+      ? resolveStudioPromptMentions(prompt)
+      : H3StructuredPrompt.compose(
         body: resolveStudioPromptMentions(prompt),
         soundscape: studioSoundscape,
         music: studioMusic,
         kind: kind,
         endFrameAlignmentSeconds: kind == .video && studioEndFrame != nil
           && studioStartFrame == nil ? duration : nil
-      ),
+      )
+
+    let request = GenerationRequest(
+      kind: kind,
+      usesSoundEffectModel: soundEffects,
+      prompt: composedPrompt,
       duration: duration,
       quality: quality,
-      denoisingSteps: denoisingSteps,
+      denoisingSteps: soundEffects
+        ? (denoisingSteps ?? Self.soundEffectDefaultSteps) : denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
       fastStill: fastStill,
