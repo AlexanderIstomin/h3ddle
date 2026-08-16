@@ -56,6 +56,12 @@ struct ModelChoice: Identifiable, Equatable {
   var source: Source
   var directory: URL?
   var generationProfile: ModelGenerationProfile
+  var capability: ModelCapability
+  /// What the download costs, shown before the choice is made rather than
+  /// in the confirmation that follows it. Zero for a folder already on disk.
+  var downloadBytes: Int64
+  /// Unified memory the package asks for; zero when nothing is declared.
+  var requiredMemoryBytes: Int64
 
   var isInstalled: Bool { directory != nil }
 
@@ -94,6 +100,7 @@ final class AppModel {
     ModelCatalog.minimaxH3TurboInt8,
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
+    ModelCatalog.stableAudio3SmallSFX,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   var modelChoices: [ModelChoice] = []
@@ -177,6 +184,7 @@ final class AppModel {
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
   private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
   private static let selectedModelKey = "H3ddle.selectedModelID"
+  private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
 
   init(
@@ -1013,8 +1021,26 @@ final class AppModel {
 
   // MARK: - Model library
 
+  /// Audio models are chosen independently of video ones: installing a
+  /// sound-effect package should not unpick the model that makes video,
+  /// and pointing the H3 engine at it would only fail validation.
+  var selectedAudioModelID: String? {
+    didSet {
+      userDefaults.set(selectedAudioModelID, forKey: Self.selectedAudioModelKey)
+    }
+  }
+
   var selectedModelChoice: ModelChoice? {
     modelChoices.first { $0.id == selectedModelID }
+  }
+
+  var selectedAudioModelChoice: ModelChoice? {
+    modelChoices.first { $0.id == selectedAudioModelID }
+  }
+
+  /// Which identifier a category's selection is held in.
+  func selectedModelID(for capability: ModelCapability) -> String? {
+    capability == .audio ? selectedAudioModelID : selectedModelID
   }
 
   var installedModelChoices: [ModelChoice] {
@@ -1030,6 +1056,12 @@ final class AppModel {
       let choice = modelChoices.first(where: { $0.id == id }),
       let directory = choice.directory
     else { return }
+    guard choice.capability != .audio else {
+      // Audio packages are read by their own engine path, so this must
+      // not become the directory the H3 loader is pointed at.
+      selectedAudioModelID = id
+      return
+    }
     selectedModelID = id
     selectModelDirectory(directory)
   }
@@ -1061,6 +1093,9 @@ final class AppModel {
       selectedModelID = nil
       clearModelDirectory()
     }
+    if selectedAudioModelID == id {
+      selectedAudioModelID = nil
+    }
     refreshModelChoices()
   }
 
@@ -1069,12 +1104,13 @@ final class AppModel {
       ModelChoice(
         id: manifest.id,
         displayName: manifest.displayName,
-        subtitle: manifest.generationProfile == .turbo
-          ? "Fastest · loose prompt control"
-          : "Balanced · follows prompts",
+        subtitle: manifest.detail,
         source: .managed(manifest),
         directory: managedStatuses[manifest.id]?.installedURL,
-        generationProfile: manifest.generationProfile
+        generationProfile: manifest.generationProfile,
+        capability: manifest.capability,
+        downloadBytes: manifest.totalByteCount,
+        requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes
       )
     }
     for bookmark in localModelBookmarks {
@@ -1098,7 +1134,12 @@ final class AppModel {
           // ask the weights: a converted turbo checkpoint records the merge
           // in its safetensors metadata. Without this, distilled weights run
           // on the wrong schedule with no visible sign.
-          generationProfile: ModelFolderInspection.generationProfile(at: url)
+          generationProfile: ModelFolderInspection.generationProfile(at: url),
+          // A hand-added folder is an H3 tree; nothing else is loadable
+          // this way, and its files are already on disk.
+          capability: .video,
+          downloadBytes: 0,
+          requiredMemoryBytes: 0
         )
       )
     }
@@ -1109,6 +1150,7 @@ final class AppModel {
     localModelBookmarks =
       userDefaults.array(forKey: Self.localModelsKey) as? [Data] ?? []
     selectedModelID = userDefaults.string(forKey: Self.selectedModelKey)
+    selectedAudioModelID = userDefaults.string(forKey: Self.selectedAudioModelKey)
     // A pre-picker install selected one folder through a single bookmark;
     // carry it into the library as a local folder.
     if localModelBookmarks.isEmpty, selectedModelID == nil,

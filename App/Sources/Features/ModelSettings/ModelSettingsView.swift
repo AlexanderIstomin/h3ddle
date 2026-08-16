@@ -55,12 +55,19 @@ struct ModelSettingsView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text(
-        manifestPendingDownload?.generationProfile == .turbo
-          ? "Files already on this Mac are reused; only missing files are downloaded. By installing you agree to the linked MiniMax H3 Community License Agreement."
-          : "The files come from Hugging Face. By downloading them, you agree to the linked MiniMax H3 Community License Agreement."
-      )
+      if let manifest = manifestPendingDownload {
+        Text(licenseMessage(for: manifest))
+      }
     }
+  }
+
+  /// Each package carries its own licence, so the agreement being accepted
+  /// has to be named from the manifest rather than assumed to be H3's.
+  private func licenseMessage(for manifest: ModelPackageManifest) -> String {
+    let reuse = manifest.generationProfile == .turbo
+      ? "Files already on this Mac are reused; only missing files are downloaded. "
+      : "The files come from Hugging Face. "
+    return reuse + "By installing you agree to the linked \(manifest.licenseName)."
   }
 
   private func confirmActionTitle(for manifest: ModelPackageManifest) -> String {
@@ -94,26 +101,40 @@ struct ModelSettingsView: View {
   }
 
   private var modelList: some View {
-    VStack(alignment: .leading, spacing: H3Spacing.small) {
-      ForEach(model.modelChoices) { choice in
-        ModelChoiceRow(
-          choice: choice,
-          isSelected: model.selectedModelID == choice.id,
-          status: managedStatus(for: choice),
-          select: { model.selectModel(choice.id) },
-          install: {
-            if case .managed(let manifest) = choice.source {
-              manifestPendingDownload = manifest
+    VStack(alignment: .leading, spacing: H3Spacing.large) {
+      // A category with nothing in it is not shown: an empty heading reads
+      // like something failed to load.
+      ForEach(ModelCapability.allCases, id: \.self) { capability in
+        let choices = model.modelChoices.filter { $0.capability == capability }
+        if !choices.isEmpty {
+          VStack(alignment: .leading, spacing: H3Spacing.small) {
+            Text(capability.sectionTitle.uppercased())
+              .font(.system(size: 10, weight: .bold))
+              .tracking(1.1)
+              .foregroundStyle(H3Color.textSecondary)
+            ForEach(choices) { choice in
+              ModelChoiceRow(
+                choice: choice,
+                isSelected: model.selectedModelID(for: capability) == choice.id,
+                status: managedStatus(for: choice),
+                installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
+                select: { model.selectModel(choice.id) },
+                install: {
+                  if case .managed(let manifest) = choice.source {
+                    manifestPendingDownload = manifest
+                  }
+                },
+                pause: { model.cancelManagedModelDownload() },
+                discard: {
+                  if case .managed(let manifest) = choice.source {
+                    model.discardManagedModelDownload(manifest)
+                  }
+                },
+                remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
+              )
             }
-          },
-          pause: { model.cancelManagedModelDownload() },
-          discard: {
-            if case .managed(let manifest) = choice.source {
-              model.discardManagedModelDownload(manifest)
-            }
-          },
-          remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
-        )
+          }
+        }
       }
 
       Button {
@@ -262,6 +283,8 @@ private struct ModelChoiceRow: View {
   var choice: ModelChoice
   var isSelected: Bool
   var status: ManagedPackageStatus?
+  /// This Mac's unified memory, compared against what the package asks for.
+  var installedMemoryBytes: Int64
   var select: () -> Void
   var install: () -> Void
   var pause: () -> Void
@@ -270,50 +293,126 @@ private struct ModelChoiceRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        Button(action: selectIfPossible) {
-          HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(choice.displayName)
-                .font(.system(size: 13, weight: .semibold))
-              Text(choice.subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(H3Color.textSecondary)
-            }
-            Spacer()
-          }
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+      HStack(alignment: .top, spacing: 10) {
+        // The glyph carries selection so the whole card can be the target.
+        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+          .font(.system(size: 14))
+          .foregroundStyle(isSelected ? H3Color.accent : H3Color.textSecondary)
+          .padding(.top, 1)
 
-        trailing
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(choice.displayName)
+              .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 0)
+            trailingBadge
+          }
+          Text(choice.subtitle)
+            .font(.system(size: 11))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+          if !chips.isEmpty {
+            HStack(spacing: 6) {
+              ForEach(chips, id: \.text) { chip in
+                Text(chip.text)
+                  .font(.system(size: 10, weight: .medium))
+                  .padding(.horizontal, 6)
+                  .padding(.vertical, 2)
+                  .background(
+                    chip.warning ? H3Color.danger.opacity(0.16) : H3Color.controlFill,
+                    in: Capsule()
+                  )
+                  .foregroundStyle(chip.warning ? H3Color.danger : H3Color.textSecondary)
+              }
+            }
+            .padding(.top, 2)
+          }
+        }
+
+        actions
       }
       .padding(.horizontal, 12)
-      .frame(minHeight: 52)
+      .padding(.vertical, 10)
 
       if let status, status.downloadIsActive || (status.progress > 0 && status.state != .installed)
       {
         VStack(spacing: 4) {
           ProgressView(value: status.progress)
             .tint(H3Color.accent)
-          Text(status.message)
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          HStack {
+            Text(status.message)
+            Spacer()
+            Text("\(Int(status.progress * 100))%")
+          }
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
       }
     }
+    .contentShape(Rectangle())
+    .onTapGesture(perform: selectIfPossible)
     .background(
       isSelected ? H3Color.accent.opacity(0.12) : H3Color.canvas,
-      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
     )
     .overlay {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
         .strokeBorder(isSelected ? H3Color.accent.opacity(0.5) : H3Color.line, lineWidth: 1)
     }
     .animation(.easeOut(duration: 0.18), value: isSelected)
+  }
+
+  /// Installed packages confirm themselves; everything else shows its price,
+  /// so the cost is visible right up until it is paid.
+  @ViewBuilder
+  private var trailingBadge: some View {
+    if choice.isInstalled {
+      Text("Installed")
+        .font(.system(size: 10, weight: .semibold))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(H3Color.accent.opacity(0.18), in: Capsule())
+        .foregroundStyle(H3Color.accent)
+    } else if choice.downloadBytes > 0 {
+      Text(byteText(choice.downloadBytes))
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+  }
+
+  private struct Chip {
+    var text: String
+    var warning = false
+  }
+
+  private var chips: [Chip] {
+    var result: [Chip] = []
+    if choice.generationProfile == .turbo {
+      result.append(Chip(text: "Turbo"))
+    }
+    if choice.requiredMemoryBytes > 0 {
+      // Declared requirements are guidance rather than a hard floor, so a
+      // machine below one is warned and still allowed to proceed.
+      let short = installedMemoryBytes > 0 && installedMemoryBytes < choice.requiredMemoryBytes
+      result.append(
+        Chip(
+          text: short
+            ? "Needs \(byteText(choice.requiredMemoryBytes)) memory"
+            : "\(byteText(choice.requiredMemoryBytes)) memory",
+          warning: short
+        )
+      )
+    }
+    if choice.isLocalFolder {
+      result.append(Chip(text: "Local folder"))
+    }
+    return result
+  }
+
+  private func byteText(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
   }
 
   private func selectIfPossible() {
@@ -323,7 +422,7 @@ private struct ModelChoiceRow: View {
   }
 
   @ViewBuilder
-  private var trailing: some View {
+  private var actions: some View {
     if choice.isInstalled {
       if let remove {
         Button(action: remove) {
@@ -333,10 +432,6 @@ private struct ModelChoiceRow: View {
         .buttonStyle(.plain)
         .help("Remove from the list (files stay on disk)")
       }
-      Image(systemName: "checkmark")
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(H3Color.accent)
-        .opacity(isSelected ? 1 : 0)
     } else if let status {
       switch status.state {
       case .checking:

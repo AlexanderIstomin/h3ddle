@@ -92,6 +92,28 @@ public enum ModelGenerationProfile: String, Codable, Equatable, Sendable {
   }
 }
 
+/// Which list a package belongs to.
+///
+/// Video and audio models are not alternatives — a project can want one of
+/// each installed, and choosing one does not unchoose the other — so the
+/// picker keeps a separate list per category rather than presenting one
+/// list of interchangeable choices.
+///
+/// A package appears in exactly one list, under what it is chosen *for*.
+/// H3 also writes the soundtrack that accompanies its video, but nobody
+/// installs it to make a sound effect, so it belongs under video.
+public enum ModelCapability: String, Codable, Sendable, CaseIterable {
+  case video
+  case audio
+
+  public var sectionTitle: String {
+    switch self {
+    case .video: "Video"
+    case .audio: "Audio"
+    }
+  }
+}
+
 public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
   public let schemaVersion: Int
   public let id: String
@@ -104,6 +126,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
   public let minimumUnifiedMemoryBytes: Int64
   public let compatibility: ModelEngineCompatibility
   public let generationProfile: ModelGenerationProfile
+  public let capability: ModelCapability
   public let files: [ModelPackageFile]
 
   public init(
@@ -118,6 +141,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     minimumUnifiedMemoryBytes: Int64,
     compatibility: ModelEngineCompatibility,
     generationProfile: ModelGenerationProfile = .standard,
+    capability: ModelCapability = .video,
     files: [ModelPackageFile]
   ) {
     self.schemaVersion = schemaVersion
@@ -131,6 +155,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     self.minimumUnifiedMemoryBytes = minimumUnifiedMemoryBytes
     self.compatibility = compatibility
     self.generationProfile = generationProfile
+    self.capability = capability
     self.files = files
   }
 
@@ -151,6 +176,9 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     generationProfile =
       try container.decodeIfPresent(ModelGenerationProfile.self, forKey: .generationProfile)
       ?? .standard
+    capability =
+      try container.decodeIfPresent(ModelCapability.self, forKey: .capability)
+      ?? .video
     files = try container.decode([ModelPackageFile].self, forKey: .files)
   }
 
@@ -428,6 +456,7 @@ public enum ModelCatalog {
     )!,
     minimumUnifiedMemoryBytes: 8 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
+    capability: .audio,
     files: [
       ModelPackageFile(
         role: .transformer,
