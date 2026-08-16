@@ -422,6 +422,25 @@ public enum EngineEventKind: String, Codable, Sendable {
   case completed
   case cancelled
   case failed
+  /// Weights entered or left memory. The helper evicts on idle and under
+  /// memory pressure, so this cannot be inferred from job activity: it is
+  /// reported when it happens or the app's picture goes stale.
+  case residency
+}
+
+/// Which weights the helper is currently holding.
+///
+/// Only the video model is tracked. It is the one worth reporting: at tens
+/// of gigabytes, whether it is resident decides whether the next generation
+/// starts immediately or reloads for minutes. Audio packages are small
+/// enough that their residency is not a decision the user makes.
+public struct EngineResidency: Hashable, Codable, Sendable {
+  /// Directory of the loaded video package, or nil when none is resident.
+  public var videoModelDirectory: URL?
+
+  public init(videoModelDirectory: URL? = nil) {
+    self.videoModelDirectory = videoModelDirectory
+  }
 }
 
 public struct EngineEvent: Hashable, Codable, Sendable {
@@ -431,6 +450,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
   public var kind: EngineEventKind
   public var capabilities: EngineCapabilities?
   public var model: EngineModelReport?
+  public var residency: EngineResidency?
   public var phase: String?
   public var fractionComplete: Double?
   public var outputURL: URL?
@@ -444,6 +464,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
     kind: EngineEventKind,
     capabilities: EngineCapabilities? = nil,
     model: EngineModelReport? = nil,
+    residency: EngineResidency? = nil,
     phase: String? = nil,
     fractionComplete: Double? = nil,
     outputURL: URL? = nil,
@@ -456,6 +477,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
     self.kind = kind
     self.capabilities = capabilities
     self.model = model
+    self.residency = residency
     self.phase = phase
     self.fractionComplete = fractionComplete.map { min(max($0, 0), 1) }
     self.outputURL = outputURL

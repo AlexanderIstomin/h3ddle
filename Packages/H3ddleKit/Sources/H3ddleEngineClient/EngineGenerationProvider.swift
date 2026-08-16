@@ -161,7 +161,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
                 )
               )
               return true
-            case .ready, .modelInspected, .accepted:
+            case .ready, .modelInspected, .accepted, .residency:
               return false
             }
           }

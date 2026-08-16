@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 h3_params h3ddle_h3_default_params(void) {
     h3_params params = H3_PARAMS_DEFAULT;
@@ -88,6 +89,23 @@ static int sa3_write_wav(const char *path, const float *audio, int samples) {
     return ok;
 }
 
+/* The package is kept between generations so a run of effects pays the
+ * 1.8-second load once instead of every time. It is dropped the moment the
+ * video model wants memory: at tens of gigabytes that model decides what
+ * fits, and 1.7 GB of sound effects is not worth crowding it. */
+static sa3 *sa3_cached;
+static char sa3_cached_directory[1024];
+static h3_gpu *sa3_cached_gpu;
+
+void h3ddle_sa3_release(void) {
+    if (!sa3_cached) return;
+    sa3_free(sa3_cached);
+    h3_gpu_free(sa3_cached_gpu);
+    sa3_cached = NULL;
+    sa3_cached_gpu = NULL;
+    sa3_cached_directory[0] = '\0';
+}
+
 int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
                         double seconds, int steps, unsigned long long seed,
                         const char *output_path, h3ddle_sa3_step on_step,
@@ -99,13 +117,22 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
                      "required");
         return 0;
     }
-    /* Sharing h3.c's Metal context keeps both models on one device and one
-     * allocator; without it the transformer falls back to the CPU. */
-    h3_gpu *gpu = h3_gpu_create(NULL, error, error_size);
-    sa3 *model = sa3_load(package_directory, gpu, error, error_size);
-    if (!model) {
-        h3_gpu_free(gpu);
-        return 0;
+    h3_gpu *gpu = sa3_cached_gpu;
+    sa3 *model = sa3_cached;
+    if (!model || strcmp(sa3_cached_directory, package_directory)) {
+        h3ddle_sa3_release();
+        /* Sharing h3.c's Metal context keeps both models on one device and
+         * one allocator; without it the transformer falls back to the CPU. */
+        gpu = h3_gpu_create(NULL, error, error_size);
+        model = sa3_load(package_directory, gpu, error, error_size);
+        if (!model) {
+            h3_gpu_free(gpu);
+            return 0;
+        }
+        sa3_cached = model;
+        sa3_cached_gpu = gpu;
+        snprintf(sa3_cached_directory, sizeof(sa3_cached_directory), "%s",
+                 package_directory);
     }
 
     sa3_request request = {
@@ -124,7 +151,5 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
             snprintf(error, error_size, "cannot write %s", output_path);
     }
     free(audio);
-    sa3_free(model);
-    h3_gpu_free(gpu);
     return ok;
 }

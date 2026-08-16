@@ -134,6 +134,14 @@ private final class EngineModelStore: @unchecked Sendable {
   private var context: OpaquePointer?
   private var directory: String?
 
+  /// Directory of the weights currently in memory, or nil when the cache
+  /// has been dropped by idle time or memory pressure.
+  var residentDirectory: String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return context == nil ? nil : directory
+  }
+
   func load(path: UnsafePointer<CChar>) -> OpaquePointer? {
     let directoryPath = String(cString: path)
     lock.lock()
@@ -142,6 +150,9 @@ private final class EngineModelStore: @unchecked Sendable {
       return context
     }
     releaseLocked()
+    // Tens of gigabytes are about to be mapped; anything the sound-effect
+    // model is holding should go first.
+    h3ddle_sa3_release()
     guard let loaded = h3_load_dir(path) else { return nil }
     h3_cache_set_enabled(loaded, 1)
     context = loaded
@@ -324,6 +335,14 @@ private enum EngineOutput {
   private static let lock = NSLock()
 
   static func emit(_ event: EngineEvent) {
+    var event = event
+    if event.residency == nil {
+      event.residency = EngineResidency(
+        videoModelDirectory: EngineModelStore.shared.residentDirectory.map {
+          URL(fileURLWithPath: $0)
+        }
+      )
+    }
     guard let data = try? EngineLineCodec.encode(event) else { return }
     lock.withLock {
       FileHandle.standardOutput.write(data)

@@ -24,6 +24,9 @@ int h3ddle_h3_model_supports_generation(const h3_model_info *model);
  * `on_step` may be NULL; it fires once per denoising pass. Writes a
  * 16-bit stereo WAV at 44.1 kHz to `output_path`. */
 typedef void (*h3ddle_sa3_step)(int completed, int total, void *opaque);
+/* Releases any cached sound-effect package. Called when the video model is
+ * about to load, so the two never occupy memory at once. */
+void h3ddle_sa3_release(void);
 int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
                         double seconds, int steps, unsigned long long seed,
                         const char *output_path, h3ddle_sa3_step on_step,
