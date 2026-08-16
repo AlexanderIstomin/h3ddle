@@ -186,6 +186,12 @@ final class AppModel {
     category: "generation"
   )
 
+  private var localAudioModelBookmarks: [Data] = [] {
+    didSet {
+      userDefaults.set(localAudioModelBookmarks, forKey: Self.localAudioModelsKey)
+    }
+  }
+
   private var localModelBookmarks: [Data] = [] {
     didSet {
       userDefaults.set(localModelBookmarks, forKey: Self.localModelsKey)
@@ -198,6 +204,10 @@ final class AppModel {
   private static let selectedModelKey = "H3ddle.selectedModelID"
   private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
+  /// Audio folders are kept under their own key rather than tagged inside
+  /// the existing one, so bookmarks saved before this distinction existed
+  /// stay what they were: H3 trees.
+  private static let localAudioModelsKey = "H3ddle.localAudioModelBookmarks"
 
   init(
     generationProvider: any GenerationProvider = FakeGenerationProvider(),
@@ -1080,7 +1090,10 @@ final class AppModel {
     selectModelDirectory(directory)
   }
 
-  func addLocalModelFolder(_ url: URL) {
+  /// The caller says which list the folder joins, because the folder itself
+  /// cannot be asked: an H3 tree and a sound-effect package share no file
+  /// that would distinguish them before either is loaded.
+  func addLocalModelFolder(_ url: URL, capability: ModelCapability = .video) {
     guard
       let bookmark = try? url.bookmarkData(
         options: .withSecurityScope,
@@ -1091,7 +1104,11 @@ final class AppModel {
       errorMessage = "Cannot keep access to \(url.lastPathComponent); choose it again."
       return
     }
-    localModelBookmarks.append(bookmark)
+    if capability == .audio {
+      localAudioModelBookmarks.append(bookmark)
+    } else {
+      localModelBookmarks.append(bookmark)
+    }
     refreshModelChoices()
     if let added = modelChoices.last(where: { $0.isLocalFolder && $0.directory == url }) {
       selectModel(added.id)
@@ -1103,6 +1120,7 @@ final class AppModel {
       case .localFolder(let bookmark) = choice.source
     else { return }
     localModelBookmarks.removeAll { $0 == bookmark }
+    localAudioModelBookmarks.removeAll { $0 == bookmark }
     if selectedModelID == id {
       selectedModelID = nil
       clearModelDirectory()
@@ -1130,38 +1148,41 @@ final class AppModel {
         licenseURL: manifest.licenseURL
       )
     }
-    for bookmark in localModelBookmarks {
-      var isStale = false
-      guard
-        let url = try? URL(
-          resolvingBookmarkData: bookmark,
-          options: .withSecurityScope,
-          relativeTo: nil,
-          bookmarkDataIsStale: &isStale
+    for (bookmarks, capability) in [
+      (localModelBookmarks, ModelCapability.video),
+      (localAudioModelBookmarks, ModelCapability.audio),
+    ] {
+      for bookmark in bookmarks {
+        var isStale = false
+        guard
+          let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+          )
+        else { continue }
+        choices.append(
+          ModelChoice(
+            id: "local:" + url.path,
+            displayName: url.lastPathComponent,
+            subtitle: "Added from this Mac",
+            source: .localFolder(bookmark: bookmark),
+            directory: url,
+            // A hand-added folder has no manifest to declare its profile, so
+            // ask the weights: a converted turbo checkpoint records the merge
+            // in its safetensors metadata. Without this, distilled weights run
+            // on the wrong schedule with no visible sign.
+            generationProfile: ModelFolderInspection.generationProfile(at: url),
+            capability: capability,
+            downloadBytes: 0,
+            requiredMemoryBytes: 0,
+            installedBytes: 0,
+            licenseName: nil,
+            licenseURL: nil
+          )
         )
-      else { continue }
-      choices.append(
-        ModelChoice(
-          id: "local:" + url.path,
-          displayName: url.lastPathComponent,
-          subtitle: "Local folder",
-          source: .localFolder(bookmark: bookmark),
-          directory: url,
-          // A hand-added folder has no manifest to declare its profile, so
-          // ask the weights: a converted turbo checkpoint records the merge
-          // in its safetensors metadata. Without this, distilled weights run
-          // on the wrong schedule with no visible sign.
-          generationProfile: ModelFolderInspection.generationProfile(at: url),
-          // A hand-added folder is an H3 tree; nothing else is loadable
-          // this way, and its files are already on disk.
-          capability: .video,
-          downloadBytes: 0,
-          requiredMemoryBytes: 0,
-          installedBytes: 0,
-          licenseName: nil,
-          licenseURL: nil
-        )
-      )
+      }
     }
     modelChoices = choices
   }
@@ -1169,6 +1190,8 @@ final class AppModel {
   private func restoreModelLibrary() {
     localModelBookmarks =
       userDefaults.array(forKey: Self.localModelsKey) as? [Data] ?? []
+    localAudioModelBookmarks =
+      userDefaults.array(forKey: Self.localAudioModelsKey) as? [Data] ?? []
     selectedModelID = userDefaults.string(forKey: Self.selectedModelKey)
     selectedAudioModelID = userDefaults.string(forKey: Self.selectedAudioModelKey)
     // A pre-picker install selected one folder through a single bookmark;

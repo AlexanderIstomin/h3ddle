@@ -7,6 +7,8 @@ struct ModelSettingsView: View {
   @Bindable var model: AppModel
 
   @State private var isChoosingModel = false
+  /// Which list the folder about to be chosen should join.
+  @State private var capabilityBeingAdded: ModelCapability = .video
   @State private var manifestPendingDownload: ModelPackageManifest?
 
   var body: some View {
@@ -26,7 +28,7 @@ struct ModelSettingsView: View {
       allowsMultipleSelection: false
     ) { result in
       if case .success(let urls) = result, let directory = urls.first {
-        model.addLocalModelFolder(directory)
+        model.addLocalModelFolder(directory, capability: capabilityBeingAdded)
       }
     }
     .confirmationDialog(
@@ -92,63 +94,70 @@ struct ModelSettingsView: View {
 
   private var modelList: some View {
     VStack(alignment: .leading, spacing: H3Spacing.large) {
-      // A category with nothing in it is not shown: an empty heading reads
-      // like something failed to load.
+      // Every category is shown even when empty: the section carries its own
+      // way to add a folder, so an empty one is an invitation rather than a
+      // sign something failed to load.
       ForEach(ModelCapability.allCases, id: \.self) { capability in
         let choices = model.modelChoices.filter { $0.capability == capability }
-        if !choices.isEmpty {
-          VStack(alignment: .leading, spacing: H3Spacing.small) {
-            Text(capability.sectionTitle.uppercased())
-              .font(.system(size: 10, weight: .bold))
-              .tracking(1.1)
-              .foregroundStyle(H3Color.textSecondary)
-            ForEach(choices) { choice in
-              ModelChoiceRow(
-                choice: choice,
-                isSelected: model.selectedModelID(for: capability) == choice.id,
-                status: managedStatus(for: choice),
-                installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
-                select: { model.selectModel(choice.id) },
-                install: {
-                  if case .managed(let manifest) = choice.source {
-                    manifestPendingDownload = manifest
-                  }
-                },
-                pause: { model.cancelManagedModelDownload() },
-                discard: {
-                  if case .managed(let manifest) = choice.source {
-                    model.discardManagedModelDownload(manifest)
-                  }
-                },
-                remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
-              )
-            }
+        VStack(alignment: .leading, spacing: H3Spacing.small) {
+          Text(capability.sectionTitle.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .tracking(1.1)
+            .foregroundStyle(H3Color.textSecondary)
+          ForEach(choices) { choice in
+            ModelChoiceRow(
+              choice: choice,
+              isSelected: model.selectedModelID(for: capability) == choice.id,
+              status: managedStatus(for: choice),
+              installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
+              select: { model.selectModel(choice.id) },
+              install: {
+                if case .managed(let manifest) = choice.source {
+                  manifestPendingDownload = manifest
+                }
+              },
+              pause: { model.cancelManagedModelDownload() },
+              discard: {
+                if case .managed(let manifest) = choice.source {
+                  model.discardManagedModelDownload(manifest)
+                }
+              },
+              remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
+            )
           }
+          addFolderButton(for: capability)
         }
       }
-
-      Button {
-        isChoosingModel = true
-      } label: {
-        HStack(spacing: 8) {
-          Image(systemName: "plus")
-            .font(.system(size: 11, weight: .semibold))
-          Text("Add Local Folder")
-            .font(.system(size: 13, weight: .semibold))
-          Spacer()
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 40)
-        .background(H3Color.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(H3Color.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-        }
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("choose-model-folder")
     }
     .padding(H3Spacing.large)
+  }
+
+  private func addFolderButton(for capability: ModelCapability) -> some View {
+    Button {
+      capabilityBeingAdded = capability
+      isChoosingModel = true
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "plus")
+          .font(.system(size: 11, weight: .semibold))
+        Text("Add \(capability.sectionTitle.lowercased()) model from this Mac")
+          .font(.system(size: 12, weight: .medium))
+        Spacer()
+      }
+      .foregroundStyle(H3Color.textSecondary)
+      .padding(.horizontal, 12)
+      .frame(height: 36)
+      .background(
+        H3Color.canvas,
+        in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
+          .strokeBorder(H3Color.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("choose-model-folder-\(capability.rawValue)")
   }
 
   private func managedStatus(for choice: ModelChoice) -> ManagedPackageStatus? {
