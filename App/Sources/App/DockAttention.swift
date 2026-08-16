@@ -36,10 +36,13 @@ enum DockAttention {
     guard percent != shownPercent else { return }
     shownPercent = percent
     let tile = NSApp.dockTile
-    if tile.contentView != nil { tile.contentView = nil }
+    if tile.contentView != nil {
+      tile.contentView = nil
+      tile.display()
+    }
     tile.badgeLabel = "\(percent)%"
     hasWritten = true
-    log.debug("Dock badge -> \(percent, privacy: .public)%")
+    log.notice("Dock badge -> \(percent, privacy: .public)%")
   }
 
   static func markGenerationFinished() {
@@ -84,7 +87,7 @@ enum DockAttention {
         tile.contentView = nil
         tile.display()
       }
-      log.debug("Dock tile released back to the system")
+      log.notice("Dock tile released back to the system")
       return
     }
 
@@ -96,7 +99,7 @@ enum DockAttention {
     tile.contentView = view
     tile.display()
     hasWritten = true
-    log.debug("Dock tile shows the finished marker")
+    log.notice("Dock tile shows the finished marker")
   }
 }
 

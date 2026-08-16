@@ -568,6 +568,17 @@ final class AppModel {
     phaseTimeline = GenerationPhaseTimeline()
     let audioEngine = kind == .audio ? audioMode.engine : .h3
     let ownPackage = audioEngine.usesOwnPackage
+    // Speech reports frames against the ceiling it was sent, and that ceiling
+    // is deliberately generous so a long line is never cut off mid-word — so
+    // its fraction stops wherever the line ends, measured at 49% on a run that
+    // had entirely finished. Stopping and being half done are different
+    // questions, so the Dock is told the second one: how far through the line
+    // this is, at fourteen characters a second for English at a normal pace.
+    let progressScale: Double = {
+      guard audioEngine == .speech else { return 1 }
+      let expected = max(1.0, Double(prompt.count) / 14)
+      return max(1, min(4, duration / expected))
+    }()
     let runningModelName =
       ownPackage
       ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
@@ -713,7 +724,10 @@ final class AppModel {
             }
             // Models that run in one phase — speech, sound effects — have no
             // step counter, and for them the phase fraction *is* the run's.
-            DockAttention.showProgress(overall ?? fractionComplete)
+            // Just short of 100 while it is still running: arriving there and
+            // staying reads as finished when it is not.
+            DockAttention.showProgress(
+              min(0.99, (overall ?? fractionComplete) * progressScale))
             phaseTimeline.record(
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
