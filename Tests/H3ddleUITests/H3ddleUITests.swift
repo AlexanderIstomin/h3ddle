@@ -20,7 +20,7 @@ final class H3ddleUITests: XCTestCase {
     )
 
     XCTAssertTrue(app.staticTexts["program-timeline"].exists)
-    XCTAssertTrue(app.buttons["Append audio"].exists)
+    XCTAssertTrue(app.buttons["append-audio"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["program-preview"].exists)
     XCTAssertTrue(app.buttons["transport-play"].exists)
     XCTAssertTrue(app.buttons["transport-split"].exists)
@@ -74,7 +74,7 @@ final class H3ddleUITests: XCTestCase {
   @MainActor
   func testGenerationStudioHidesComposerDuringProgress() throws {
     throw XCTSkip(
-      "the append control reports a lane-wide accessibility frame while its actual hit area is the small plus glyph within it, so a synthesised click lands on lane background and no menu opens; the identifiers themselves now reach the tree"
+      "the append button reports its lane's frame, 2384 points wide, not its own 32-point square, so every synthesised click lands on empty track; ruled out so far: the lane's drop identifier (fixed, the button now reports its own name), .accessibilityElement(children: .contain) on the lane, .accessibilityElement() on the button, and clicking at a normalised offset inside the reported frame"
     )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
@@ -86,8 +86,8 @@ final class H3ddleUITests: XCTestCase {
 
     // A cold launch can take a while to publish an accessibility tree, and
     // the lane carries the identifier rather than the button inside it.
-    XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
-    clickLaneControl(app.buttons["Append audio"])
+    XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 20))
+    app.buttons["append-audio"].click()
     XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
     app.buttons["append-generate-audio"].click()
 
@@ -119,7 +119,7 @@ final class H3ddleUITests: XCTestCase {
   @MainActor
   func testInsertPlacesResultAfterTheLastClip() throws {
     throw XCTSkip(
-      "the append control reports a lane-wide accessibility frame while its actual hit area is the small plus glyph within it, so a synthesised click lands on lane background and no menu opens; the identifiers themselves now reach the tree"
+      "the append button reports its lane's frame, 2384 points wide, not its own 32-point square, so every synthesised click lands on empty track; ruled out so far: the lane's drop identifier (fixed, the button now reports its own name), .accessibilityElement(children: .contain) on the lane, .accessibilityElement() on the button, and clicking at a normalised offset inside the reported frame"
     )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleFastFakeGeneration"]
@@ -131,8 +131,8 @@ final class H3ddleUITests: XCTestCase {
 
     // A cold launch can take a while to publish an accessibility tree, and
     // the lane carries the identifier rather than the button inside it.
-    XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
-    clickLaneControl(app.buttons["Append audio"])
+    XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 20))
+    app.buttons["append-audio"].click()
     XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
     app.buttons["append-generate-audio"].click()
 
@@ -151,7 +151,7 @@ final class H3ddleUITests: XCTestCase {
   @MainActor
   func testAppendMenusOfferImport() throws {
     throw XCTSkip(
-      "the append control reports a lane-wide accessibility frame while its actual hit area is the small plus glyph within it, so a synthesised click lands on lane background and no menu opens; the identifiers themselves now reach the tree"
+      "the append button reports its lane's frame, 2384 points wide, not its own 32-point square, so every synthesised click lands on empty track; ruled out so far: the lane's drop identifier (fixed, the button now reports its own name), .accessibilityElement(children: .contain) on the lane, .accessibilityElement() on the button, and clicking at a normalised offset inside the reported frame"
     )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
@@ -161,13 +161,13 @@ final class H3ddleUITests: XCTestCase {
       "the editor never became accessible"
     )
 
-    XCTAssertTrue(app.buttons["Append visual"].waitForExistence(timeout: 5))
-    clickLaneControl(app.buttons["Append visual"])
+    XCTAssertTrue(app.buttons["append-visual"].waitForExistence(timeout: 5))
+    app.buttons["append-visual"].click()
     XCTAssertTrue(app.buttons["append-import"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.buttons["append-generate-video"].exists)
-    clickLaneControl(app.buttons["Append visual"])
+    app.buttons["append-visual"].click()
 
-    clickLaneControl(app.buttons["Append audio"])
+    app.buttons["append-audio"].click()
     XCTAssertTrue(app.buttons["append-import"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.buttons["append-generate-audio"].exists)
   }
@@ -195,7 +195,7 @@ final class H3ddleUITests: XCTestCase {
   @MainActor
   func testAudioStudioOffersSoundEffects() throws {
     throw XCTSkip(
-      "the append control reports a lane-wide accessibility frame while its actual hit area is the small plus glyph within it, so a synthesised click lands on lane background and no menu opens; the identifiers themselves now reach the tree"
+      "the append button reports its lane's frame, 2384 points wide, not its own 32-point square, so every synthesised click lands on empty track; ruled out so far: the lane's drop identifier (fixed, the button now reports its own name), .accessibilityElement(children: .contain) on the lane, .accessibilityElement() on the button, and clicking at a normalised offset inside the reported frame"
     )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
@@ -207,8 +207,8 @@ final class H3ddleUITests: XCTestCase {
 
     // A cold launch can take a while to publish an accessibility tree, and
     // the lane carries the identifier rather than the button inside it.
-    XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
-    clickLaneControl(app.buttons["Append audio"])
+    XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 20))
+    app.buttons["append-audio"].click()
     XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
     app.buttons["append-generate-audio"].click()
 
