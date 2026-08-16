@@ -531,6 +531,89 @@ public enum ModelCatalog {
     ]
   )
 
+  /// Text spoken in a voice cloned from a reference clip, which neither H3
+  /// nor Stable Audio will do: H3's audio branch improvises dialogue rather
+  /// than reciting given words, and Stable Audio makes no speech at all.
+  ///
+  /// Converted from the Qwen3-TTS release by
+  /// Scripts/convert-qwen3-tts-package.py and hosted as one file per
+  /// subsystem, pinned to its upload commit and verified against the same
+  /// SHA-256 the conversion produced. A local conversion output installs
+  /// instantly when present.
+  public static let qwen3TTSSpeech = ModelPackageManifest(
+    id: "h3ddle-qwen3-tts-12hz-0.6b-base-v1",
+    displayName: "Qwen3-TTS 12Hz 0.6B Base · Speech",
+    detail:
+      "Text to speech at 24 kHz, in a voice cloned from a few seconds of a "
+      + "reference clip. Ten languages, faster than real time.",
+    repository: "PulpCut/Qwen3-TTS-12Hz-0.6B-Base-safetensors",
+    revision: "14a92e3816b3edc4cd0fb7f4d922156c58044ce0",
+    licenseName: "Apache 2.0",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/PulpCut/Qwen3-TTS-12Hz-0.6B-Base-safetensors/blob/14a92e3816b3edc4cd0fb7f4d922156c58044ce0/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 8 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    capability: .audio,
+    audioRole: .speech,
+    files: [
+      speechFile(
+        role: .transformer,
+        path: "talker.safetensors",
+        byteCount: 1_528_475_896,
+        sha256: "dd45f15564979beac76583e4d06d842b7304daee0f636af746abd67dba73ff3e"
+      ),
+      speechFile(
+        role: .transformer,
+        path: "code_predictor.safetensors",
+        byteCount: 283_152_152,
+        sha256: "c818a0c46c458dfd106280258cb5e62b81fe7a7926732d98c564150f10da4448"
+      ),
+      speechFile(
+        role: .textEncoder,
+        path: "speaker_encoder.safetensors",
+        byteCount: 35_425_464,
+        sha256: "0ba0dcbb490e86606b3c2ed32e5d9d1b1a586c95ad8c5eefff23823f4e97bb11"
+      ),
+      speechFile(
+        role: .audioVAE,
+        path: "codec_decoder.safetensors",
+        byteCount: 457_190_116,
+        sha256: "234d1f2ec4583f48ae95e6b7d1d0d5003148034776310b99021c509ac0279983"
+      ),
+      speechFile(
+        role: .runtimeMetadata,
+        path: "tokenizer.json",
+        byteCount: 4_757_709,
+        sha256: "9aa75ab12fe8b491d89413103024f02ea0e91b77d337985a4718381f29feb0f9"
+      ),
+    ]
+  )
+
+  /// Every speech file sits at the repository root under the name it takes in
+  /// the package, so only the conversion directory needs writing out — and
+  /// that once rather than five times.
+  private static func speechFile(
+    role: ModelPackageRole,
+    path: String,
+    byteCount: Int64,
+    sha256: String
+  ) -> ModelPackageFile {
+    ModelPackageFile(
+      role: role,
+      path: path,
+      byteCount: byteCount,
+      sha256: sha256,
+      localCandidatePath: URL.applicationSupportDirectory
+        .appendingPathComponent("H3ddle", isDirectory: true)
+        .appendingPathComponent("Conversion", isDirectory: true)
+        .appendingPathComponent("Qwen3-TTS-12Hz-0.6B-Base", isDirectory: true)
+        .appendingPathComponent(path, isDirectory: false)
+        .path
+    )
+  }
+
   public static let stableAudio3SmallMusic = ModelPackageManifest(
     id: "h3ddle-stable-audio-3-small-music-v1",
     displayName: "Stable Audio 3 Small · Music",

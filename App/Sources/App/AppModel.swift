@@ -152,6 +152,7 @@ final class AppModel {
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,
     ModelCatalog.stableAudio3SmallMusic,
+    ModelCatalog.qwen3TTSSpeech,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   /// What each package still has to fetch, which is less than it weighs
