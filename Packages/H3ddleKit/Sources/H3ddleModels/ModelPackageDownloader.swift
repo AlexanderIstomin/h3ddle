@@ -156,7 +156,7 @@ public actor ModelPackageDownloader {
     guard
       let data = try? Data(contentsOf: manifestURL),
       let installedManifest = try? JSONDecoder().decode(ModelPackageManifest.self, from: data),
-      installedManifest == manifest
+      installedManifest.describesSameFiles(as: manifest)
     else {
       return nil
     }

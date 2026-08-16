@@ -158,3 +158,43 @@ struct ModelFolderCategoryTests {
     #expect(!ModelFolderInspection.matches(.audio, at: directory))
   }
 }
+
+@Suite("Installed package recognition")
+struct InstalledManifestTests {
+  private func manifest(
+    detail: String = "original",
+    audioRole: ModelAudioRole? = nil,
+    sha: String = "abc"
+  ) -> ModelPackageManifest {
+    ModelPackageManifest(
+      id: "pkg", displayName: "Package", detail: detail,
+      repository: "owner/repo", revision: "rev1",
+      licenseName: "Licence", licenseURL: URL(string: "https://example.com")!,
+      minimumUnifiedMemoryBytes: 1, compatibility: .ready, audioRole: audioRole,
+      files: [ModelPackageFile(role: .transformer, path: "a.safetensors",
+                               byteCount: 10, sha256: sha)]
+    )
+  }
+
+  @Test("Editing description or adding a field keeps the install")
+  func cosmeticChangesDoNotInvalidate() {
+    // Whole-manifest equality threw away tens of gigabytes over a reworded
+    // sentence, which is what made every app run re-download.
+    #expect(manifest().describesSameFiles(as: manifest(detail: "reworded")))
+    #expect(manifest().describesSameFiles(as: manifest(audioRole: .music)))
+  }
+
+  @Test("Different files or revision do invalidate it")
+  func realChangesInvalidate() {
+    #expect(!manifest().describesSameFiles(as: manifest(sha: "def")))
+    var other = manifest()
+    other = ModelPackageManifest(
+      id: "pkg", displayName: "Package", detail: "original",
+      repository: "owner/repo", revision: "rev2",
+      licenseName: "Licence", licenseURL: URL(string: "https://example.com")!,
+      minimumUnifiedMemoryBytes: 1, compatibility: .ready,
+      files: other.files
+    )
+    #expect(!manifest().describesSameFiles(as: other))
+  }
+}

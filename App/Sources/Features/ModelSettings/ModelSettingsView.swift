@@ -402,6 +402,7 @@ private struct ModelChoiceRow: View {
         Button(installTitle, action: install)
           .buttonStyle(H3PrimaryButtonStyle())
           .disabled(blockedBy != nil)
+          .opacity(blockedBy == nil ? 1 : 0.4)
           .accessibilityIdentifier("download-managed-model")
       }
     }

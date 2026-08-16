@@ -199,6 +199,20 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     files = try container.decode([ModelPackageFile].self, forKey: .files)
   }
 
+  /// Whether an install made from `other` is still the package this
+  /// manifest describes.
+  ///
+  /// Comparing whole manifests meant that editing a description, or adding
+  /// a field, threw away tens of gigabytes already on disk and demanded
+  /// the whole download again. What actually decides usability is the
+  /// revision and the files: same names, same sizes, same digests.
+  public func describesSameFiles(as other: ModelPackageManifest) -> Bool {
+    guard id == other.id, revision == other.revision else { return false }
+    let mine = Set(files.map { [$0.path, String($0.byteCount), $0.sha256] })
+    let theirs = Set(other.files.map { [$0.path, String($0.byteCount), $0.sha256] })
+    return mine == theirs
+  }
+
   public var totalByteCount: Int64 {
     files.reduce(0) { $0 + $1.byteCount }
   }
