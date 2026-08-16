@@ -235,7 +235,11 @@ private struct ModelChoiceRow: View {
   var install: () -> Void
   var pause: () -> Void
   var discard: (() -> Void)?
-  var remove: (() -> Void)?  // trash for managed, unlist for local
+  /// Deletes a managed package's weights or unlists a local folder. Not
+  /// optional: every card can be removed, and an optional here once let a
+  /// call site pass nil, which compiled cleanly and silently erased the
+  /// button for every managed package.
+  var remove: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -387,8 +391,7 @@ private struct ModelChoiceRow: View {
   @ViewBuilder
   private var actions: some View {
     if choice.isInstalled {
-      if let remove {
-        Button(action: remove) {
+      Button(action: remove) {
           Image(systemName: choice.isLocalFolder ? "xmark.circle" : "trash")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(H3Color.textSecondary)
@@ -406,7 +409,6 @@ private struct ModelChoiceRow: View {
             : "Delete the downloaded weights from this Mac"
         )
         .accessibilityIdentifier("remove-model")
-      }
     } else if let status {
       switch status.state {
       case .checking:
