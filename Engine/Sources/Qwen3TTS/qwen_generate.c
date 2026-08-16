@@ -116,7 +116,8 @@ qwen_tts *qwen_tts_load_metal(const char *talker_path,
     if (tts->gpu_talker)
         tts->gpu_predictor = qwen_gpu_predictor_load(predictor_path, shader_path,
                                                      error, error_size);
-    if (!tts->gpu_predictor) {
+    if (!tts->gpu_predictor ||
+        !qwen_codec_use_metal(tts->codec, shader_path, error, error_size)) {
         qwen_tts_free(tts);
         return NULL;
     }

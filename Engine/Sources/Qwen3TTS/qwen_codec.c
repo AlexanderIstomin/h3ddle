@@ -1,5 +1,6 @@
 #include "qwen_codec.h"
 
+#include "h3_gpu.h"
 #include "qwen_weights.h"
 
 #include <arm_neon.h>
@@ -63,8 +64,40 @@ typedef struct {
     const float *gamma;
 } convnext;
 
+/* ---- the vocoder's weights on the GPU -----------------------------------
+ *
+ * Only the vocoder: it is 81% of a decode, and the shapes there are exactly
+ * what a GPU wants. Measured on an M1 Pro, MPSGraph runs these convolutions at
+ * about 3.5 TFLOP/s against the NEON path's 54 GFLOP/s.
+ *
+ * Nothing needs repacking. The engine reads Conv1d weights as [out, in, k] and
+ * ConvTranspose1d as [in, out, k], which is how PyTorch stores them and so how
+ * they already sit in the package. */
+typedef struct { h3_gpu_tensor *weight, *bias; } gpu_conv;
+typedef struct { h3_gpu_tensor *alpha, *beta; } gpu_snake;
+
+typedef struct {
+    gpu_snake act1, act2;
+    gpu_conv conv1, conv2;
+} gpu_residual;
+
+typedef struct {
+    gpu_snake act;
+    gpu_conv up;
+    gpu_residual units[3];
+} gpu_stage;
+
+typedef struct {
+    h3_gpu *gpu;
+    gpu_conv head;
+    gpu_stage stages[STAGES];
+    gpu_snake final_act;
+    gpu_conv output;
+} codec_gpu;
+
 struct qwen_codec {
     qwen_weights *weights;
+    codec_gpu *metal;             /* the vocoder only; NULL keeps it on the CPU */
 
     const float *semantic_codebook;              /* [2048, 256] */
     const float *acoustic_codebooks[QWEN_CODEC_GROUPS - 1];
@@ -362,6 +395,278 @@ static void convnext_block(const convnext *block, float *x, int channels,
     });
 }
 
+/* ---- the vocoder on Metal -----------------------------------------------
+ *
+ * Two things differ from the CPU path, and both are layout rather than
+ * arithmetic.
+ *
+ * The engine's convolutions are time-major — [batch, length, channels] — where
+ * everything above is channel-major. So the vocoder transposes its input once
+ * on the way in and never again: its output is a single channel, where the two
+ * layouts coincide.
+ *
+ * And the transposed convolutions here trim (kernel - stride) samples from the
+ * right to stay causal. Time-major puts those samples at the end of the buffer,
+ * so the trim is just a shorter prefix — the copy the CPU path needs does not
+ * exist here. */
+static int upload_conv(h3_gpu *gpu, const conv1d *source, gpu_conv *target) {
+    const size_t count = (size_t)source->out_channels * source->in_channels *
+                         source->kernel;
+    target->weight = h3_gpu_tensor_from_f32(gpu, source->weight, count);
+    if (!target->weight) return 0;
+    if (!source->bias) return 1;
+    target->bias = h3_gpu_tensor_from_f32(gpu, source->bias,
+                                          source->out_channels);
+    return target->bias != NULL;
+}
+
+static int upload_snake(h3_gpu *gpu, const snake *source, gpu_snake *target,
+                        int channels) {
+    target->alpha = h3_gpu_tensor_from_f32(gpu, source->alpha, channels);
+    target->beta = h3_gpu_tensor_from_f32(gpu, source->beta, channels);
+    return target->alpha && target->beta;
+}
+
+static void free_conv(gpu_conv *conv) {
+    h3_gpu_tensor_free(conv->weight);
+    h3_gpu_tensor_free(conv->bias);
+    conv->weight = conv->bias = NULL;
+}
+
+static void free_snake(gpu_snake *parameters) {
+    h3_gpu_tensor_free(parameters->alpha);
+    h3_gpu_tensor_free(parameters->beta);
+    parameters->alpha = parameters->beta = NULL;
+}
+
+static void free_metal(codec_gpu *metal) {
+    if (!metal) return;
+    free_conv(&metal->head);
+    for (int index = 0; index < STAGES; index++) {
+        gpu_stage *stage = &metal->stages[index];
+        free_snake(&stage->act);
+        free_conv(&stage->up);
+        for (int unit = 0; unit < 3; unit++) {
+            free_snake(&stage->units[unit].act1);
+            free_snake(&stage->units[unit].act2);
+            free_conv(&stage->units[unit].conv1);
+            free_conv(&stage->units[unit].conv2);
+        }
+    }
+    free_snake(&metal->final_act);
+    free_conv(&metal->output);
+    h3_gpu_free(metal->gpu);
+    free(metal);
+}
+
+int qwen_codec_use_metal(qwen_codec *codec, const char *shader_path,
+                         char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!codec || !shader_path) {
+        snprintf(error, error_size, "invalid arguments");
+        return 0;
+    }
+    if (codec->metal) return 1;
+    codec_gpu *metal = calloc(1, sizeof(*metal));
+    if (!metal) {
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    metal->gpu = h3_gpu_create(shader_path, error, error_size);
+    if (!metal->gpu) {
+        free(metal);
+        return 0;
+    }
+
+    int ok = upload_conv(metal->gpu, &codec->head_conv, &metal->head);
+    int channels = DECODER_DIM;
+    for (int index = 0; ok && index < STAGES; index++) {
+        const vocoder_stage *source = &codec->stages[index];
+        gpu_stage *target = &metal->stages[index];
+        ok = upload_snake(metal->gpu, &source->act, &target->act, channels) &&
+             upload_conv(metal->gpu, &source->up, &target->up);
+        channels /= 2;
+        for (int unit = 0; ok && unit < 3; unit++)
+            ok = upload_snake(metal->gpu, &source->units[unit].act1,
+                              &target->units[unit].act1, channels) &&
+                 upload_snake(metal->gpu, &source->units[unit].act2,
+                              &target->units[unit].act2, channels) &&
+                 upload_conv(metal->gpu, &source->units[unit].conv1,
+                             &target->units[unit].conv1) &&
+                 upload_conv(metal->gpu, &source->units[unit].conv2,
+                             &target->units[unit].conv2);
+    }
+    ok = ok && upload_snake(metal->gpu, &codec->final_act, &metal->final_act,
+                            channels) &&
+         upload_conv(metal->gpu, &codec->output_conv, &metal->output);
+    if (!ok) {
+        snprintf(error, error_size, "cannot upload the vocoder: %s",
+                 h3_gpu_error(metal->gpu));
+        free_metal(metal);
+        return 0;
+    }
+    codec->metal = metal;
+    return 1;
+}
+
+/* The probe's contract is channel-major, so put the device's time-major rows
+ * back the way round the CPU path reports them. */
+static int report_metal(const qwen_codec *codec, const char *stage,
+                        const h3_gpu_tensor *values, int channels, int length) {
+    if (!codec->probe) return 1;
+    const size_t count = (size_t)channels * length;
+    float *device = malloc(count * sizeof(float));
+    float *rowed = malloc(count * sizeof(float));
+    if (!device || !rowed || !h3_gpu_tensor_read_f32(values, device, count)) {
+        free(device);
+        free(rowed);
+        return 0;
+    }
+    for (int position = 0; position < length; position++)
+        for (int channel = 0; channel < channels; channel++)
+            rowed[(size_t)channel * length + position] =
+                device[(size_t)position * channels + channel];
+    codec->probe(stage, rowed, channels, length, codec->probe_opaque);
+    free(device);
+    free(rowed);
+    return 1;
+}
+
+static int vocoder_metal(qwen_codec *codec, const float *latent, int length,
+                         float *audio, qwen_codec_progress progress,
+                         void *opaque, int *completed, int total,
+                         char *error, size_t error_size) {
+    codec_gpu *metal = codec->metal;
+    h3_gpu *gpu = metal->gpu;
+
+    /* The stages trade channels for length at a near-constant product, so walk
+     * them rather than guess which is widest; the transposed convolutions want
+     * `rate` samples of headroom past the trim. */
+    size_t peak = (size_t)length * DECODER_DIM;
+    {
+        int walk_length = length, walk_channels = DECODER_DIM;
+        for (int index = 0; index < STAGES; index++) {
+            walk_channels /= 2;
+            walk_length *= UPSAMPLE_RATES[index];
+            const size_t raw = (size_t)(walk_length + UPSAMPLE_RATES[index]) *
+                               walk_channels;
+            if (raw > peak) peak = raw;
+        }
+    }
+
+    float *staging = malloc((size_t)length * LATENT * sizeof(float));
+    if (!staging) {
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    for (int position = 0; position < length; position++)
+        for (int channel = 0; channel < LATENT; channel++)
+            staging[(size_t)position * LATENT + channel] =
+                latent[(size_t)channel * length + position];
+
+    h3_gpu_tensor *input = h3_gpu_tensor_from_f32(gpu, staging,
+                                                  (size_t)length * LATENT);
+    free(staging);
+    h3_gpu_tensor *front = h3_gpu_tensor_new_f32(gpu, peak);
+    h3_gpu_tensor *branch = h3_gpu_tensor_new_f32(gpu, peak);
+    h3_gpu_tensor *scratch = h3_gpu_tensor_new_f32(gpu, peak);
+    int channels = DECODER_DIM;
+    if (!input || !front || !branch || !scratch) {
+        snprintf(error, error_size, "cannot allocate %.1f MB on the GPU",
+                 (double)peak * 3 * sizeof(float) / 1e6);
+        goto failed;
+    }
+
+#define STEP(call) do { if (!(call)) goto device_failed; } while (0)
+    STEP(h3_gpu_begin(gpu));
+    STEP(h3_gpu_conv1d_causal_f32(gpu, front, input, metal->head.weight,
+                                  metal->head.bias, 1, length, LATENT,
+                                  DECODER_DIM, 7, 1));
+    STEP(h3_gpu_submit(gpu));
+    STEP(report_metal(codec, "dec_block0", front, DECODER_DIM, length));
+
+    for (int index = 0; index < STAGES; index++) {
+        const gpu_stage *stage = &metal->stages[index];
+        const int rate = UPSAMPLE_RATES[index];
+        STEP(h3_gpu_begin(gpu));
+        STEP(h3_gpu_snake_beta_f32(gpu, front, front, stage->act.alpha,
+                                   stage->act.beta, 1, length, channels));
+        STEP(h3_gpu_conv_transpose1d_f32(gpu, branch, front, stage->up.weight,
+                                         stage->up.bias, 1, length, channels,
+                                         channels / 2, 2 * rate, rate, 0));
+        length *= rate;
+        channels /= 2;
+        { h3_gpu_tensor *swap = front; front = branch; branch = swap; }
+
+        /* front carries the residual; branch and scratch alternate as the
+         * branch, so nothing writes over the value being added to */
+        for (int unit = 0; unit < 3; unit++) {
+            const gpu_residual *residual = &stage->units[unit];
+            STEP(h3_gpu_snake_beta_f32(gpu, branch, front, residual->act1.alpha,
+                                       residual->act1.beta, 1, length,
+                                       channels));
+            STEP(h3_gpu_conv1d_causal_f32(gpu, scratch, branch,
+                                          residual->conv1.weight,
+                                          residual->conv1.bias, 1, length,
+                                          channels, channels, 7,
+                                          DILATIONS[unit]));
+            STEP(h3_gpu_snake_beta_f32(gpu, scratch, scratch,
+                                       residual->act2.alpha,
+                                       residual->act2.beta, 1, length,
+                                       channels));
+            STEP(h3_gpu_conv1d_causal_f32(gpu, branch, scratch,
+                                          residual->conv2.weight,
+                                          residual->conv2.bias, 1, length,
+                                          channels, channels, 1, 1));
+            STEP(h3_gpu_add_scaled_f32(gpu, front, front, branch, 1.0f, 1.0f,
+                                       (uint32_t)((size_t)channels * length)));
+        }
+        STEP(h3_gpu_submit(gpu));
+
+        char stage_name[32];
+        snprintf(stage_name, sizeof(stage_name), "dec_block%d", index + 1);
+        STEP(report_metal(codec, stage_name, front, channels, length));
+        if (progress) progress(++*completed, total, opaque);
+    }
+
+    STEP(h3_gpu_begin(gpu));
+    STEP(h3_gpu_snake_beta_f32(gpu, front, front, metal->final_act.alpha,
+                               metal->final_act.beta, 1, length, channels));
+    STEP(h3_gpu_submit(gpu));
+    STEP(report_metal(codec, "dec_block5", front, channels, length));
+
+    STEP(h3_gpu_begin(gpu));
+    STEP(h3_gpu_conv1d_causal_f32(gpu, branch, front, metal->output.weight,
+                                  metal->output.bias, 1, length, channels, 1,
+                                  7, 1));
+    STEP(h3_gpu_submit(gpu));
+    STEP(h3_gpu_tensor_read_f32(branch, audio, (size_t)length));
+    STEP(report_metal(codec, "dec_block6", branch, 1, length));
+#undef STEP
+
+    for (int index = 0; index < length; index++) {
+        float sample = audio[index];
+        if (sample < -1.0f) sample = -1.0f;
+        if (sample > 1.0f) sample = 1.0f;
+        audio[index] = sample;
+    }
+    h3_gpu_tensor_free(input);
+    h3_gpu_tensor_free(front);
+    h3_gpu_tensor_free(branch);
+    h3_gpu_tensor_free(scratch);
+    return 1;
+
+device_failed:
+    snprintf(error, error_size, "the vocoder failed on the GPU: %s",
+             h3_gpu_error(gpu));
+failed:
+    h3_gpu_tensor_free(input);
+    h3_gpu_tensor_free(front);
+    h3_gpu_tensor_free(branch);
+    h3_gpu_tensor_free(scratch);
+    return 0;
+}
+
 /* ---- loading ------------------------------------------------------------ */
 static int take(const qwen_weights *weights, const char *name, int ndim,
                 const int64_t *shape, const float **target,
@@ -552,6 +857,7 @@ qwen_codec *qwen_codec_load(const char *path, char *error, size_t error_size) {
 
 void qwen_codec_free(qwen_codec *codec) {
     if (!codec) return;
+    free_metal(codec->metal);
     qwen_weights_close(codec->weights);
     free(codec);
 }
@@ -676,7 +982,14 @@ int qwen_codec_decode(qwen_codec *codec, const uint32_t *codes, int frames,
     report(codec, "dec_upsampled", front, LATENT, length);
     if (progress) progress(++completed, total, opaque);
 
-    /* 5. the vocoder */
+    /* 5. the vocoder, four fifths of the decode and all of it convolution */
+    if (codec->metal) {
+        const int ok = vocoder_metal(codec, front, length, audio, progress,
+                                     opaque, &completed, total, error,
+                                     error_size);
+        RELEASE;
+        return ok;
+    }
     causal_conv(&codec->head_conv, front, length, back, 1, 1);
     memcpy(front, back, (size_t)DECODER_DIM * length * sizeof(float));
     report(codec, "dec_block0", front, DECODER_DIM, length);
