@@ -79,13 +79,13 @@ struct TimelineAppendMenu: View {
   static func visualItems() -> [TimelineAppendMenuItem] {
     [
       TimelineAppendMenuItem(
-        label: "Video",
+        label: "Generate video",
         symbol: "film",
         tint: H3Color.clipVideo,
         action: .generate(.video)
       ),
       TimelineAppendMenuItem(
-        label: "Image",
+        label: "Generate image",
         symbol: "photo",
         tint: Color(red: 210 / 255, green: 162 / 255, blue: 78 / 255),
         action: .generate(.image)
@@ -102,7 +102,7 @@ struct TimelineAppendMenu: View {
   static func audioItems() -> [TimelineAppendMenuItem] {
     [
       TimelineAppendMenuItem(
-        label: "Generate",
+        label: "Generate audio",
         symbol: "wand.and.stars",
         tint: H3Color.accent,
         action: .generate(.audio)

@@ -43,11 +43,13 @@
 		BEAE4110ED9B9EE37CEB3F5D /* TimelineClipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE1CF7E7AA06CAE913136386 /* TimelineClipView.swift */; };
 		C2B9C48A2BBE05A72B922929 /* TransitionsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0A479A719F5C5DCED8AB26 /* TransitionsPanelView.swift */; };
 		C612E804FE06BE4E86A8D087 /* ProgramFramePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BBF3667FF8EC32438B53498 /* ProgramFramePresenter.swift */; };
+		C897FFA94948CD41987E9620 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3FCA3D3C6ED1AA4E588C7A38 /* Assets.xcassets */; };
 		C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */; };
 		CC4F9A5AA9DD7E28C23E15FA /* AudioPreviewPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D0B6D125B77E05E7085FB2D /* AudioPreviewPlayer.swift */; };
 		D3BE0742930E61BBB40C1081 /* H3ddleUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1A8789B11B5C010EED4C4E /* H3ddleUITests.swift */; };
 		E16BDDB3D50E74C60BC7381B /* H3ddleEngineProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 8916055035142DBA446A0BE3 /* H3ddleEngineProtocol */; };
 		E88235986A061E97604DC337 /* H3ddleCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F420D87DF957DDFAD4E5936 /* H3ddleCore */; };
+		EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */; };
 		F4EB56F215F9718964DBB153 /* TimelineAppendMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DA773D7D30C51874013C19 /* TimelineAppendMenu.swift */; };
 /* End PBXBuildFile section */
 
@@ -71,6 +73,8 @@
 		2547ABB5B8079987008EBA8B /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		2648406FAFCA8AB60A97EEE9 /* TrackHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackHeaderView.swift; sourceTree = "<group>"; };
 		2A6AF6F040C7256464607C94 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationNotifier.swift; sourceTree = "<group>"; };
+		3FCA3D3C6ED1AA4E588C7A38 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		43B65284F9D9F37F44F8B0EC /* ProjectSettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSettingsPanel.swift; sourceTree = "<group>"; };
 		4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewport.swift; sourceTree = "<group>"; };
 		478777F017228F58ABA67D3B /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
@@ -152,6 +156,7 @@
 			children = (
 				2A6AF6F040C7256464607C94 /* AppModel.swift */,
 				135192F096FB7C2428444B61 /* DockAttention.swift */,
+				31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */,
 				0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */,
 			);
 			path = App;
@@ -163,6 +168,7 @@
 				885F4E64CC7BE2EC1498D8DF /* Config */,
 				A54B7372870B881D785FE7F5 /* H3ddleUITests */,
 				ADB8BD5636137D619F921B21 /* Packages */,
+				E23E07CFB8CBD22F11D19EDA /* Resources */,
 				B2138135C9E5860FF98F2F80 /* Sources */,
 				F9E0FFB47617E488EA66AD0D /* Products */,
 			);
@@ -283,6 +289,15 @@
 			path = Features;
 			sourceTree = "<group>";
 		};
+		E23E07CFB8CBD22F11D19EDA /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				3FCA3D3C6ED1AA4E588C7A38 /* Assets.xcassets */,
+			);
+			name = Resources;
+			path = App/Resources;
+			sourceTree = "<group>";
+		};
 		EAF108948BA76F96218AA6E3 /* Editor */ = {
 			isa = PBXGroup;
 			children = (
@@ -333,6 +348,7 @@
 			buildPhases = (
 				D29133FC1AD05A5B8B000EEF /* Build and embed H3 engine helper */,
 				EDBE910E9FE52E78A17B5DF3 /* Sources */,
+				9C40697F3953D6D166C4DC47 /* Resources */,
 				D034298C114BD5052149C117 /* Frameworks */,
 			);
 			buildRules = (
@@ -390,6 +406,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		9C40697F3953D6D166C4DC47 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C897FFA94948CD41987E9620 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXShellScriptBuildPhase section */
 		D29133FC1AD05A5B8B000EEF /* Build and embed H3 engine helper */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -439,6 +466,7 @@
 				7157283517D7926DAFFA6D6E /* ExportControlsView.swift in Sources */,
 				388EF6D763445F890EE23922 /* ExportModalView.swift in Sources */,
 				4143C0887613C548157CE456 /* GeneratedAssetPreview.swift in Sources */,
+				EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */,
 				3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */,
 				C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */,
 				9098009C6BDCA4F8A02BFE44 /* ModelSettingsView.swift in Sources */,

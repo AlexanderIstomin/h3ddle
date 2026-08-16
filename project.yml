@@ -28,8 +28,12 @@ targets:
     platform: macOS
     sources:
       - path: App/Sources
-    resources:
+      # XcodeGen has no target-level `resources:` key — one written here was
+      # silently ignored, so the asset catalogue never reached the bundle and
+      # the app shipped with a placeholder icon. Resources belong in `sources`
+      # with the build phase named.
       - path: App/Resources
+        buildPhase: resources
     configFiles:
       Debug: Config/Debug.xcconfig
       Release: Config/Release.xcconfig

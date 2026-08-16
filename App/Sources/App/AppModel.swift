@@ -17,16 +17,19 @@ enum ModelValidationState: Equatable {
   case failed
 }
 
+/// What the audio tab makes. H3's own audio branch is deliberately absent:
+/// it improvises dialogue rather than reciting given words, so beside a real
+/// text-to-speech model it was a worse way to do the same thing — and it cost
+/// a full video generation to produce a soundtrack nobody asked for. The
+/// engine still accepts `.audio`; nothing here asks for it.
 enum AudioGenerationMode: Hashable {
-  case voice
+  case speech
   case music
   case soundEffects
-  case speech
 
-  /// Which package this mode generates from, or nil for H3's own audio.
-  var audioRole: ModelAudioRole? {
+  /// Which package this mode generates from.
+  var audioRole: ModelAudioRole {
     switch self {
-    case .voice: nil
     case .music: .music
     case .soundEffects: .soundEffects
     case .speech: .speech
@@ -36,7 +39,6 @@ enum AudioGenerationMode: Hashable {
   /// Which engine writes the WAV.
   var engine: AudioGenerationEngine {
     switch self {
-    case .voice: .h3
     case .music, .soundEffects: .stableAudio
     case .speech: .speech
     }
@@ -44,7 +46,6 @@ enum AudioGenerationMode: Hashable {
 
   var label: String {
     switch self {
-    case .voice: "voice"
     case .music: "music"
     case .soundEffects: "sound effects"
     case .speech: "speech"
@@ -127,7 +128,7 @@ final class AppModel {
   /// Audio studio only: which of three models is generating. H3 writes the
   /// joint soundtrack; the other two are the same Stable Audio transformer
   /// trained on different material.
-  var audioMode: AudioGenerationMode = .voice
+  var audioMode: AudioGenerationMode = .speech
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
   var generationOverallProgress = 0.0
@@ -321,8 +322,9 @@ final class AppModel {
     }
   }
 
-  /// Audio renders the joint model at H3's native canvas; a smaller one loses
-  /// the prompt and returns speech. Shown wherever settings are reported.
+  /// H3's native canvas, kept because the video path still reports it. The
+  /// audio tab no longer reaches H3 at all — every mode there loads its own
+  /// package — so nothing formats an audio canvas any more.
   static var audioCanvasLabel: String {
     let size = EngineGenerationRequest.audioCanvasSize
     return "\(size)×\(size)"
@@ -391,6 +393,17 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     activeGenerationKind = kind
+    // Each audio mode is a separate package, so the one the tab happens to
+    // remember may have nothing behind it — which reads as "no models
+    // installed" while another mode is ready and one click away. Open on a
+    // mode that can actually generate, and only fall back to the remembered
+    // one when nothing is installed at all.
+    if kind == .audio, audioPackageDirectory == nil {
+      let installed = [AudioGenerationMode.speech, .music, .soundEffects].first { mode in
+        modelChoices.contains { $0.isInstalled && $0.audioRole == mode.audioRole }
+      }
+      if let installed { audioMode = installed }
+    }
     if let ratio = ProgramAspectRatio(rawValue: project.settings.aspect.rawValue) {
       studioAspect = ratio
     }
@@ -482,6 +495,7 @@ final class AppModel {
     canvasHeight: Int? = nil
   ) {
     guard let kind = activeGenerationKind else { return }
+    GenerationNotifier.requestAuthorizationIfNeeded()
     generationTask?.cancel()
     isGenerating = true
     errorMessage = nil
@@ -627,11 +641,14 @@ final class AppModel {
             generationProgress = fractionComplete
             // The reported fraction is phase-local; the run's own position
             // comes from the denoising step counter when one is present.
-            if let overall = GenerationRemaining.overallProgress(
+            let overall = GenerationRemaining.overallProgress(
               phase: phase, phaseFraction: fractionComplete)
-            {
+            if let overall {
               generationOverallProgress = overall
             }
+            // Models that run in one phase — speech, sound effects — have no
+            // step counter, and for them the phase fraction *is* the run's.
+            DockAttention.showProgress(overall ?? fractionComplete)
             phaseTimeline.record(
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
@@ -656,6 +673,7 @@ final class AppModel {
         }
       } catch {
         errorMessage = error.localizedDescription
+        GenerationNotifier.generationFailed(message: error.localizedDescription)
       }
     }
   }
@@ -873,18 +891,11 @@ final class AppModel {
       && modelReport?.supportsGeneration == true
   }
 
-  var nativeAudioGenerationIsReady: Bool {
-    modelValidationState == .ready
-      && engineCapabilities?.supports(.standaloneAudioGeneration) == true
-      && modelReport?.supportsGeneration == true
-  }
-
   func usesNativeEngine(for kind: GenerationKind) -> Bool {
     switch kind {
     case .video: nativeVideoGenerationIsReady
     case .image: nativeImageGenerationIsReady
-    case .audio:
-      audioMode == .voice ? nativeAudioGenerationIsReady : audioPackageDirectory != nil
+    case .audio: audioPackageDirectory != nil
     }
   }
 
@@ -897,7 +908,7 @@ final class AppModel {
   /// than the manifests means a folder added by hand counts too, which it
   /// previously did not — it could be selected but never generated from.
   var audioPackageDirectory: URL? {
-    guard let role = audioMode.audioRole else { return nil }
+    let role = audioMode.audioRole
     let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == role }
     if let chosen = usable.first(where: { $0.id == selectedAudioModelID }) {
       return chosen.directory
@@ -1245,7 +1256,7 @@ final class AppModel {
       switch kind {
       // H3 makes video, stills and their soundtrack from one package.
       case .video, .image: .video
-      case .audio: audioMode == .voice ? .video : .audio
+      case .audio: .audio
       }
     let role = kind == .audio ? audioMode.audioRole : nil
     return modelChoices.filter {
@@ -1888,6 +1899,13 @@ final class AppModel {
         generationStatistics[completedAssetID] = statistics
       }
       DockAttention.markGenerationFinished()
+      if let kind = pendingStatistics?.kind ?? activeGenerationKind {
+        GenerationNotifier.generationFinished(kind: kind, seconds: elapsed)
+      }
+    } else {
+      // Cancelled, or failed after the progress badge went up. Either way the
+      // percentage is stale and has to come off.
+      DockAttention.clear()
     }
     pendingStatistics = nil
     activeGenerationID = nil
@@ -1965,7 +1983,7 @@ final class AppModel {
   /// Whole seconds: tenths imply a precision that varies more than that
   /// between identical runs, and they add noise to a number people read at a
   /// glance or paste into a post.
-  private static func formatElapsed(_ elapsed: TimeInterval) -> String {
+  static func formatElapsed(_ elapsed: TimeInterval) -> String {
     let total = Int(max(0, elapsed).rounded())
     if total < 60 { return "\(total) s" }
     return String(format: "%d:%02d", total / 60, total % 60)

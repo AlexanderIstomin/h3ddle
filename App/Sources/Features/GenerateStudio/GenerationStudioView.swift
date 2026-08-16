@@ -122,15 +122,13 @@ struct GenerationStudioView: View {
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
       if kind == .audio {
-        // Three different models, not settings of one: H3 writes the joint
-        // soundtrack and leans toward dialogue; music and sound effects are
-        // one Stable Audio transformer trained on different material; speech
-        // is Qwen3-TTS, which says the words you typed in a voice it clones
-        // from a clip. VOICE improvises, SPEECH recites.
+        // Two models, not settings of one: speech is Qwen3-TTS, which says the
+        // words you typed in a voice cloned from a clip; music and sound
+        // effects are one Stable Audio transformer trained on different
+        // material, and are not alternatives for one another.
         H3SegmentedControl(
           selection: $model.audioMode,
           segments: [
-            .init(value: .voice, title: "VOICE", systemImage: "mic"),
             .init(value: .speech, title: "SPEECH", systemImage: "text.bubble"),
             .init(value: .music, title: "MUSIC", systemImage: "music.note"),
             .init(value: .soundEffects, title: "SFX", systemImage: "waveform"),
@@ -220,7 +218,7 @@ struct GenerationStudioView: View {
         }
       }
 
-      if kind != .image, model.audioMode == .voice {
+      if kind == .video {
         audioDesignSection
       }
 
@@ -579,7 +577,7 @@ struct GenerationStudioView: View {
             noModelSection
           }
 
-          if usesNativeSettings, model.audioMode == .voice {
+          if usesNativeSettings, kind != .audio {
             generationControls
           }
 
@@ -602,7 +600,7 @@ struct GenerationStudioView: View {
 
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
-          if usesNativeSettings, model.audioMode == .voice {
+          if usesNativeSettings, kind != .audio {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
@@ -694,16 +692,6 @@ struct GenerationStudioView: View {
           in: 1...maximumDuration
         )
         .tint(H3Color.accent)
-      }
-      if kind == .audio, model.nativeAudioGenerationIsReady,
-        model.audioMode == .voice
-      {
-        Text(
-          "H3 has no audio-only model. It generates a \(AppModel.audioCanvasLabel) clip "
-            + "and keeps the soundtrack, so audio costs about as much as video."
-        )
-        .font(.system(size: 10))
-        .foregroundStyle(H3Color.textSecondary)
       }
       if kind == .video, model.nativeVideoGenerationIsReady, alignedSeconds > 3 {
         Text("Long H3 clips increase transformer work sharply. Start short on M1-class Macs.")
@@ -1255,7 +1243,6 @@ struct GenerationStudioView: View {
   /// would be borrowing a constraint it does not have.
   private var maximumDuration: Double {
     switch model.audioMode {
-    case .voice: 15
     // A ceiling rather than a length: speech stops when the line is spoken,
     // so this only decides how long a runaway is allowed to run.
     case .speech: 60
@@ -1264,9 +1251,7 @@ struct GenerationStudioView: View {
   }
 
   private var usesAlignedH3Duration: Bool {
-    (kind == .video && model.nativeVideoGenerationIsReady)
-      || (kind == .audio && model.nativeAudioGenerationIsReady
-        && model.audioMode == .voice)
+    kind == .video && model.nativeVideoGenerationIsReady
   }
 
   private var requestedDuration: Double {

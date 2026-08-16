@@ -1,7 +1,30 @@
 import AppKit
 
+/// What the Dock icon says about a generation that is running or has just
+/// finished. A generation takes minutes, so the Dock is where the answer has
+/// to be: the window is usually behind something else by then.
 @MainActor
 enum DockAttention {
+  /// Last percentage drawn, so a run that reports progress many times a
+  /// second redraws the tile only when the number would actually change.
+  private static var shownPercent: Int?
+
+  /// A percentage on the Dock icon while a generation runs.
+  ///
+  /// The badge rather than a drawn ring: at Dock size a ring reads as
+  /// decoration, where "42%" answers the question the user actually walked
+  /// away with. It also survives the icon being scaled down to the menu bar
+  /// or the app switcher, which a thin arc does not.
+  static func showProgress(_ fraction: Double) {
+    let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
+    guard percent != shownPercent else { return }
+    shownPercent = percent
+    let tile = NSApp.dockTile
+    tile.contentView = nil
+    tile.badgeLabel = "\(percent)%"
+    tile.display()
+  }
+
   static func markGenerationFinished() {
     apply(showsDot: true)
     if !NSApp.isActive {
@@ -14,6 +37,7 @@ enum DockAttention {
   }
 
   private static func apply(showsDot: Bool) {
+    shownPercent = nil
     let tile = NSApp.dockTile
     guard showsDot else {
       tile.contentView = nil
@@ -22,6 +46,9 @@ enum DockAttention {
       return
     }
 
+    // The percentage has served its purpose; leaving it beside the dot would
+    // read as a run still at 100 rather than one that finished.
+    tile.badgeLabel = nil
     let view = DockIconDotView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
     view.icon = NSApp.applicationIconImage
     tile.contentView = view
