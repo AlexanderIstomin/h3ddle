@@ -17,6 +17,21 @@ enum ModelValidationState: Equatable {
   case failed
 }
 
+enum AudioGenerationMode: Hashable {
+  case voice
+  case music
+  case soundEffects
+
+  /// Which package this mode generates from, or nil for H3's own audio.
+  var audioRole: ModelAudioRole? {
+    switch self {
+    case .voice: nil
+    case .music: .music
+    case .soundEffects: .soundEffects
+    }
+  }
+}
+
 enum ManagedModelState: Equatable {
   case checking
   case available
@@ -85,9 +100,10 @@ final class AppModel {
   var activeGenerationKind: GenerationKind?
   var isGenerating = false
   var generationPhase = ""
-  /// Audio studio only: whether it is making sound effects rather than
-  /// H3's joint soundtrack. They come from different packages.
-  var audioUsesSoundEffects = false
+  /// Audio studio only: which of three models is generating. H3 writes the
+  /// joint soundtrack; the other two are the same Stable Audio transformer
+  /// trained on different material.
+  var audioMode: AudioGenerationMode = .voice
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
   var generationOverallProgress = 0.0
@@ -111,6 +127,7 @@ final class AppModel {
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,
+    ModelCatalog.stableAudio3SmallMusic,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   /// What each package still has to fetch, which is less than it weighs
@@ -441,14 +458,16 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     phaseTimeline = GenerationPhaseTimeline()
-    let soundEffects = kind == .audio && audioUsesSoundEffects
+    let soundEffects = kind == .audio && audioMode != .voice
     let runningModelName =
       soundEffects
-      ? (selectedAudioModelChoice?.displayName ?? "a sound-effect model")
+      ? (managedManifests.first { $0.audioRole == audioMode.audioRole }?.displayName
+        ?? "a Stable Audio model")
       : (selectedModelChoice?.displayName ?? "a local model folder")
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
       soundEffects: soundEffects,
+      label: audioMode == .music ? "music" : "sound effects",
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -819,7 +838,7 @@ final class AppModel {
     case .video: nativeVideoGenerationIsReady
     case .image: nativeImageGenerationIsReady
     case .audio:
-      audioUsesSoundEffects ? soundEffectModelDirectory != nil : nativeAudioGenerationIsReady
+      audioMode == .voice ? nativeAudioGenerationIsReady : soundEffectModelDirectory != nil
     }
   }
 
@@ -827,8 +846,12 @@ final class AppModel {
   /// installed. It is loaded by its own engine path and never validated as
   /// an H3 tree.
   var soundEffectModelDirectory: URL? {
-    selectedAudioModelChoice?.directory
-      ?? modelChoices.first { $0.capability == .audio && $0.isInstalled }?.directory
+    guard let role = audioMode.audioRole else { return nil }
+    // The mode names the package; a stale selection from the other mode
+    // would quietly generate the wrong kind of audio.
+    return managedManifests
+      .first { $0.audioRole == role }
+      .flatMap { managedStatuses[$0.id]?.installedURL }
   }
 
   func cancelGeneration() {
@@ -1171,7 +1194,7 @@ final class AppModel {
       switch kind {
       // H3 makes video, stills and their soundtrack from one package.
       case .video, .image: .video
-      case .audio: audioUsesSoundEffects ? .audio : .video
+      case .audio: audioMode == .voice ? .video : .audio
       }
     return modelChoices.filter { $0.isInstalled && $0.capability == capability }
   }
@@ -1813,6 +1836,7 @@ final class AppModel {
   private static func settingsDescription(
     kind: GenerationKind,
     soundEffects: Bool = false,
+    label: String = "sound effects",
     duration: TimeInterval,
     quality: EngineGenerationQuality,
     denoisingSteps: Int?,
@@ -1825,7 +1849,7 @@ final class AppModel {
     if soundEffects {
       // Eight fixed passes, no canvas, no reuse ladders: reciting H3's
       // settings here would describe a model that was not run.
-      return String(format: "sound effects · %.0fs", duration)
+      return String(format: "%@ · %.0fs", label, duration)
     }
     guard kind == .video || kind == .image || kind == .audio else {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)

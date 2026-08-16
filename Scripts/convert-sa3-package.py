@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Convert Stability's MLX Stable Audio 3 Small SFX release into the
+"""Convert a Stability MLX Stable Audio 3 Small release into the
 safetensors package layout h3.c reads.
+
+The sound-effect and music models are the same transformer trained on
+different material: identical shape, and they share a decoder and a text
+encoder besides. Only --variant picks between them, and installing the
+second costs the transformer alone because the rest hardlinks from the
+first.
 
 Stability publishes two copies of this model. The gated
 `stable-audio-3-small-sfx` repo is fp32, 3.5 GB, and requires every user to
@@ -25,7 +31,7 @@ Stability AI" credit is the app's responsibility, not this script's.
 
 Usage:
   convert-sa3-package.py --mlx-dir sa3-mlx --tokenizer tokenizer.json \
-      --out MiniMax-Stable-Audio-3-SFX [--half]
+      --variant music --out Stable-Audio-3-Small-Music [--half]
 """
 
 import argparse
@@ -39,8 +45,14 @@ import numpy as np
 
 # MLX archive -> package file. The encoder is deliberately absent: it only
 # matters for audio-to-audio, and leaving it out saves the user 215 MB.
-PARTS = [
-    ("MLX/dit_sm-sfx_f16.npz", "dit.safetensors"),
+# Every small model shares the decoder and the text encoder; only the
+# transformer differs, which is what --variant selects.
+VARIANTS = {
+    "sfx": "MLX/dit_sm-sfx_f16.npz",
+    "music": "MLX/dit_sm-music_f16.npz",
+}
+
+SHARED = [
     ("MLX/t5gemma_f16.npz", "text_encoder.safetensors"),
     ("MLX/same_s_decoder_f32.npz", "decoder.safetensors"),
 ]
@@ -135,6 +147,8 @@ def main():
     parser.add_argument("--tokenizer", required=True,
                         help="t5gemma tokenizer.json (HF fast-tokenizer format)")
     parser.add_argument("--out", required=True, help="package directory to write")
+    parser.add_argument("--variant", choices=sorted(VARIANTS), default="sfx",
+                        help="which transformer to package")
     parser.add_argument("--half", action="store_true",
                         help="also cast the f32 decoder to f16 (halves its size)")
     args = parser.parse_args()
@@ -143,14 +157,15 @@ def main():
 
     metadata = {
         "source_repo": "stabilityai/stable-audio-3-optimized",
-        "model": "stable-audio-3-small-sfx",
+        "model": f"stable-audio-3-small-{args.variant}",
         "license": "Stability AI Community License",
         "conversion": "mlx npz to safetensors, values unchanged",
         "decoder_precision": "f16" if args.half else "as-released",
     }
 
     total_params = 0
-    for relative, output in PARTS:
+    parts = [(VARIANTS[args.variant], "dit.safetensors")] + SHARED
+    for relative, output in parts:
         source = os.path.join(args.mlx_dir, relative)
         if not os.path.exists(source):
             raise SystemExit(f"missing {source}")

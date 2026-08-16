@@ -114,6 +114,13 @@ public enum ModelCapability: String, Codable, Sendable, CaseIterable {
   }
 }
 
+/// What an audio package was trained to make. Both run the same engine
+/// path; only the transformer differs.
+public enum ModelAudioRole: String, Codable, Sendable, CaseIterable {
+  case soundEffects
+  case music
+}
+
 public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
   public let schemaVersion: Int
   public let id: String
@@ -132,6 +139,8 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
   public let compatibility: ModelEngineCompatibility
   public let generationProfile: ModelGenerationProfile
   public let capability: ModelCapability
+  /// Set on audio packages only; nil for video ones.
+  public let audioRole: ModelAudioRole?
   public let files: [ModelPackageFile]
 
   public init(
@@ -147,6 +156,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     compatibility: ModelEngineCompatibility,
     generationProfile: ModelGenerationProfile = .standard,
     capability: ModelCapability = .video,
+    audioRole: ModelAudioRole? = nil,
     files: [ModelPackageFile]
   ) {
     self.schemaVersion = schemaVersion
@@ -161,6 +171,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     self.compatibility = compatibility
     self.generationProfile = generationProfile
     self.capability = capability
+    self.audioRole = audioRole
     self.files = files
   }
 
@@ -184,6 +195,7 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
     capability =
       try container.decodeIfPresent(ModelCapability.self, forKey: .capability)
       ?? .video
+    audioRole = try container.decodeIfPresent(ModelAudioRole.self, forKey: .audioRole)
     files = try container.decode([ModelPackageFile].self, forKey: .files)
   }
 
@@ -462,6 +474,7 @@ public enum ModelCatalog {
     minimumUnifiedMemoryBytes: 8 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     capability: .audio,
+    audioRole: .soundEffects,
     files: [
       ModelPackageFile(
         role: .transformer,
@@ -497,6 +510,63 @@ public enum ModelCatalog {
         sha256: "7794135caa3ea73918949c902a781cc61dab674a4b59c17d85931c77c1114cbd",
         sourceRepository: "PulpCut/Stable-Audio-3-Small-SFX-safetensors",
         sourceRevision: "17914096d9e51e3486dbf97ee080d9c8f5512fd3",
+        sourcePath: "tokenizer.json"
+      ),
+    ]
+  )
+
+  public static let stableAudio3SmallMusic = ModelPackageManifest(
+    id: "h3ddle-stable-audio-3-small-music-v1",
+    displayName: "Stable Audio 3 Small · Music",
+    detail:
+      "Text to instrumental music and ambient beds at 44.1 kHz stereo, "
+      + "eight passes, faster than real time.",
+    repository: "PulpCut/Stable-Audio-3-Small-Music-safetensors",
+    revision: "59e92686c56f6411f9aa9f09ece25041b4962d46",
+    licenseName: "Stability AI Community License",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/PulpCut/Stable-Audio-3-Small-Music-safetensors/blob/59e92686c56f6411f9aa9f09ece25041b4962d46/LICENSE.md"
+    )!,
+    minimumUnifiedMemoryBytes: 8 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    capability: .audio,
+    audioRole: .music,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "dit.safetensors",
+        byteCount: 919_105_120,
+        sha256: "f007992271b571a2ff9cbd8b054b8fab381d66e7a4ba6004adff170692102679",
+        sourceRepository: "PulpCut/Stable-Audio-3-Small-Music-safetensors",
+        sourceRevision: "59e92686c56f6411f9aa9f09ece25041b4962d46",
+        sourcePath: "dit.safetensors"
+      ),
+      ModelPackageFile(
+        role: .textEncoder,
+        path: "text_encoder.safetensors",
+        byteCount: 563_175_776,
+        sha256: "3f97a58e7674a4ff0063629c463fa7af343b1e792f28b0f302fc54ce1fc8cce4",
+        sourceRepository: "PulpCut/Stable-Audio-3-Small-Music-safetensors",
+        sourceRevision: "59e92686c56f6411f9aa9f09ece25041b4962d46",
+        sourcePath: "text_encoder.safetensors"
+      ),
+      ModelPackageFile(
+        role: .audioVAE,
+        path: "decoder.safetensors",
+        byteCount: 218_069_724,
+        sha256: "bbe71a56368240fa89e82c13c402c5097c9f2165390fb64fec756ada37e57249",
+        sourceRepository: "PulpCut/Stable-Audio-3-Small-Music-safetensors",
+        sourceRevision: "59e92686c56f6411f9aa9f09ece25041b4962d46",
+        sourcePath: "decoder.safetensors"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "tokenizer.json",
+        byteCount: 34_362_429,
+        sha256: "7794135caa3ea73918949c902a781cc61dab674a4b59c17d85931c77c1114cbd",
+        sourceRepository: "PulpCut/Stable-Audio-3-Small-Music-safetensors",
+        sourceRevision: "59e92686c56f6411f9aa9f09ece25041b4962d46",
         sourcePath: "tokenizer.json"
       ),
     ]

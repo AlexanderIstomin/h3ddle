@@ -123,13 +123,14 @@ struct GenerationStudioView: View {
         .foregroundStyle(H3Color.textSecondary)
       if kind == .audio {
         // Two different models, not two settings of one: H3 writes the
-        // joint soundtrack and leans toward speech, while sound effects
-        // come from a package trained on them.
+        // joint soundtrack and leans toward speech; music and sound effects
+        // are one Stable Audio transformer trained on different material.
         H3SegmentedControl(
-          selection: $model.audioUsesSoundEffects,
+          selection: $model.audioMode,
           segments: [
-            .init(value: false, title: "VOICE", systemImage: "mic"),
-            .init(value: true, title: "SFX", systemImage: "waveform"),
+            .init(value: .voice, title: "VOICE", systemImage: "mic"),
+            .init(value: .music, title: "MUSIC", systemImage: "music.note"),
+            .init(value: .soundEffects, title: "SFX", systemImage: "waveform"),
           ],
           isEnabled: !model.isGenerating
         )
@@ -216,7 +217,7 @@ struct GenerationStudioView: View {
         }
       }
 
-      if kind != .image, !model.audioUsesSoundEffects {
+      if kind != .image, model.audioMode == .voice {
         audioDesignSection
       }
 
@@ -503,11 +504,11 @@ struct GenerationStudioView: View {
             noModelSection
           }
 
-          if usesNativeSettings, !model.audioUsesSoundEffects {
+          if usesNativeSettings, model.audioMode == .voice {
             generationControls
           }
 
-          if usesNativeSettings, model.audioUsesSoundEffects {
+          if usesNativeSettings, model.audioMode != .voice {
             soundEffectControls
           }
 
@@ -522,7 +523,7 @@ struct GenerationStudioView: View {
 
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
-          if usesNativeSettings, !model.audioUsesSoundEffects {
+          if usesNativeSettings, model.audioMode == .voice {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
@@ -617,7 +618,7 @@ struct GenerationStudioView: View {
         .tint(H3Color.accent)
       }
       if kind == .audio, model.nativeAudioGenerationIsReady,
-        !model.audioUsesSoundEffects
+        model.audioMode == .voice
       {
         Text(
           "H3 has no audio-only model. It generates a \(AppModel.audioCanvasLabel) clip "
@@ -1116,7 +1117,7 @@ struct GenerationStudioView: View {
   private var usesAlignedH3Duration: Bool {
     (kind == .video && model.nativeVideoGenerationIsReady)
       || (kind == .audio && model.nativeAudioGenerationIsReady
-        && !model.audioUsesSoundEffects)
+        && model.audioMode == .voice)
   }
 
   private var requestedDuration: Double {
