@@ -567,8 +567,22 @@ int sa3_decoder_run(sa3_decoder *decoder, const float *latents, int frames,
     return 1;
 }
 
+int sa3_decoder_window_count(int frames, int chunk, int overlap) {
+    int kernel = chunk + 2 * overlap;
+    if (frames <= kernel) return 1;
+    int windows = 1;                      /* the opening window */
+    int position = chunk + overlap;
+    while (position + chunk + overlap <= frames) {
+        windows++;
+        position += chunk;
+    }
+    if (frames - position > 0) windows++; /* the closing window */
+    return windows;
+}
+
 int sa3_decoder_run_chunked(sa3_decoder *decoder, const float *latents,
                             int frames, int chunk, int overlap, float *patches,
+                            sa3_decoder_progress progress, void *opaque,
                             char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     int kernel = chunk + 2 * overlap;
@@ -612,11 +626,14 @@ int sa3_decoder_run_chunked(sa3_decoder *decoder, const float *latents,
         } while (0)
 
     int ok = 1;
+    int windows = sa3_decoder_window_count(frames, chunk, overlap);
+    int done = 0;
     /* The opening window needs no left context, so its head is already valid. */
     TAKE(0);
     ok = sa3_decoder_run(decoder, slice, kernel, window, error, error_size);
     int valid = chunk + overlap;
     if (ok) EMIT(0, 0, valid * SA3_PATCHES_PER_LATENT);
+    if (ok && progress) progress(++done, windows, opaque);
 
     int position = valid;
     while (ok && position + chunk + overlap <= frames) {
@@ -627,6 +644,7 @@ int sa3_decoder_run_chunked(sa3_decoder *decoder, const float *latents,
                  position * SA3_PATCHES_PER_LATENT,
                  chunk * SA3_PATCHES_PER_LATENT);
         position += chunk;
+        if (ok && progress) progress(++done, windows, opaque);
     }
 
     /* The final window is anchored to the end, so its tail is valid. */
@@ -638,6 +656,7 @@ int sa3_decoder_run_chunked(sa3_decoder *decoder, const float *latents,
             EMIT((kernel - remaining) * SA3_PATCHES_PER_LATENT,
                  position * SA3_PATCHES_PER_LATENT,
                  remaining * SA3_PATCHES_PER_LATENT);
+        if (ok && progress) progress(++done, windows, opaque);
     }
 
     #undef TAKE

@@ -209,6 +209,15 @@ static void build_schedule(float *sigmas, int steps) {
     sigmas[0] = 1.0f;
 }
 
+/* Continues the same bar the denoising steps were reported on. */
+static void decode_relay(int completed, int total, void *opaque) {
+    struct relay { sa3_progress fn; void *opaque; int offset; int total; };
+    struct relay *relay = opaque;
+    (void)total;
+    if (relay && relay->fn)
+        relay->fn(relay->offset + completed, relay->total, relay->opaque);
+}
+
 /* ---- generation -------------------------------------------------------- */
 
 int sa3_generate(struct sa3 *sa3, const sa3_request *request,
@@ -305,6 +314,13 @@ int sa3_generate(struct sa3 *sa3, const sa3_request *request,
     uint64_t state = request->seed ? request->seed : 0x5A3ull;
     fill_normal(x, latent_count, &state);
 
+    // Decode is a real share of the wall time on long audio, so the bar
+    // spans both stages: reaching 100% at the end of denoising left it
+    // sitting there while the decoder worked.
+    int windows = frames > (CHUNK + 2 * OVERLAP)
+      ? sa3_decoder_window_count(frames, CHUNK, OVERLAP) : 1;
+    int total_units = steps + windows;
+
     int ok = 1;
     if (sa3->dit_gpu)
         ok = sa3_dit_gpu_set_context(sa3->dit_gpu, context, CONTEXT_TOKENS,
@@ -326,7 +342,7 @@ int sa3_generate(struct sa3 *sa3, const sa3_request *request,
             for (size_t index = 0; index < latent_count; index++)
                 x[index] = (1.0f - next) * x[index] + next * injected[index];
         }
-        if (progress) progress(step + 1, steps, opaque);
+        if (progress) progress(step + 1, total_units, opaque);
     }
     free(sigmas);
     free(velocity);
@@ -346,10 +362,14 @@ int sa3_generate(struct sa3 *sa3, const sa3_request *request,
         fail(error, error_size, "out of memory decoding");
         return 0;
     }
+    struct { sa3_progress fn; void *opaque; int offset; int total; } relay = {
+        progress, opaque, steps, total_units
+    };
     int kernel = CHUNK + 2 * OVERLAP;
     if (frames > kernel)
         ok = sa3_decoder_run_chunked(sa3->decoder, x, frames, CHUNK, OVERLAP,
-                                     patches, error, error_size);
+                                     patches, decode_relay, &relay,
+                                     error, error_size);
     else if (frames % 2 == 0)
         ok = sa3_decoder_run(sa3->decoder, x, frames, patches, error,
                              error_size);
@@ -357,7 +377,7 @@ int sa3_generate(struct sa3 *sa3, const sa3_request *request,
         /* An odd count below the usual window still decodes if every window
          * stays even, which a smaller kernel guarantees. */
         ok = sa3_decoder_run_chunked(sa3->decoder, x, frames, 2, 2, patches,
-                                     error, error_size);
+                                     decode_relay, &relay, error, error_size);
     free(x);
     if (!ok) {
         free(patches);

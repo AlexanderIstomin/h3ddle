@@ -36,9 +36,17 @@ int sa3_decoder_run(sa3_decoder *decoder, const float *latents, int frames,
  * model call sees real latents rather than zero padding. `chunk + 2 * overlap`
  * must be even, and falls back to sa3_decoder_run when the input fits in one
  * window. */
+/// Fires as each window lands so a caller can show progress; may be NULL.
+typedef void (*sa3_decoder_progress)(int completed, int total, void *opaque);
+
 int sa3_decoder_run_chunked(sa3_decoder *decoder, const float *latents,
                             int frames, int chunk, int overlap, float *patches,
+                            sa3_decoder_progress progress, void *opaque,
                             char *error, size_t error_size);
+
+/// How many windows a chunked decode of `frames` will run, so a caller can
+/// size a progress bar before starting.
+int sa3_decoder_window_count(int frames, int chunk, int overlap);
 
 /* Unpacks [512, patches] into interleaved-free stereo [2, patches * 256]. */
 void sa3_decoder_unpatch(const float *patches, int patch_count, float *audio);

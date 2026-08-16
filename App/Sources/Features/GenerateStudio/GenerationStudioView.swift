@@ -612,8 +612,7 @@ struct GenerationStudioView: View {
             get: { model.studioSettings.duration },
             set: { model.studioSettings.duration = $0 }
           ),
-          in: 1...maximumDuration,
-          step: 1
+          in: 1...maximumDuration
         )
         .tint(H3Color.accent)
       }
