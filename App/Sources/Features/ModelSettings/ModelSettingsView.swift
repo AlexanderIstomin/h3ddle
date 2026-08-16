@@ -382,7 +382,14 @@ private struct ModelChoiceRow: View {
       if let remove {
         Button(action: remove) {
           Image(systemName: choice.isLocalFolder ? "xmark.circle" : "trash")
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(H3Color.textSecondary)
+            .frame(width: 28, height: 28)
+            .overlay {
+              RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(H3Color.line, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(
@@ -405,7 +412,14 @@ private struct ModelChoiceRow: View {
         if status.state == .cancelled || status.progress > 0, let discard {
           Button(action: discard) {
             Image(systemName: "trash")
+              .font(.system(size: 12, weight: .medium))
               .foregroundStyle(H3Color.textSecondary)
+              .frame(width: 28, height: 28)
+              .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                  .stroke(H3Color.line, lineWidth: 1)
+              }
+              .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
           .help("Discard the paused download and free its partial files")
