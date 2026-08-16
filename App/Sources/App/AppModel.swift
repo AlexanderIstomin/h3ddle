@@ -985,7 +985,6 @@ final class AppModel {
   }
 
   func refreshManagedModelStatus() {
-    guard !anyManagedDownloadIsActive else { return }
     statusRefreshTask?.cancel()
     let manifests = managedManifests
     let downloader = modelDownloader
@@ -995,6 +994,9 @@ final class AppModel {
     statusRefreshTask = Task { [weak self] in
       for manifest in manifests {
         guard let self else { return }
+        // A package being fetched owns its own status; re-reading the disk
+        // underneath it would overwrite live progress with a stale answer.
+        if managedStatuses[manifest.id]?.downloadIsActive == true { continue }
         pendingDownloadBytesByID[manifest.id] =
           await downloader.pendingByteCount(for: manifest)
         if let installedURL = await downloader.installedPackageURL(for: manifest) {
@@ -1093,6 +1095,17 @@ final class AppModel {
 
   var installedModelChoices: [ModelChoice] {
     modelChoices.filter(\.isInstalled)
+  }
+
+  /// Installed models that can produce this kind of output. H3 makes video,
+  /// stills and their soundtrack from one package, so all three ask for a
+  /// video model; sound effects come from a different one entirely.
+  func installedModelChoices(for kind: GenerationKind) -> [ModelChoice] {
+    let capability: ModelCapability =
+      switch kind {
+      case .video, .image, .audio: .video
+      }
+    return modelChoices.filter { $0.isInstalled && $0.capability == capability }
   }
 
   var selectedGenerationProfile: ModelGenerationProfile {

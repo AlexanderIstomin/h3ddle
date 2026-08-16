@@ -66,9 +66,12 @@ struct GenerationStudioView: View {
     case .compose:
       ZStack(alignment: .topLeading) {
         HStack(spacing: 0) {
-          promptPane
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-          Divider().overlay(H3Color.line.opacity(0.75))
+          // Nothing to describe until something can generate it.
+          if hasUsableModel {
+            promptPane
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider().overlay(H3Color.line.opacity(0.75))
+          }
           settingsPane
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -83,7 +86,7 @@ struct GenerationStudioView: View {
             .accessibilityIdentifier("generation-model-dismiss")
 
           ModelDropdownMenu(
-            choices: model.installedModelChoices,
+            choices: model.installedModelChoices(for: kind),
             selectedID: model.selectedModelID
           ) { choice in
             model.selectModel(choice.id)
@@ -137,6 +140,39 @@ struct GenerationStudioView: View {
     .padding(.horizontal, 18)
     .frame(height: 58)
     .background(H3Color.chrome)
+  }
+
+  /// Whether anything installed can produce this kind of output. Without
+  /// one there is nothing to describe and no length to choose, so the
+  /// controls would be asking for settings that cannot be used.
+  private var hasUsableModel: Bool {
+    !model.installedModelChoices(for: kind).isEmpty
+  }
+
+  private var noModelSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("No models installed")
+        .font(.system(size: 13, weight: .semibold))
+      Text("Generating \(kindNoun) needs a model on this Mac. "
+        + "Get one from the model library.")
+        .font(.system(size: 11))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Button("Open Models") {
+        model.showsModelSettings = true
+      }
+      .buttonStyle(H3PrimaryButtonStyle())
+      .accessibilityIdentifier("open-models-from-studio")
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var kindNoun: String {
+    switch kind {
+    case .video: "video"
+    case .image: "images"
+    case .audio: "audio"
+    }
   }
 
   private var promptPane: some View {
@@ -444,12 +480,13 @@ struct GenerationStudioView: View {
             }
           }
 
-          if kind != .image {
-            durationSection
-          }
-
-          if !model.installedModelChoices.isEmpty {
+          if hasUsableModel {
+            if kind != .image {
+              durationSection
+            }
             modelSection
+          } else {
+            noModelSection
           }
 
           if usesNativeSettings {
@@ -584,7 +621,7 @@ struct GenerationStudioView: View {
         .tracking(1.1)
         .foregroundStyle(H3Color.textSecondary)
       ModelDropdown(
-        choices: model.installedModelChoices,
+        choices: model.installedModelChoices(for: kind),
         selectedID: model.selectedModelID,
         isOpen: $modelMenuOpen,
         onFrameChange: { modelPickerFrame = $0 }
