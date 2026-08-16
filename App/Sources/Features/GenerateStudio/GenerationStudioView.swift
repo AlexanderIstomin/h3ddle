@@ -216,7 +216,7 @@ struct GenerationStudioView: View {
         }
       }
 
-      if kind != .image {
+      if kind != .image, !model.audioUsesSoundEffects {
         audioDesignSection
       }
 
@@ -518,7 +518,7 @@ struct GenerationStudioView: View {
 
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
-          if usesNativeSettings {
+          if usesNativeSettings, !model.audioUsesSoundEffects {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
@@ -1072,7 +1072,8 @@ struct GenerationStudioView: View {
 
   private var usesAlignedH3Duration: Bool {
     (kind == .video && model.nativeVideoGenerationIsReady)
-      || (kind == .audio && model.nativeAudioGenerationIsReady)
+      || (kind == .audio && model.nativeAudioGenerationIsReady
+        && !model.audioUsesSoundEffects)
   }
 
   private var requestedDuration: Double {
