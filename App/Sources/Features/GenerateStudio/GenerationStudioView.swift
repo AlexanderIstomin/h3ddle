@@ -612,7 +612,7 @@ struct GenerationStudioView: View {
             get: { model.studioSettings.duration },
             set: { model.studioSettings.duration = $0 }
           ),
-          in: 1...15,
+          in: 1...maximumDuration,
           step: 1
         )
         .tint(H3Color.accent)
@@ -1112,6 +1112,14 @@ struct GenerationStudioView: View {
 
   private var usesNativeSettings: Bool {
     model.usesNativeEngine(for: kind)
+  }
+
+  /// Fifteen seconds is H3's ceiling, where every extra second costs a
+  /// transformer pass over more frames. Stable Audio was trained to two
+  /// minutes and holds about twice realtime throughout, so the same limit
+  /// would be borrowing a constraint it does not have.
+  private var maximumDuration: Double {
+    model.audioMode == .voice ? 15 : 120
   }
 
   private var usesAlignedH3Duration: Bool {
