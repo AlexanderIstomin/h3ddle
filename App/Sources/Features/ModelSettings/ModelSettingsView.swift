@@ -160,6 +160,12 @@ struct ModelSettingsView: View {
     .accessibilityIdentifier("choose-model-folder-\(capability.rawValue)")
   }
 
+  /// Names whichever package in the same category is already downloading.
+  private func blockingPackageName(for choice: ModelChoice) -> String? {
+    guard case .managed(let manifest) = choice.source else { return nil }
+    return model.packageBlockingDownload(of: manifest)?.displayName
+  }
+
   private func managedStatus(for choice: ModelChoice) -> ManagedPackageStatus? {
     if case .managed(let manifest) = choice.source {
       return model.status(for: manifest)
@@ -176,6 +182,9 @@ private struct ModelChoiceRow: View {
   var choice: ModelChoice
   var isSelected: Bool
   var status: ManagedPackageStatus?
+  /// Name of the package already downloading in this category, which this
+  /// one has to wait for.
+  var blockedBy: String?
   /// This Mac's unified memory, compared against what the package asks for.
   var installedMemoryBytes: Int64
   var select: () -> Void
@@ -230,7 +239,17 @@ private struct ModelChoiceRow: View {
           .padding(.bottom, 10)
       }
 
-      if let status, status.downloadIsActive || (status.progress > 0 && status.state != .installed)
+      if let blockedBy {
+        Text("Waiting on \(blockedBy): they share weights, and fetching "
+          + "both at once would download the shared files twice.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+          .padding(.bottom, 10)
+      } else if let status,
+        status.downloadIsActive || (status.progress > 0 && status.state != .installed)
       {
         VStack(spacing: 4) {
           ProgressView(value: status.progress)
@@ -353,6 +372,7 @@ private struct ModelChoiceRow: View {
         }
         Button(installTitle, action: install)
           .buttonStyle(H3PrimaryButtonStyle())
+          .disabled(blockedBy != nil)
           .accessibilityIdentifier("download-managed-model")
       }
     }

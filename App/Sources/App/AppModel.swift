@@ -177,7 +177,14 @@ final class AppModel {
   private var activeGenerationID: UUID?
   private var generationStartedAt: ContinuousClock.Instant?
   private var modelValidationTask: Task<Void, Never>?
-  private var modelDownloadTask: Task<Void, Never>?
+  /// Re-reads what is installed and what is part-downloaded. Distinct from
+  /// the download tasks, which it must not cancel.
+  private var statusRefreshTask: Task<Void, Never>?
+  /// One install per category. Video packages share most of their weights
+  /// and can only hardlink from one that has finished, so two at once
+  /// would fetch the shared files twice; a video and an audio package
+  /// share nothing and are free to run together.
+  private var downloadTasks: [ModelCapability: Task<Void, Never>] = [:]
   private var phaseTimeline = GenerationPhaseTimeline()
   private var activeGenerationSettings = ""
   private var pendingStatistics: GenerationStatistics?
@@ -890,13 +897,14 @@ final class AppModel {
   }
 
   func downloadManagedModel(_ manifest: ModelPackageManifest) {
-    guard !anyManagedDownloadIsActive else { return }
-    modelDownloadTask?.cancel()
+    guard downloadIsPermitted(for: manifest) else { return }
+    let capability = manifest.capability
+    downloadTasks[capability]?.cancel()
     managedStatuses[manifest.id, default: ManagedPackageStatus()].state = .downloading
     managedStatuses[manifest.id]?.message = "Preparing the package…"
 
     let downloader = modelDownloader
-    modelDownloadTask = Task { [weak self] in
+    downloadTasks[capability] = Task { [weak self] in
       guard let self else { return }
       do {
         let installedURL = try await downloader.download(manifest) { [weak self] progress in
@@ -921,12 +929,28 @@ final class AppModel {
         managedStatuses[manifest.id]?.state = .failed
         managedStatuses[manifest.id]?.message = error.localizedDescription
       }
+      downloadTasks[capability] = nil
     }
   }
 
+  /// The package already downloading in this category, if any.
+  func packageBlockingDownload(
+    of manifest: ModelPackageManifest
+  ) -> ModelPackageManifest? {
+    managedManifests.first {
+      $0.id != manifest.id
+        && $0.capability == manifest.capability
+        && managedStatuses[$0.id]?.downloadIsActive == true
+    }
+  }
+
+  func downloadIsPermitted(for manifest: ModelPackageManifest) -> Bool {
+    packageBlockingDownload(of: manifest) == nil
+  }
+
   func cancelManagedModelDownload() {
-    modelDownloadTask?.cancel()
-    modelDownloadTask = nil
+    for task in downloadTasks.values { task.cancel() }
+    downloadTasks.removeAll()
     for id in managedStatuses.keys where managedStatuses[id]?.downloadIsActive == true {
       managedStatuses[id]?.state = .cancelled
       managedStatuses[id]?.message = "Pausing… downloaded data will be kept."
@@ -962,13 +986,13 @@ final class AppModel {
 
   func refreshManagedModelStatus() {
     guard !anyManagedDownloadIsActive else { return }
-    modelDownloadTask?.cancel()
+    statusRefreshTask?.cancel()
     let manifests = managedManifests
     let downloader = modelDownloader
     for manifest in manifests where managedStatuses[manifest.id] == nil {
       managedStatuses[manifest.id] = ManagedPackageStatus()
     }
-    modelDownloadTask = Task { [weak self] in
+    statusRefreshTask = Task { [weak self] in
       for manifest in manifests {
         guard let self else { return }
         pendingDownloadBytesByID[manifest.id] =
