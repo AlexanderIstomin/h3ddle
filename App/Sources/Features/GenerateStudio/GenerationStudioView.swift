@@ -596,11 +596,16 @@ struct GenerationStudioView: View {
             generationControls
           }
 
-          if usesNativeSettings, model.audioMode == .music || model.audioMode == .soundEffects {
+          // Both are keyed on the audio mode, which every tab shares — so
+          // without the kind test they follow the audio tab's setting onto
+          // video and stills, where neither model is being run.
+          if usesNativeSettings, kind == .audio,
+            model.audioMode == .music || model.audioMode == .soundEffects
+          {
             soundEffectControls
           }
 
-          if usesNativeSettings, model.audioMode == .speech {
+          if usesNativeSettings, kind == .audio, model.audioMode == .speech {
             speechControls
           }
 
@@ -1252,12 +1257,17 @@ struct GenerationStudioView: View {
   /// transformer pass over more frames. Stable Audio was trained to two
   /// minutes and holds about twice realtime throughout, so the same limit
   /// would be borrowing a constraint it does not have.
+  ///
+  /// The audio mode only decides this on the audio tab. It is one setting
+  /// shared by every tab, so consulting it elsewhere hands video whichever
+  /// ceiling the audio tab was last left on.
   private var maximumDuration: Double {
+    guard kind == .audio else { return 15 }
     switch model.audioMode {
     // A ceiling rather than a length: speech stops when the line is spoken,
     // so this only decides how long a runaway is allowed to run.
-    case .speech: 60
-    case .music, .soundEffects: 120
+    case .speech: return 60
+    case .music, .soundEffects: return 120
     }
   }
 
