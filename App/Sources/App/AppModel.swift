@@ -1094,6 +1094,13 @@ final class AppModel {
   /// cannot be asked: an H3 tree and a sound-effect package share no file
   /// that would distinguish them before either is loaded.
   func addLocalModelFolder(_ url: URL, capability: ModelCapability = .video) {
+    // Filing a folder under the wrong heading would leave it looking
+    // installed until a generation failed, so say so at the moment the
+    // mistake is made.
+    guard ModelFolderInspection.matches(capability, at: url) else {
+      errorMessage = wrongFolderMessage(for: capability, at: url)
+      return
+    }
     guard
       let bookmark = try? url.bookmarkData(
         options: .withSecurityScope,
@@ -1112,6 +1119,28 @@ final class AppModel {
     refreshModelChoices()
     if let added = modelChoices.last(where: { $0.isLocalFolder && $0.directory == url }) {
       selectModel(added.id)
+    }
+  }
+
+  /// Names what was expected, and what the folder looks like instead when
+  /// that is knowable, so the fix is obvious without opening it.
+  private func wrongFolderMessage(
+    for capability: ModelCapability,
+    at url: URL
+  ) -> String {
+    let name = url.lastPathComponent
+    let other: ModelCapability = capability == .audio ? .video : .audio
+    if ModelFolderInspection.matches(other, at: url) {
+      return "\(name) looks like a \(other.sectionTitle.lowercased()) model. "
+        + "Add it under \(other.sectionTitle) instead."
+    }
+    switch capability {
+    case .audio:
+      return "\(name) is missing the files a sound-effect model needs "
+        + "(\(ModelFolderInspection.soundEffectNames.joined(separator: ", ")))."
+    case .video:
+      return "\(name) does not hold an H3 model: expected either "
+        + "FL2VA/transformer/config.json or a diffusion_models folder."
     }
   }
 

@@ -465,7 +465,7 @@ public enum ModelCatalog {
     files: [
       ModelPackageFile(
         role: .transformer,
-        path: "sfx/dit.safetensors",
+        path: "dit.safetensors",
         byteCount: 919_105_120,
         sha256: "3a7e7094db258990a8eccc3b1e6689b1368b557c4fb7bf14e61060d13efb8dbc",
         sourceRepository: "PulpCut/Stable-Audio-3-Small-SFX-safetensors",
@@ -474,7 +474,7 @@ public enum ModelCatalog {
       ),
       ModelPackageFile(
         role: .textEncoder,
-        path: "sfx/text_encoder.safetensors",
+        path: "text_encoder.safetensors",
         byteCount: 563_175_776,
         sha256: "3f97a58e7674a4ff0063629c463fa7af343b1e792f28b0f302fc54ce1fc8cce4",
         sourceRepository: "PulpCut/Stable-Audio-3-Small-SFX-safetensors",
@@ -483,7 +483,7 @@ public enum ModelCatalog {
       ),
       ModelPackageFile(
         role: .audioVAE,
-        path: "sfx/decoder.safetensors",
+        path: "decoder.safetensors",
         byteCount: 218_069_724,
         sha256: "bbe71a56368240fa89e82c13c402c5097c9f2165390fb64fec756ada37e57249",
         sourceRepository: "PulpCut/Stable-Audio-3-Small-SFX-safetensors",
@@ -492,7 +492,7 @@ public enum ModelCatalog {
       ),
       ModelPackageFile(
         role: .runtimeMetadata,
-        path: "sfx/tokenizer.json",
+        path: "tokenizer.json",
         byteCount: 34_362_429,
         sha256: "7794135caa3ea73918949c902a781cc61dab674a4b59c17d85931c77c1114cbd",
         sourceRepository: "PulpCut/Stable-Audio-3-Small-SFX-safetensors",
