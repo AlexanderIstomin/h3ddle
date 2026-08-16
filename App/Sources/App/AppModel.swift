@@ -436,8 +436,14 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     phaseTimeline = GenerationPhaseTimeline()
+    let soundEffects = kind == .audio && audioUsesSoundEffects
+    let runningModelName =
+      soundEffects
+      ? (selectedAudioModelChoice?.displayName ?? "a sound-effect model")
+      : (selectedModelChoice?.displayName ?? "a local model folder")
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
+      soundEffects: soundEffects,
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -446,8 +452,9 @@ final class AppModel {
       blockCache: blockCache,
       fastStill: fastStill,
       previewDenoise: previewDenoise
-    ) + " · model \(selectedModelChoice?.displayName ?? "folder")"
-      + (selectedGenerationProfile.usesBetaSchedule ? " · beta-schedule" : "")
+    ) + " · model \(runningModelName)"
+      + (soundEffects || !selectedGenerationProfile.usesBetaSchedule
+        ? "" : " · beta-schedule")
       + (seed.map { " · seed \($0)" } ?? "")
 
 
@@ -458,7 +465,7 @@ final class AppModel {
       canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
       denoisingSteps: denoisingSteps ?? quality.denoisingSteps,
       clipSeconds: duration,
-      modelName: selectedModelChoice?.displayName ?? "a local model folder",
+      modelName: runningModelName,
       blockCache: blockCache,
       deviceName: modelReport?.device.name,
       deviceMemoryBytes: modelReport?.device.physicalMemory
@@ -482,7 +489,6 @@ final class AppModel {
       }
     }
 
-    let soundEffects = kind == .audio && audioUsesSoundEffects
     let request = GenerationRequest(
       kind: kind,
       usesSoundEffectModel: soundEffects,
@@ -1765,6 +1771,7 @@ final class AppModel {
   /// different runs are directly comparable.
   private static func settingsDescription(
     kind: GenerationKind,
+    soundEffects: Bool = false,
     duration: TimeInterval,
     quality: EngineGenerationQuality,
     denoisingSteps: Int?,
@@ -1774,6 +1781,11 @@ final class AppModel {
     fastStill: Bool,
     previewDenoise: Bool
   ) -> String {
+    if soundEffects {
+      // Eight fixed passes, no canvas, no reuse ladders: reciting H3's
+      // settings here would describe a model that was not run.
+      return String(format: "sound effects · %.0fs", duration)
+    }
     guard kind == .video || kind == .image || kind == .audio else {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)
     }
