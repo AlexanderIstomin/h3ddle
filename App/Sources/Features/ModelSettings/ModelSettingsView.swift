@@ -250,7 +250,7 @@ private struct ModelChoiceRow: View {
     .contentShape(Rectangle())
     .onTapGesture(perform: selectIfPossible)
     .background(
-      isSelected ? H3Color.accent.opacity(0.12) : H3Color.canvas,
+      H3Color.canvas,
       in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
     )
     .overlay {
@@ -265,12 +265,15 @@ private struct ModelChoiceRow: View {
   @ViewBuilder
   private var trailingBadge: some View {
     if choice.isInstalled {
-      Text("Installed")
+      Text(isSelected ? "In use" : "Installed")
         .font(.system(size: 10, weight: .semibold))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(H3Color.accent.opacity(0.18), in: Capsule())
-        .foregroundStyle(H3Color.accent)
+        .background(
+          isSelected ? H3Color.accent.opacity(0.18) : H3Color.controlFill,
+          in: Capsule()
+        )
+        .foregroundStyle(isSelected ? H3Color.accent : H3Color.textSecondary)
     } else if choice.downloadBytes > 0 {
       Text(byteText(choice.downloadBytes))
         .font(.system(size: 11, weight: .medium))
