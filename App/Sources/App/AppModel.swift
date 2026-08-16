@@ -65,6 +65,10 @@ struct ModelChoice: Identifiable, Equatable {
   /// What the package occupies on disk once installed, which is the whole
   /// manifest rather than the part still to fetch.
   var installedBytes: Int64
+  /// The agreement this package arrives under. Packages no longer share
+  /// one, so it travels with the card that offers to install it.
+  var licenseName: String?
+  var licenseURL: URL?
 
   var isInstalled: Bool { directory != nil }
 
@@ -1121,7 +1125,9 @@ final class AppModel {
         capability: manifest.capability,
         downloadBytes: pendingDownloadBytes(for: manifest),
         requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
-        installedBytes: manifest.totalByteCount
+        installedBytes: manifest.totalByteCount,
+        licenseName: manifest.licenseName,
+        licenseURL: manifest.licenseURL
       )
     }
     for bookmark in localModelBookmarks {
@@ -1151,7 +1157,9 @@ final class AppModel {
           capability: .video,
           downloadBytes: 0,
           requiredMemoryBytes: 0,
-          installedBytes: 0
+          installedBytes: 0,
+          licenseName: nil,
+          licenseURL: nil
         )
       )
     }

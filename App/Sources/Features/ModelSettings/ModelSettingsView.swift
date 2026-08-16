@@ -1,5 +1,4 @@
 import H3ddleDesignSystem
-import H3ddleEngineProtocol
 import H3ddleModels
 import SwiftUI
 import UniformTypeIdentifiers
@@ -9,23 +8,14 @@ struct ModelSettingsView: View {
 
   @State private var isChoosingModel = false
   @State private var manifestPendingDownload: ModelPackageManifest?
-  @State private var detailsExpanded = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
       Divider().overlay(H3Color.line)
       ScrollView {
-        VStack(alignment: .leading, spacing: 0) {
-          modelList
-          Divider().overlay(H3Color.line)
-          status
-          Divider().overlay(H3Color.line)
-          details
-        }
+        modelList
       }
-      Divider().overlay(H3Color.line)
-      footer
     }
     .frame(width: 610, height: 680)
     .background(H3Color.surface)
@@ -168,117 +158,11 @@ struct ModelSettingsView: View {
     return nil
   }
 
-  private var status: some View {
-    HStack(alignment: .top, spacing: H3Spacing.medium) {
-      statusSymbol
-        .frame(width: 22, height: 22)
-      VStack(alignment: .leading, spacing: 5) {
-        Text(model.modelStatusTitle)
-          .font(.system(size: 13, weight: .semibold))
-        Text(model.modelValidationMessage)
-          .font(.system(size: 12))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      Spacer(minLength: 0)
-      if model.modelDirectory != nil {
-        Button("Check again") {
-          model.validateSelectedModel()
-        }
-        .buttonStyle(H3QuietButtonStyle())
-        .disabled(model.modelValidationState == .validating)
-      }
-    }
-    .padding(H3Spacing.large)
-    .animation(.easeOut(duration: 0.18), value: model.modelValidationState)
-  }
-
-  @ViewBuilder
-  private var statusSymbol: some View {
-    switch model.modelValidationState {
-    case .notSelected:
-      Image(systemName: "externaldrive")
-        .foregroundStyle(H3Color.textSecondary)
-    case .validating:
-      ProgressView()
-        .controlSize(.small)
-        .tint(H3Color.accent)
-    case .ready:
-      Image(systemName: "checkmark.circle.fill")
-        .foregroundStyle(H3Color.accent)
-        .symbolEffect(.bounce, value: model.modelValidationState)
-    case .failed:
-      Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(H3Color.danger)
-    }
-  }
-
-  private var details: some View {
-    DisclosureGroup(isExpanded: $detailsExpanded) {
-      VStack(spacing: 0) {
-        if let report = model.modelReport, let capabilities = model.engineCapabilities {
-          DetailRow(
-            label: "Engine", value: "\(capabilities.engineName) \(capabilities.engineVersion)")
-          DetailRow(label: "Device", value: report.device.name)
-          DetailRow(
-            label: "Model files",
-            value: ByteCountFormatter.string(
-              fromByteCount: Int64(report.totalBytes), countStyle: .file))
-          DetailRow(label: "Format", value: report.format.displayName)
-          DetailRow(
-            label: "Reference model",
-            value: report.hasReferenceTransformer ? "Available" : "Not installed"
-          )
-          DetailRow(
-            label: "Video output",
-            value: capabilities.supports(.videoGeneration) && report.supportsGeneration
-              ? "Available" : "Adapter required")
-          DetailRow(
-            label: "Audio-only output",
-            value: capabilities.supports(.standaloneAudioGeneration)
-              ? "Available" : "Requires a separate provider"
-          )
-          if let directory = model.modelDirectory {
-            DetailRow(label: "Location", value: directory.path(percentEncoded: false))
-          }
-        } else {
-          Text("Select a ready model to inspect engine and device details.")
-            .font(.system(size: 12))
-            .foregroundStyle(H3Color.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 10)
-        }
-      }
-    } label: {
-      Text("Details")
-        .font(.system(size: 13, weight: .semibold))
-    }
-    .tint(H3Color.textSecondary)
-    .padding(H3Spacing.large)
-  }
-
-  private var footer: some View {
-    HStack {
-      if let manifest = selectedManifest {
-        Link("Model license", destination: manifest.licenseURL)
-          .font(.system(size: 11, weight: .medium))
-      }
-      Spacer()
-    }
-    .padding(.horizontal, H3Spacing.large)
-    .frame(height: 50)
-  }
-
-  private var selectedManifest: ModelPackageManifest? {
-    if case .managed(let manifest) = model.selectedModelChoice?.source {
-      return manifest
-    }
-    return nil
-  }
 }
 
-/// One selectable model card: name and subtitle on the left, install state or
-/// selection tick on the right, mirroring the studio dropdown rows.
+/// One model in the library: what it is, what it costs, and the licence it
+/// arrives under, which differs per package and so belongs on the card
+/// rather than in a footer that could only ever name one of them.
 private struct ModelChoiceRow: View {
   var choice: ModelChoice
   var isSelected: Bool
@@ -326,7 +210,16 @@ private struct ModelChoiceRow: View {
         actions
       }
       .padding(.horizontal, 12)
-      .padding(.vertical, 10)
+      .padding(.top, 10)
+      .padding(.bottom, choice.licenseURL == nil ? 10 : 0)
+
+      if let licenseURL = choice.licenseURL {
+        Link(choice.licenseName ?? "Model license", destination: licenseURL)
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .padding(.horizontal, 12)
+          .padding(.bottom, 10)
+      }
 
       if let status, status.downloadIsActive || (status.progress > 0 && status.state != .installed)
       {
@@ -458,36 +351,5 @@ private struct ModelChoiceRow: View {
       return "Resume"
     }
     return choice.generationProfile == .turbo ? "Install" : "Download"
-  }
-}
-
-private extension EngineModelFormat {
-  var displayName: String {
-    switch self {
-    case .unknown: "Unknown"
-    case .releasedDirectory: "Released directory"
-    case .optimizedINT8SingleFile: "Optimized INT8"
-    }
-  }
-}
-
-private struct DetailRow: View {
-  var label: String
-  var value: String
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline) {
-      Text(label)
-        .foregroundStyle(H3Color.textSecondary)
-      Spacer()
-      Text(value)
-        .multilineTextAlignment(.trailing)
-        .textSelection(.enabled)
-    }
-    .font(.system(size: 12, weight: .medium))
-    .frame(minHeight: 35)
-    .overlay(alignment: .bottom) {
-      Divider().overlay(H3Color.line.opacity(0.65))
-    }
   }
 }
