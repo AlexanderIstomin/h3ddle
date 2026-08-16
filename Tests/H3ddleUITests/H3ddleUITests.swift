@@ -65,7 +65,9 @@ final class H3ddleUITests: XCTestCase {
 
   @MainActor
   func testGenerationStudioHidesComposerDuringProgress() throws {
-    throw XCTSkip("needs the append menu, see testAppendMenusOfferImport")
+    throw XCTSkip(
+      "the append button is merged into its lane's accessibility element, so it cannot be activated on its own and the menu never opens; the menu's own identifiers are correct, and adding .accessibilityElement(children: .contain) to the lane does not separate them"
+    )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
@@ -78,8 +80,8 @@ final class H3ddleUITests: XCTestCase {
     // the lane carries the identifier rather than the button inside it.
     XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
     app.buttons["Append audio"].click()
-    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
-    app.buttons["Generate"].click()
+    XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
+    app.buttons["append-generate-audio"].click()
 
     let title = app.staticTexts["generation-studio"]
     let prompt = app.textViews["generation-prompt"]
@@ -108,7 +110,9 @@ final class H3ddleUITests: XCTestCase {
 
   @MainActor
   func testInsertPlacesResultAfterTheLastClip() throws {
-    throw XCTSkip("needs the append menu, see testAppendMenusOfferImport")
+    throw XCTSkip(
+      "the append button is merged into its lane's accessibility element, so it cannot be activated on its own and the menu never opens; the menu's own identifiers are correct, and adding .accessibilityElement(children: .contain) to the lane does not separate them"
+    )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleFastFakeGeneration"]
     app.launch()
@@ -121,8 +125,8 @@ final class H3ddleUITests: XCTestCase {
     // the lane carries the identifier rather than the button inside it.
     XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
     app.buttons["Append audio"].click()
-    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
-    app.buttons["Generate"].click()
+    XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
+    app.buttons["append-generate-audio"].click()
 
     let prompt = app.textViews["generation-prompt"]
     XCTAssertTrue(prompt.waitForExistence(timeout: 8))
@@ -138,7 +142,9 @@ final class H3ddleUITests: XCTestCase {
 
   @MainActor
   func testAppendMenusOfferImport() throws {
-    throw XCTSkip("the append menu's items are not published to the accessibility tree; the lane's drop identifier overrides the button's, so the menu it opens cannot be reached by name")
+    throw XCTSkip(
+      "the append button is merged into its lane's accessibility element, so it cannot be activated on its own and the menu never opens; the menu's own identifiers are correct, and adding .accessibilityElement(children: .contain) to the lane does not separate them"
+    )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
@@ -180,7 +186,9 @@ final class H3ddleUITests: XCTestCase {
   /// different model rather than keeping H3's controls.
   @MainActor
   func testAudioStudioOffersSoundEffects() throws {
-    throw XCTSkip("reaching the studio needs the append menu, which is not reachable yet; the sound-effect path itself is verified against the engine service")
+    throw XCTSkip(
+      "the append button is merged into its lane's accessibility element, so it cannot be activated on its own and the menu never opens; the menu's own identifiers are correct, and adding .accessibilityElement(children: .contain) to the lane does not separate them"
+    )
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
@@ -193,8 +201,8 @@ final class H3ddleUITests: XCTestCase {
     // the lane carries the identifier rather than the button inside it.
     XCTAssertTrue(app.buttons["Append audio"].waitForExistence(timeout: 20))
     app.buttons["Append audio"].click()
-    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
-    app.buttons["Generate"].click()
+    XCTAssertTrue(app.buttons["append-generate-audio"].waitForExistence(timeout: 5))
+    app.buttons["append-generate-audio"].click()
 
     XCTAssertTrue(app.staticTexts["generation-studio"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["segment-voice"].exists)
