@@ -158,7 +158,15 @@ struct ModelSettingsView: View {
                   model.discardManagedModelDownload(manifest)
                 }
               },
-              remove: choice.isLocalFolder ? { model.removeLocalModel(choice.id) } : nil
+              remove: {
+                // Managed packages delete their weights behind a
+                // confirmation; a hand-added folder is only unlisted.
+                if case .managed(let manifest) = choice.source {
+                  manifestPendingRemoval = manifest
+                } else {
+                  model.removeLocalModel(choice.id)
+                }
+              }
             )
           }
           addFolderButton(for: capability)
