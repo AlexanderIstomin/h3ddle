@@ -294,12 +294,6 @@ private struct ModelChoiceRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .top, spacing: 10) {
-        // The glyph carries selection so the whole card can be the target.
-        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-          .font(.system(size: 14))
-          .foregroundStyle(isSelected ? H3Color.accent : H3Color.textSecondary)
-          .padding(.top, 1)
-
         VStack(alignment: .leading, spacing: 4) {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(choice.displayName)
@@ -392,17 +386,18 @@ private struct ModelChoiceRow: View {
     if choice.generationProfile == .turbo {
       result.append(Chip(text: "Turbo"))
     }
-    if choice.requiredMemoryBytes > 0 {
-      // Declared requirements are guidance rather than a hard floor, so a
-      // machine below one is warned and still allowed to proceed.
-      let short = installedMemoryBytes > 0 && installedMemoryBytes < choice.requiredMemoryBytes
+    // Disk is the real cost of a package: the weights stream from the file
+    // rather than being held in RAM, so what it occupies is the drive.
+    if choice.isInstalled, choice.installedBytes > 0 {
+      result.append(Chip(text: "\(byteText(choice.installedBytes)) on disk"))
+    }
+    // Memory only earns a chip when this Mac is short of it; otherwise it
+    // is a number nobody has to act on.
+    if choice.requiredMemoryBytes > 0, installedMemoryBytes > 0,
+      installedMemoryBytes < choice.requiredMemoryBytes
+    {
       result.append(
-        Chip(
-          text: short
-            ? "Needs \(byteText(choice.requiredMemoryBytes)) memory"
-            : "\(byteText(choice.requiredMemoryBytes)) memory",
-          warning: short
-        )
+        Chip(text: "Needs \(byteText(choice.requiredMemoryBytes)) memory", warning: true)
       )
     }
     if choice.isLocalFolder {

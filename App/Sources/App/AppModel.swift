@@ -62,6 +62,9 @@ struct ModelChoice: Identifiable, Equatable {
   var downloadBytes: Int64
   /// Unified memory the package asks for; zero when nothing is declared.
   var requiredMemoryBytes: Int64
+  /// What the package occupies on disk once installed, which is the whole
+  /// manifest rather than the part still to fetch.
+  var installedBytes: Int64
 
   var isInstalled: Bool { directory != nil }
 
@@ -103,6 +106,11 @@ final class AppModel {
     ModelCatalog.stableAudio3SmallSFX,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
+  /// What each package still has to fetch, which is less than it weighs
+  /// whenever another install already supplies its shared files. Answering
+  /// this touches the disk, so it is refreshed with the statuses rather
+  /// than asked for while drawing.
+  var pendingDownloadBytesByID: [String: Int64] = [:]
   var modelChoices: [ModelChoice] = []
   var selectedModelID: String? {
     didSet {
@@ -257,7 +265,7 @@ final class AppModel {
   /// of their weights, so a manifest's total overstates the cost whenever
   /// another package already supplies those files.
   func pendingDownloadBytes(for manifest: ModelPackageManifest) -> Int64 {
-    manifest.totalByteCount
+    pendingDownloadBytesByID[manifest.id] ?? manifest.totalByteCount
   }
 
   func generationBackendDescription(
@@ -949,6 +957,8 @@ final class AppModel {
     modelDownloadTask = Task { [weak self] in
       for manifest in manifests {
         guard let self else { return }
+        pendingDownloadBytesByID[manifest.id] =
+          await downloader.pendingByteCount(for: manifest)
         if let installedURL = await downloader.installedPackageURL(for: manifest) {
           managedStatuses[manifest.id] = ManagedPackageStatus(
             state: .installed,
@@ -1109,8 +1119,9 @@ final class AppModel {
         directory: managedStatuses[manifest.id]?.installedURL,
         generationProfile: manifest.generationProfile,
         capability: manifest.capability,
-        downloadBytes: manifest.totalByteCount,
-        requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes
+        downloadBytes: pendingDownloadBytes(for: manifest),
+        requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
+        installedBytes: manifest.totalByteCount
       )
     }
     for bookmark in localModelBookmarks {
@@ -1139,7 +1150,8 @@ final class AppModel {
           // this way, and its files are already on disk.
           capability: .video,
           downloadBytes: 0,
-          requiredMemoryBytes: 0
+          requiredMemoryBytes: 0,
+          installedBytes: 0
         )
       )
     }

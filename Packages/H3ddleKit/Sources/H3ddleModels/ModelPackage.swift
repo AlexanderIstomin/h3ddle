@@ -123,6 +123,11 @@ public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {
   public let revision: String
   public let licenseName: String
   public let licenseURL: URL
+  /// Unified memory the engine needs resident, which is far less than the
+  /// package weighs: weights are mapped from the file and paged in on
+  /// demand, so a 72 GiB transformer streams through about 1.5 GiB. What
+  /// has to fit is the working set — activations, the decoder, and the
+  /// hot slice of weights — not the download.
   public let minimumUnifiedMemoryBytes: Int64
   public let compatibility: ModelEngineCompatibility
   public let generationProfile: ModelGenerationProfile
@@ -275,7 +280,7 @@ public enum ModelCatalog {
       string:
         "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
     )!,
-    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     files: [
       ModelPackageFile(
@@ -304,7 +309,7 @@ public enum ModelCatalog {
       string:
         "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
     )!,
-    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     files: [
       ModelPackageFile(
@@ -339,7 +344,7 @@ public enum ModelCatalog {
       string:
         "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
     )!,
-    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     generationProfile: .turbo,
     files: [
@@ -397,7 +402,7 @@ public enum ModelCatalog {
       string:
         "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
     )!,
-    minimumUnifiedMemoryBytes: 32 * 1_024 * 1_024 * 1_024,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     generationProfile: .turbo,
     files: [
