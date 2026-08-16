@@ -10,6 +10,7 @@ struct ModelSettingsView: View {
   /// Which list the folder about to be chosen should join.
   @State private var capabilityBeingAdded: ModelCapability = .video
   @State private var manifestPendingDownload: ModelPackageManifest?
+  @State private var manifestPendingRemoval: ModelPackageManifest?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -29,6 +30,29 @@ struct ModelSettingsView: View {
     ) { result in
       if case .success(let urls) = result, let directory = urls.first {
         model.addLocalModelFolder(directory, capability: capabilityBeingAdded)
+      }
+    }
+    .confirmationDialog(
+      "Delete \(manifestPendingRemoval?.displayName ?? "model")?",
+      isPresented: Binding(
+        get: { manifestPendingRemoval != nil },
+        set: { if !$0 { manifestPendingRemoval = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      if let manifest = manifestPendingRemoval {
+        Button("Delete Files", role: .destructive) {
+          model.removeManagedModel(manifest)
+          manifestPendingRemoval = nil
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      if let manifest = manifestPendingRemoval {
+        Text(
+          "Removes \(ByteCountFormatter.string(fromByteCount: manifest.totalByteCount, countStyle: .file)) "
+            + "from this Mac. Weights shared with another installed package are kept."
+        )
       }
     }
     .confirmationDialog(
@@ -191,7 +215,7 @@ private struct ModelChoiceRow: View {
   var install: () -> Void
   var pause: () -> Void
   var discard: (() -> Void)?
-  var remove: (() -> Void)?
+  var remove: (() -> Void)?  // trash for managed, unlist for local
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -345,11 +369,16 @@ private struct ModelChoiceRow: View {
     if choice.isInstalled {
       if let remove {
         Button(action: remove) {
-          Image(systemName: "xmark.circle")
+          Image(systemName: choice.isLocalFolder ? "xmark.circle" : "trash")
             .foregroundStyle(H3Color.textSecondary)
         }
         .buttonStyle(.plain)
-        .help("Remove from the list (files stay on disk)")
+        .help(
+          choice.isLocalFolder
+            ? "Remove from the list (files stay on disk)"
+            : "Delete the downloaded weights from this Mac"
+        )
+        .accessibilityIdentifier("remove-model")
       }
     } else if let status {
       switch status.state {

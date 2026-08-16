@@ -995,6 +995,34 @@ final class AppModel {
     }
   }
 
+  /// Deletes an installed package's weights. Files shared with another
+  /// install are hardlinks, so this reclaims only what nothing else holds.
+  func removeManagedModel(_ manifest: ModelPackageManifest) {
+    let downloader = modelDownloader
+    Task { [weak self] in
+      do {
+        try await downloader.removeInstalledPackage(for: manifest)
+      } catch {
+        self?.errorMessage =
+          "Could not remove the model: \(error.localizedDescription)"
+        return
+      }
+      guard let self else { return }
+      // Anything pointed at the deleted tree has to let go of it.
+      if selectedModelID == manifest.id {
+        selectedModelID = nil
+        clearModelDirectory()
+      }
+      if selectedAudioModelID == manifest.id { selectedAudioModelID = nil }
+      managedStatuses[manifest.id] = ManagedPackageStatus(
+        state: .available,
+        message: availableMessage(for: manifest)
+      )
+      refreshModelChoices()
+      refreshManagedModelStatus()
+    }
+  }
+
   /// Discards a paused download and reclaims its partial data. Distinct from
   /// pausing, which keeps everything so resuming is free.
   func discardManagedModelDownload(_ manifest: ModelPackageManifest) {

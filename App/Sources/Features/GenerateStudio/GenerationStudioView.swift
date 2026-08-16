@@ -616,7 +616,9 @@ struct GenerationStudioView: View {
         )
         .tint(H3Color.accent)
       }
-      if kind == .audio, model.nativeAudioGenerationIsReady {
+      if kind == .audio, model.nativeAudioGenerationIsReady,
+        !model.audioUsesSoundEffects
+      {
         Text(
           "H3 has no audio-only model. It generates a \(AppModel.audioCanvasLabel) clip "
             + "and keeps the soundtrack, so audio costs about as much as video."
