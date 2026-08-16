@@ -101,10 +101,6 @@ qwen_tts *qwen_tts_load_metal(const char *talker_path,
                               const char *shader_path, int max_tokens,
                               char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
-    if (!shader_path) {
-        snprintf(error, error_size, "the Metal path needs a shader source");
-        return NULL;
-    }
     /* One token, because this copy is only ever asked for embeddings — see the
      * note on the struct. It saves the 224 KB a token costs across 28 layers,
      * which for a long utterance is most of a hundred megabytes. */

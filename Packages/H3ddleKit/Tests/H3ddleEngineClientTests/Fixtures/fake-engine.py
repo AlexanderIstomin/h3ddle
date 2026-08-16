@@ -5,6 +5,9 @@ import sys
 HOLD_GENERATE = "--hold-generate" in sys.argv
 IGNORE_CANCEL = "--ignore-cancel" in sys.argv
 SPAM_STDERR = "--spam-stderr" in sys.argv
+# Reports the generation block exactly as it arrived, so a test can assert
+# what crossed the protocol rather than what the caller meant to send.
+ECHO_GENERATE = "--echo-generate" in sys.argv
 active_generate = None
 
 CAPABILITIES = {
@@ -81,6 +84,11 @@ for raw in sys.stdin:
             emit(progress)
             continue
         generation = command.get("generation") or {}
+        if ECHO_GENERATE:
+            echo = base(command, "progress")
+            echo["phase"] = json.dumps(generation, sort_keys=True)
+            echo["fractionComplete"] = 0
+            emit(echo)
         completed = base(command, "completed")
         completed["outputURL"] = generation.get("outputURL", "file:///tmp/out.mp4")
         completed["outputDuration"] = 1

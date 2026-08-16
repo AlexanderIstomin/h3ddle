@@ -18,11 +18,27 @@ public enum GenerationKind: String, CaseIterable, Codable, Identifiable, Sendabl
   }
 }
 
+/// Which model an audio generation runs through. All three write a WAV, so
+/// nothing downstream differs; what differs is the package and what it can be
+/// asked for. H3 writes the joint soundtrack that accompanies its video,
+/// Stable Audio makes music and sound effects, and Qwen3-TTS speaks a written
+/// line in a voice cloned from a reference clip.
+public enum AudioGenerationEngine: String, Codable, Sendable {
+  case h3
+  case stableAudio
+  case speech
+
+  /// Whether this engine loads a package of its own rather than the H3 tree.
+  public var usesOwnPackage: Bool { self != .h3 }
+}
+
 public struct GenerationRequest: Hashable, Codable, Sendable {
   public var kind: GenerationKind
-  /// Audio only: render through the sound-effect model rather than H3's
-  /// joint soundtrack. Both produce a WAV, so nothing downstream differs.
-  public var usesSoundEffectModel = false
+  /// Audio only; ignored by the other kinds.
+  public var audioEngine: AudioGenerationEngine = .h3
+  /// Required when `audioEngine` is `.speech`, ignored otherwise: the line to
+  /// speak travels in `prompt`, and everything else about the voice here.
+  public var speech: EngineSpeechOptions?
   public var prompt: String
   public var duration: TimeInterval
   public var quality: EngineGenerationQuality
@@ -56,7 +72,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
 
   public init(
     kind: GenerationKind,
-    usesSoundEffectModel: Bool = false,
+    audioEngine: AudioGenerationEngine = .h3,
+    speech: EngineSpeechOptions? = nil,
     prompt: String,
     duration: TimeInterval,
     quality: EngineGenerationQuality = .preview,
@@ -75,7 +92,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     referenceImageURLs: [URL] = []
   ) {
     self.kind = kind
-    self.usesSoundEffectModel = usesSoundEffectModel
+    self.audioEngine = audioEngine
+    self.speech = speech
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     self.duration = max(0, duration)
     self.quality = quality

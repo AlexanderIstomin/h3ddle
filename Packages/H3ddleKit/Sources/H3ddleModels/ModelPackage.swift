@@ -114,11 +114,13 @@ public enum ModelCapability: String, Codable, Sendable, CaseIterable {
   }
 }
 
-/// What an audio package was trained to make. Both run the same engine
-/// path; only the transformer differs.
+/// What an audio package was trained to make. Sound effects and music are one
+/// Stable Audio transformer trained on different material and run down the
+/// same engine path; speech is a different model entirely.
 public enum ModelAudioRole: String, Codable, Sendable, CaseIterable {
   case soundEffects
   case music
+  case speech
 }
 
 public struct ModelPackageManifest: Codable, Equatable, Sendable, Identifiable {

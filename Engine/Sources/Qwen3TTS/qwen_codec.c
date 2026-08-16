@@ -462,7 +462,7 @@ static void free_metal(codec_gpu *metal) {
 int qwen_codec_use_metal(qwen_codec *codec, const char *shader_path,
                          char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
-    if (!codec || !shader_path) {
+    if (!codec) {
         snprintf(error, error_size, "invalid arguments");
         return 0;
     }

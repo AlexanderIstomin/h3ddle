@@ -21,6 +21,7 @@ enum AudioGenerationMode: Hashable {
   case voice
   case music
   case soundEffects
+  case speech
 
   /// Which package this mode generates from, or nil for H3's own audio.
   var audioRole: ModelAudioRole? {
@@ -28,6 +29,25 @@ enum AudioGenerationMode: Hashable {
     case .voice: nil
     case .music: .music
     case .soundEffects: .soundEffects
+    case .speech: .speech
+    }
+  }
+
+  /// Which engine writes the WAV.
+  var engine: AudioGenerationEngine {
+    switch self {
+    case .voice: .h3
+    case .music, .soundEffects: .stableAudio
+    case .speech: .speech
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .voice: "voice"
+    case .music: "music"
+    case .soundEffects: "sound effects"
+    case .speech: "speech"
     }
   }
 }
@@ -189,6 +209,11 @@ final class AppModel {
   /// omitted or become the guide's N/A marker; see H3StructuredPrompt.
   var studioSoundscape = ""
   var studioMusic = ""
+  /// The clip the speech model clones from. There is no default voice, so
+  /// without one the Speak button has nothing to speak in.
+  var studioVoiceReference: URL?
+  var studioSpeechLanguage = EngineSpeechLanguage.english
+  var studioSpeechTemperature = EngineSpeechOptions.defaultTemperature
 
   private let generationProvider: any GenerationProvider
   private let engineSession: EngineSession
@@ -462,16 +487,17 @@ final class AppModel {
     generationElapsed = 0
     generationPreviewImage = nil
     phaseTimeline = GenerationPhaseTimeline()
-    let soundEffects = kind == .audio && audioMode != .voice
+    let audioEngine = kind == .audio ? audioMode.engine : .h3
+    let ownPackage = audioEngine.usesOwnPackage
     let runningModelName =
-      soundEffects
-      ? (managedManifests.first { $0.audioRole == audioMode.audioRole }?.displayName
-        ?? "a Stable Audio model")
+      ownPackage
+      ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
+        .displayName ?? "an audio model")
       : (selectedModelChoice?.displayName ?? "a local model folder")
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
-      soundEffects: soundEffects,
-      label: audioMode == .music ? "music" : "sound effects",
+      ownPackage: ownPackage,
+      label: audioMode.label,
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -481,8 +507,12 @@ final class AppModel {
       fastStill: fastStill,
       previewDenoise: previewDenoise
     ) + " · model \(runningModelName)"
-      + (soundEffects || !selectedGenerationProfile.usesBetaSchedule
+      + (ownPackage || !selectedGenerationProfile.usesBetaSchedule
         ? "" : " · beta-schedule")
+      + (audioEngine == .speech
+        ? " · \(studioSpeechLanguage.displayName)"
+          + " · temperature \(String(format: "%.2f", studioSpeechTemperature))"
+        : "")
       + (seed.map { " · seed \($0)" } ?? "")
 
 
@@ -491,7 +521,7 @@ final class AppModel {
       seconds: 0,
       canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
       canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
-      denoisingSteps: soundEffects
+      denoisingSteps: ownPackage
         ? (denoisingSteps ?? Self.soundEffectDefaultSteps)
         : (denoisingSteps ?? quality.denoisingSteps),
       clipSeconds: duration,
@@ -520,7 +550,7 @@ final class AppModel {
     }
 
     let composedPrompt =
-      soundEffects
+      ownPackage
       ? resolveStudioPromptMentions(prompt)
       : H3StructuredPrompt.compose(
         body: resolveStudioPromptMentions(prompt),
@@ -533,11 +563,22 @@ final class AppModel {
 
     let request = GenerationRequest(
       kind: kind,
-      usesSoundEffectModel: soundEffects,
+      audioEngine: audioEngine,
+      // The duration is a ceiling for speech, not a target: the model stops
+      // when the line is spoken.
+      speech: audioEngine == .speech
+        ? studioVoiceReference.map {
+          EngineSpeechOptions(
+            referenceAudioURL: $0,
+            language: studioSpeechLanguage,
+            temperature: studioSpeechTemperature
+          )
+        }
+        : nil,
       prompt: composedPrompt,
       duration: duration,
       quality: quality,
-      denoisingSteps: soundEffects
+      denoisingSteps: audioEngine == .stableAudio
         ? (denoisingSteps ?? Self.soundEffectDefaultSteps) : denoisingSteps,
       activeDiTLayers: activeDiTLayers,
       coreReuse: coreReuse,
@@ -552,11 +593,11 @@ final class AppModel {
       lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
       referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
     )
-    // Sound effects load their own package; the H3 directory would be the
-    // wrong tree entirely.
+    // The audio models load their own packages; the H3 directory would be
+    // the wrong tree entirely.
     let nativeModelDirectory =
-      soundEffects
-      ? soundEffectModelDirectory
+      ownPackage
+      ? audioPackageDirectory
       : (usesNativeEngine(for: kind) ? modelDirectory : nil)
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
@@ -842,20 +883,25 @@ final class AppModel {
     case .video: nativeVideoGenerationIsReady
     case .image: nativeImageGenerationIsReady
     case .audio:
-      audioMode == .voice ? nativeAudioGenerationIsReady : soundEffectModelDirectory != nil
+      audioMode == .voice ? nativeAudioGenerationIsReady : audioPackageDirectory != nil
     }
   }
 
-  /// Where the chosen sound-effect package lives, or nil when none is
-  /// installed. It is loaded by its own engine path and never validated as
-  /// an H3 tree.
-  var soundEffectModelDirectory: URL? {
+  /// Where the chosen audio package lives, or nil when none is installed. It
+  /// is loaded by its own engine path and never validated as an H3 tree.
+  ///
+  /// The mode names the role, and a selection carrying the wrong one is
+  /// ignored rather than used: a stale pick from another tab would quietly
+  /// generate the wrong kind of audio. Reading the installed choices rather
+  /// than the manifests means a folder added by hand counts too, which it
+  /// previously did not — it could be selected but never generated from.
+  var audioPackageDirectory: URL? {
     guard let role = audioMode.audioRole else { return nil }
-    // The mode names the package; a stale selection from the other mode
-    // would quietly generate the wrong kind of audio.
-    return managedManifests
-      .first { $0.audioRole == role }
-      .flatMap { managedStatuses[$0.id]?.installedURL }
+    let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == role }
+    if let chosen = usable.first(where: { $0.id == selectedAudioModelID }) {
+      return chosen.directory
+    }
+    return usable.first?.directory
   }
 
   func cancelGeneration() {
@@ -1272,8 +1318,10 @@ final class AppModel {
     }
     switch capability {
     case .audio:
-      return "\(name) is missing the files a sound-effect model needs "
-        + "(\(ModelFolderInspection.soundEffectNames.joined(separator: ", ")))."
+      return "\(name) is not an audio package. A sound-effect or music one "
+        + "holds \(ModelFolderInspection.soundEffectNames.joined(separator: ", "))"
+        + "; a speech one holds "
+        + "\(ModelFolderInspection.speechNames.joined(separator: ", "))."
     case .video:
       return "\(name) does not hold an H3 model: expected either "
         + "FL2VA/transformer/config.json or a diffusion_models folder."
@@ -1344,9 +1392,13 @@ final class AppModel {
             downloadBytes: 0,
             requiredMemoryBytes: 0,
             installedBytes: 0,
-            // A hand-added audio folder is a sound-effect package: nothing
-            // else is loadable this way.
-            audioRole: capability == .audio ? .soundEffects : nil,
+            // A hand-added audio folder says which it is by what it holds: a
+            // sound-effect package has a DiT where a speech one has a talker.
+            // Music cannot be told from sound effects — same layout — so a
+            // Stable Audio folder lands under sound effects.
+            audioRole: capability == .audio
+              ? (ModelFolderInspection.holdsSpeech(at: url) ? .speech : .soundEffects)
+              : nil,
             licenseName: nil,
             licenseURL: nil
           )
@@ -1847,7 +1899,7 @@ final class AppModel {
   /// different runs are directly comparable.
   private static func settingsDescription(
     kind: GenerationKind,
-    soundEffects: Bool = false,
+    ownPackage: Bool = false,
     label: String = "sound effects",
     duration: TimeInterval,
     quality: EngineGenerationQuality,
@@ -1858,9 +1910,9 @@ final class AppModel {
     fastStill: Bool,
     previewDenoise: Bool
   ) -> String {
-    if soundEffects {
-      // Eight fixed passes, no canvas, no reuse ladders: reciting H3's
-      // settings here would describe a model that was not run.
+    if ownPackage {
+      // These models have their own knobs, or none: reciting H3's settings
+      // here would describe a model that was not run.
       return String(format: "%@ · %.0fs", label, duration)
     }
     guard kind == .video || kind == .image || kind == .audio else {

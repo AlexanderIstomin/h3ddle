@@ -73,6 +73,27 @@ extension ModelFolderInspection {
     "tokenizer.json",
   ]
 
+  /// Files that identify a speech package, on the same terms: these are what
+  /// the bridge opens.
+  public static let speechNames = [
+    "talker.safetensors", "code_predictor.safetensors",
+    "speaker_encoder.safetensors", "codec_decoder.safetensors",
+    "tokenizer.json",
+  ]
+
+  /// Whether a folder holds a speech package rather than a Stable Audio one.
+  ///
+  /// Unlike the video/audio split this much *is* answerable from the files —
+  /// a sound-effect package has a DiT where a speech one has a talker — so a
+  /// hand-added folder does not have to be filed by hand. Sound effects and
+  /// music still cannot be told apart, because they are the same layout.
+  public static func holdsSpeech(at directory: URL) -> Bool {
+    let manager = FileManager.default
+    return speechNames.allSatisfy {
+      manager.fileExists(atPath: directory.appendingPathComponent($0).path)
+    }
+  }
+
   /// Either H3 layout the engine accepts: the released tree, or the optimized
   /// single-file package.
   static let videoMarkers = [
@@ -94,7 +115,7 @@ extension ModelFolderInspection {
     }
     switch capability {
     case .audio:
-      return soundEffectNames.allSatisfy(exists)
+      return soundEffectNames.allSatisfy(exists) || speechNames.allSatisfy(exists)
     case .video:
       return videoMarkers.contains(where: exists)
     }

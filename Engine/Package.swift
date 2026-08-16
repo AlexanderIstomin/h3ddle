@@ -45,12 +45,24 @@ let package = Package(
         "Sources/SA3/sa3_dit_gpu.c",
         "Sources/SA3/sa3_decoder.c",
         "Sources/SA3/sa3_tokenizer.m",
+        // Qwen3-TTS, on the same footing as SA3. It borrows h3.c's tokenizer
+        // outright: H3 and Qwen3-TTS share a vocabulary byte for byte.
+        "Sources/Qwen3TTS/qwen_weights.c",
+        "Sources/Qwen3TTS/qwen_block.c",
+        "Sources/Qwen3TTS/qwen_talker.c",
+        "Sources/Qwen3TTS/qwen_predictor.c",
+        "Sources/Qwen3TTS/qwen_speaker.c",
+        "Sources/Qwen3TTS/qwen_codec.c",
+        "Sources/Qwen3TTS/qwen_gpu.c",
+        "Sources/Qwen3TTS/qwen_generate.c",
+        "Sources/H3Native/H3NativeAudio.m",
       ],
       publicHeadersPath: "Sources/H3Native/include",
       cSettings: [
         .define("_DARWIN_C_SOURCE"),
         .headerSearchPath("Vendor/h3.c"),
         .headerSearchPath("Sources/SA3"),
+        .headerSearchPath("Sources/Qwen3TTS"),
         // h3_ffmpeg.c uses SSIZE_MAX, whose SDK expansion requires LONG_MAX.
         .unsafeFlags(["-include", "limits.h"]),
       ],

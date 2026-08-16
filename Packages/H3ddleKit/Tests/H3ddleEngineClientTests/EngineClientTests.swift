@@ -182,6 +182,82 @@ struct EngineClientTests {
     )
     #expect(report.supportsGeneration)
   }
+
+  /// The seam between the app's request and the engine's, which no other test
+  /// crosses: a speech job is the only kind whose settings do not survive as
+  /// defaults if a field is dropped, because there is no voice without them.
+  @Test("A speech request crosses the protocol as a speech job with its voice")
+  func speechRequestCrossesTheProtocol() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/speech-package", isDirectory: true)
+    )
+    let request = GenerationRequest(
+      kind: .audio,
+      audioEngine: .speech,
+      speech: EngineSpeechOptions(
+        referenceAudioURL: URL(fileURLWithPath: "/tmp/voice.wav"),
+        language: .japanese,
+        temperature: 0.75,
+        topK: 40,
+        repetitionPenalty: 1.1
+      ),
+      prompt: "Read this aloud.",
+      duration: 12
+    )
+
+    var sent: [String: Any]?
+    for try await event in provider.events(for: request) {
+      if case .progress(let phase, _) = event,
+        let data = phase.data(using: .utf8),
+        let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        sent = decoded
+      }
+    }
+    let generation = try #require(sent)
+    #expect(generation["kind"] as? String == "speech")
+    let speech = try #require(generation["speech"] as? [String: Any])
+    #expect(speech["language"] as? String == "ja")
+    #expect(speech["temperature"] as? Double == 0.75)
+    #expect(speech["topK"] as? Int == 40)
+    #expect(speech["repetitionPenalty"] as? Double == 1.1)
+    #expect((speech["referenceAudioURL"] as? String)?.hasSuffix("/tmp/voice.wav") == true)
+  }
+
+  /// Music and sound effects still reach the engine as sound-effect jobs, and
+  /// H3's own soundtrack still reaches it as audio. Replacing a boolean with
+  /// an enum is exactly the change that quietly reroutes one of them.
+  @Test("The other audio engines still map where they did")
+  func otherAudioEnginesAreUnchanged() async throws {
+    for (engine, expected) in [
+      (AudioGenerationEngine.h3, "audio"),
+      (AudioGenerationEngine.stableAudio, "soundEffect"),
+    ] {
+      let session = fakeEngineSession(arguments: ["--echo-generate"])
+      defer { session.shutdown() }
+      let provider = EngineGenerationProvider(
+        session: session,
+        modelDirectory: URL(fileURLWithPath: "/tmp/model", isDirectory: true)
+      )
+      var sent: [String: Any]?
+      for try await event in provider.events(
+        for: GenerationRequest(
+          kind: .audio, audioEngine: engine, prompt: "Rain on a tin roof", duration: 4
+        )
+      ) {
+        if case .progress(let phase, _) = event,
+          let data = phase.data(using: .utf8),
+          let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+          sent = decoded
+        }
+      }
+      #expect(try #require(sent)["kind"] as? String == expected)
+    }
+  }
 }
 
 private func fakeEngineSession(arguments: [String] = []) -> EngineSession {

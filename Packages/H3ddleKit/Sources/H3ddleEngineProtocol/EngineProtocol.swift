@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 12
+  public static let currentVersion = 13
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -19,6 +19,81 @@ public enum EngineGenerationKind: String, Codable, Sendable {
   /// Stable Audio 3 rather than H3: sound effects and ambience, which
   /// H3's dialogue-trained audio branch will not produce.
   case soundEffect
+  /// Qwen3-TTS: a written line spoken in a voice cloned from a reference
+  /// clip. H3's audio branch produces dialogue, but not chosen words in a
+  /// chosen voice.
+  case speech
+}
+
+/// The ten languages the speech model was released with. An enum rather than
+/// a string because the engine refuses an unknown code outright: the wrong
+/// language token still produces fluent speech, just in the wrong accent, so
+/// a typo that fell back to English would be a bug nobody reports.
+public enum EngineSpeechLanguage: String, CaseIterable, Codable, Sendable {
+  case english = "en"
+  case chinese = "zh"
+  case german = "de"
+  case spanish = "es"
+  case french = "fr"
+  case italian = "it"
+  case portuguese = "pt"
+  case russian = "ru"
+  case japanese = "ja"
+  case korean = "ko"
+
+  public var displayName: String {
+    switch self {
+    case .english: "English"
+    case .chinese: "Chinese"
+    case .german: "German"
+    case .spanish: "Spanish"
+    case .french: "French"
+    case .italian: "Italian"
+    case .portuguese: "Portuguese"
+    case .russian: "Russian"
+    case .japanese: "Japanese"
+    case .korean: "Korean"
+    }
+  }
+}
+
+/// Everything a speech job needs beyond the prompt, which carries the line to
+/// speak, and the duration, which caps it.
+public struct EngineSpeechOptions: Hashable, Codable, Sendable {
+  /// Zero is greedy, which is reproducible and a bad default: greedy decoding
+  /// loops. A six-word line measured at temperature 0 ran to a thirty-second
+  /// ceiling where the same line at 0.7 or 0.9 stopped after 2.3 seconds.
+  public static let temperatureRange = 0.0...2.0
+  public static let topKRange = 0...200
+  public static let repetitionPenaltyRange = 1.0...2.0
+  public static let defaultTemperature = 0.9
+  public static let defaultTopK = 50
+  public static let defaultRepetitionPenalty = 1.05
+
+  /// Any audio file the system can decode. There is no default voice: the
+  /// model clones from this clip and nothing else, so a few seconds of clean
+  /// speech is both the minimum and about all it needs.
+  public var referenceAudioURL: URL
+  public var language: EngineSpeechLanguage
+  public var temperature: Double
+  /// 0 for no restriction.
+  public var topK: Int
+  /// 1.0 for none.
+  public var repetitionPenalty: Double
+
+  public init(
+    referenceAudioURL: URL,
+    language: EngineSpeechLanguage = .english,
+    temperature: Double = EngineSpeechOptions.defaultTemperature,
+    topK: Int = EngineSpeechOptions.defaultTopK,
+    repetitionPenalty: Double = EngineSpeechOptions.defaultRepetitionPenalty
+  ) {
+    self.referenceAudioURL = referenceAudioURL
+    self.language = language
+    self.temperature = Self.temperatureRange.clamping(temperature)
+    self.topK = Self.topKRange.clamping(topK)
+    self.repetitionPenalty = Self.repetitionPenaltyRange.clamping(repetitionPenalty)
+  }
 }
 
 public enum EngineFeature: String, CaseIterable, Codable, Sendable {
@@ -27,6 +102,7 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case imageGeneration
   case standaloneAudioGeneration
   case soundEffectGeneration
+  case speechGeneration
   case embeddedAudio
   case cancellation
   case denoisingPreviews
@@ -260,6 +336,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// pictures are discarded. Raising it does not improve prompt adherence in
   /// the audio lane — 32 through 256 were compared and all returned speech.
   public static let audioCanvasSize = 32
+  /// Required by `.speech` and ignored by every other kind.
+  public var speech: EngineSpeechOptions?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -281,6 +359,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     firstFrameURL: URL? = nil,
     lastFrameURL: URL? = nil,
     referenceImageURLs: [URL] = [],
+    speech: EngineSpeechOptions? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -301,6 +380,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.firstFrameURL = firstFrameURL
     self.lastFrameURL = lastFrameURL
     self.referenceImageURLs = Array(referenceImageURLs.prefix(Self.referenceImageLimit))
+    self.speech = speech
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -323,6 +403,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case firstFrameURL
     case lastFrameURL
     case referenceImageURLs
+    case speech
     case modelDirectory
     case outputURL
   }
@@ -352,6 +433,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     lastFrameURL = try container.decodeIfPresent(URL.self, forKey: .lastFrameURL)
     referenceImageURLs =
       try container.decodeIfPresent([URL].self, forKey: .referenceImageURLs) ?? []
+    speech = try container.decodeIfPresent(EngineSpeechOptions.self, forKey: .speech)
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -377,13 +459,14 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     if !referenceImageURLs.isEmpty {
       try container.encode(referenceImageURLs, forKey: .referenceImageURLs)
     }
+    try container.encodeIfPresent(speech, forKey: .speech)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }
 }
 
-extension ClosedRange<Int> {
-  fileprivate func clamping(_ value: Int) -> Int {
+extension ClosedRange {
+  fileprivate func clamping(_ value: Bound) -> Bound {
     Swift.min(Swift.max(value, lowerBound), upperBound)
   }
 }

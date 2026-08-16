@@ -44,8 +44,11 @@ qwen_tts *qwen_tts_load(const char *talker_path, const char *predictor_path,
                         int max_tokens, char *error, size_t error_size);
 
 /* The same, with the talker, the code predictor and the codec's vocoder on the
- * GPU; `shader_path` is h3.c's h3_shaders.metal. The embedding tables, the
- * speaker encoder and the codec's first four stages stay on the CPU either way.
+ * GPU; `shader_path` is h3.c's h3_shaders.metal, or NULL to reuse a library
+ * some earlier h3_gpu_prepare already compiled — which is what a host that has
+ * loaded h3.c wants, so both models share one device and one allocator. The
+ * embedding tables, the speaker encoder and the codec's first four stages stay
+ * on the CPU either way.
  *
  * This will not reproduce the CPU path's audio. Both carry the same arithmetic
  * but the GPU one holds its activations in bf16, and a frame whose top two

@@ -32,6 +32,40 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
                         const char *output_path, h3ddle_sa3_step on_step,
                         void *opaque, char *error, size_t error_size);
 
+/* Decodes any audio file AVFoundation reads into mono float at
+ * `sample_rate`, which for a Qwen3-TTS reference clip must be 24 kHz — its
+ * mel filterbank is defined at that rate. The caller owns *pcm and frees it. */
+int h3ddle_read_mono_f32(const char *path, int sample_rate, int max_samples,
+                         float **pcm, int *samples, char *error,
+                         size_t error_size);
+
+/* Qwen3-TTS: text and a reference clip in, 24 kHz mono speech out.
+ *
+ * `language` is a two-letter code — en, zh, de, es, fr, it, pt, ru, ja, ko —
+ * and an unknown one is an error rather than a silent fallback, because the
+ * wrong language token produces fluent speech in the wrong accent.
+ *
+ * `reference_path` is any file the system can decode; a few seconds of clean
+ * speech is enough, since the encoder pools over the whole clip. Passing NULL
+ * is an error: this model has no default voice.
+ *
+ * `temperature` at or below zero takes the argmax, which makes a generation
+ * reproducible and is a poor default: greedy decoding loops, and a six-word
+ * line measured here ran to a thirty-second ceiling where sampling at 0.7 or
+ * 0.9 stopped at 2.3 seconds. `on_frame` may be NULL and fires per 80 ms
+ * frame, with `total` the ceiling rather than a prediction. */
+typedef void (*h3ddle_qwen_frame)(int frames, int total, void *opaque);
+/* Releases any cached speech package, on the same terms as the sound-effect
+ * one: the video model decides what fits. */
+void h3ddle_qwen_release(void);
+int h3ddle_qwen_generate(const char *package_directory, const char *text,
+                         const char *language, const char *reference_path,
+                         double max_seconds, double temperature, int top_k,
+                         double repetition_penalty, unsigned long long seed,
+                         const char *output_path, h3ddle_qwen_frame on_frame,
+                         void *opaque, double *produced_seconds,
+                         char *error, size_t error_size);
+
 #ifdef __cplusplus
 }
 #endif

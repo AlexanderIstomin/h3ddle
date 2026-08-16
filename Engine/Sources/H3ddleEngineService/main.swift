@@ -113,7 +113,7 @@ private let engineCapabilities = EngineCapabilities(
     [
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
-      .standaloneAudioGeneration, .soundEffectGeneration,
+      .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
     ]
   }()
 )
@@ -150,9 +150,10 @@ private final class EngineModelStore: @unchecked Sendable {
       return context
     }
     releaseLocked()
-    // Tens of gigabytes are about to be mapped; anything the sound-effect
-    // model is holding should go first.
+    // Tens of gigabytes are about to be mapped; anything the audio models
+    // are holding should go first.
     h3ddle_sa3_release()
+    h3ddle_qwen_release()
     guard let loaded = h3_load_dir(path) else { return nil }
     h3_cache_set_enabled(loaded, 1)
     context = loaded
@@ -235,6 +236,11 @@ private final class EngineResourceWatch: @unchecked Sendable {
       } else {
         EngineModelStore.shared.clearCache()
       }
+      // The audio packages go either way. They are held only to save a
+      // reload between takes, and after ten idle minutes — or once the OS
+      // has asked for memory — there is no take to save.
+      h3ddle_sa3_release()
+      h3ddle_qwen_release()
     }
   }
 }
@@ -517,6 +523,20 @@ private func soundEffectStepCallback(
   _ = context.progress(phase: "denoise", completed: completed, total: total)
 }
 
+/// Speech reports one tick per 80 ms frame. `total` is the ceiling the
+/// request asked for, not a prediction: the model stops when the line is
+/// spoken, which is usually well short of it.
+private func speechFrameCallback(
+  _ frames: Int32,
+  _ total: Int32,
+  _ opaque: UnsafeMutableRawPointer?
+) {
+  guard let opaque else { return }
+  let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
+    .takeUnretainedValue()
+  _ = context.progress(phase: "speaking", completed: frames, total: total)
+}
+
 private func generationFrameCallback(
   _ frame: UnsafePointer<h3_frame>?,
   _ opaque: UnsafeMutableRawPointer?
@@ -569,6 +589,18 @@ private final class EngineRuntime: @unchecked Sendable {
     case .soundEffect:
       guard engineCapabilities.supports(.soundEffectGeneration) else {
         EngineOutput.fail(command, message: "This engine cannot generate sound effects")
+        return
+      }
+    case .speech:
+      guard engineCapabilities.supports(.speechGeneration) else {
+        EngineOutput.fail(command, message: "This engine cannot generate speech")
+        return
+      }
+      guard let speech = request.speech, speech.referenceAudioURL.isFileURL else {
+        EngineOutput.fail(
+          command,
+          message: "Speech needs a reference clip: the voice is cloned from it"
+        )
         return
       }
     case .video:
@@ -702,6 +734,76 @@ private final class EngineRuntime: @unchecked Sendable {
     )
   }
 
+  /// Qwen3-TTS, like Stable Audio 3, keeps none of H3's machinery. The
+  /// duration is a ceiling rather than a target — the model stops when the
+  /// line is spoken — so the completed event reports what was produced.
+  private func runSpeech(
+    _ request: EngineGenerationRequest,
+    speech: EngineSpeechOptions,
+    command: EngineCommand,
+    packageDirectory: URL,
+    callbackContext: GenerationCallbackContext
+  ) {
+    var error = [CChar](repeating: 0, count: 512)
+    var produced = 0.0
+    let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    let wrote = packageDirectory.path.withCString { packagePath in
+      request.prompt.withCString { text in
+        speech.language.rawValue.withCString { language in
+          speech.referenceAudioURL.path.withCString { reference in
+            request.outputURL.path.withCString { outputPath in
+              h3ddle_qwen_generate(
+                packagePath,
+                text,
+                language,
+                reference,
+                request.duration,
+                speech.temperature,
+                Int32(speech.topK),
+                speech.repetitionPenalty,
+                request.seed ?? 42,
+                outputPath,
+                speechFrameCallback,
+                opaque,
+                &produced,
+                &error,
+                error.count
+              )
+            }
+          }
+        }
+      }
+    }
+
+    if callbackContext.isCancelled {
+      EngineOutput.emit(
+        EngineEvent(
+          requestID: command.requestID,
+          jobID: command.jobID,
+          kind: .cancelled
+        )
+      )
+      return
+    }
+    guard wrote != 0 else {
+      let message = String(cString: error)
+      EngineOutput.fail(
+        command,
+        message: message.isEmpty ? "Speech generation failed" : message
+      )
+      return
+    }
+    EngineOutput.emit(
+      EngineEvent(
+        requestID: command.requestID,
+        jobID: command.jobID,
+        kind: .completed,
+        outputURL: request.outputURL,
+        outputDuration: produced
+      )
+    )
+  }
+
   private func run(
     _ request: EngineGenerationRequest,
     command: EngineCommand,
@@ -720,6 +822,17 @@ private final class EngineRuntime: @unchecked Sendable {
     if request.kind == .soundEffect {
       runSoundEffect(
         request,
+        command: command,
+        packageDirectory: modelDirectory,
+        callbackContext: callbackContext
+      )
+      return
+    }
+
+    if request.kind == .speech, let speech = request.speech {
+      runSpeech(
+        request,
+        speech: speech,
         command: command,
         packageDirectory: modelDirectory,
         callbackContext: callbackContext

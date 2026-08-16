@@ -122,13 +122,16 @@ struct GenerationStudioView: View {
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
       if kind == .audio {
-        // Two different models, not two settings of one: H3 writes the
-        // joint soundtrack and leans toward speech; music and sound effects
-        // are one Stable Audio transformer trained on different material.
+        // Three different models, not settings of one: H3 writes the joint
+        // soundtrack and leans toward dialogue; music and sound effects are
+        // one Stable Audio transformer trained on different material; speech
+        // is Qwen3-TTS, which says the words you typed in a voice it clones
+        // from a clip. VOICE improvises, SPEECH recites.
         H3SegmentedControl(
           selection: $model.audioMode,
           segments: [
             .init(value: .voice, title: "VOICE", systemImage: "mic"),
+            .init(value: .speech, title: "SPEECH", systemImage: "text.bubble"),
             .init(value: .music, title: "MUSIC", systemImage: "music.note"),
             .init(value: .soundEffects, title: "SFX", systemImage: "waveform"),
           ],
@@ -219,6 +222,10 @@ struct GenerationStudioView: View {
 
       if kind != .image, model.audioMode == .voice {
         audioDesignSection
+      }
+
+      if kind == .audio, model.audioMode == .speech {
+        voiceReferenceSection
       }
 
       if kind != .audio {
@@ -318,6 +325,72 @@ struct GenerationStudioView: View {
     }
     .opacity(disabled ? 0.38 : 1)
     .allowsHitTesting(!disabled)
+  }
+
+  /// The clip the voice is cloned from. It is required rather than optional:
+  /// the model conditions on a speaker embedding taken from this and nothing
+  /// else, so there is no default voice to fall back to.
+  private var voiceReferenceSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text("VOICE")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text(model.studioVoiceReference == nil ? "required" : "cloned")
+          .font(.system(size: 9, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.55))
+      }
+      HStack(spacing: 10) {
+        Button {
+          pickVoiceReference()
+        } label: {
+          HStack(spacing: 8) {
+            Image(systemName: model.studioVoiceReference == nil
+              ? "waveform.badge.plus" : "waveform")
+              .font(.system(size: 13, weight: .medium))
+            Text(model.studioVoiceReference?.lastPathComponent ?? "Choose a clip…")
+              .font(.system(size: 12))
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+          .frame(height: 38)
+          .background(H3Color.chrome)
+          .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("speech-reference-clip")
+        if model.studioVoiceReference != nil {
+          Button("Clear") { model.studioVoiceReference = nil }
+            .buttonStyle(H3QuietButtonStyle())
+            .accessibilityIdentifier("speech-reference-clear")
+        }
+      }
+      Text("A few seconds of clean speech is enough — the encoder averages "
+        + "over the whole clip, so a longer one adds nothing.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityIdentifier("speech-voice-reference")
+  }
+
+  private func pickVoiceReference() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.allowedContentTypes = [.audio, .movie]
+    panel.prompt = "Use Voice"
+    guard panel.runModal() == .OK, let url = panel.urls.first else { return }
+    model.studioVoiceReference = url
   }
 
   private var referenceSection: some View {
@@ -496,7 +569,9 @@ struct GenerationStudioView: View {
           }
 
           if hasUsableModel {
-            if kind != .image {
+            // Speech has no duration to choose: the line decides how long it
+            // takes, and the ceiling is derived from it.
+            if kind != .image, !(kind == .audio && model.audioMode == .speech) {
               durationSection
             }
             modelSection
@@ -508,8 +583,12 @@ struct GenerationStudioView: View {
             generationControls
           }
 
-          if usesNativeSettings, model.audioMode != .voice {
+          if usesNativeSettings, model.audioMode == .music || model.audioMode == .soundEffects {
             soundEffectControls
+          }
+
+          if usesNativeSettings, model.audioMode == .speech {
+            speechControls
           }
 
           if let errorMessage = model.errorMessage {
@@ -684,6 +763,59 @@ struct GenerationStudioView: View {
         .foregroundStyle(H3Color.textSecondary)
     }
     .accessibilityIdentifier("sound-effect-passes")
+  }
+
+  /// Language and temperature. Both matter more than they look: the wrong
+  /// language token gives fluent speech in the wrong accent, and temperature
+  /// zero is not "most accurate" but greedy, which loops — a six-word line
+  /// measured at zero ran to its whole ceiling where 0.9 stopped at 2.3s.
+  private var speechControls: some View {
+    VStack(alignment: .leading, spacing: 28) {
+      labeled("LANGUAGE") {
+        Picker(
+          "",
+          selection: $model.studioSpeechLanguage
+        ) {
+          ForEach(EngineSpeechLanguage.allCases, id: \.self) { language in
+            Text(language.displayName).tag(language)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .tint(H3Color.accent)
+        .accessibilityIdentifier("speech-language")
+        Text("Names the language token, not a translation: the line is spoken "
+          + "as written.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      labeled("VARIATION") {
+        HStack(spacing: 10) {
+          Slider(
+            value: $model.studioSpeechTemperature,
+            in: 0.1...1.4,
+            step: 0.05
+          )
+          .tint(H3Color.accent)
+          .accessibilityIdentifier("speech-temperature")
+          Text(String(format: "%.2f", model.studioSpeechTemperature))
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(H3Color.textSecondary)
+            .frame(width: 34, alignment: .trailing)
+          Button("Reset") {
+            model.studioSpeechTemperature = EngineSpeechOptions.defaultTemperature
+          }
+          .buttonStyle(H3QuietButtonStyle())
+        }
+        Text("0.9 is the reference default. Much lower reads flat and can "
+          + "stall on a repeated phrase; much higher wanders.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .accessibilityIdentifier("speech-controls")
   }
 
   private var generationControls: some View {
@@ -1094,6 +1226,10 @@ struct GenerationStudioView: View {
   private var canGenerate: Bool {
     !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !model.isGenerating
+      // Speech clones from a clip and has no default voice, so without one
+      // there is nothing to speak in.
+      && (model.audioMode != .speech || kind != .audio
+        || model.studioVoiceReference != nil)
   }
 
   private var knobs: GenerationKnobSnapshot {
@@ -1118,7 +1254,13 @@ struct GenerationStudioView: View {
   /// minutes and holds about twice realtime throughout, so the same limit
   /// would be borrowing a constraint it does not have.
   private var maximumDuration: Double {
-    model.audioMode == .voice ? 15 : 120
+    switch model.audioMode {
+    case .voice: 15
+    // A ceiling rather than a length: speech stops when the line is spoken,
+    // so this only decides how long a runaway is allowed to run.
+    case .speech: 60
+    case .music, .soundEffects: 120
+    }
   }
 
   private var usesAlignedH3Duration: Bool {
@@ -1129,8 +1271,23 @@ struct GenerationStudioView: View {
 
   private var requestedDuration: Double {
     if kind == .image { return 3 }
+    if kind == .audio, model.audioMode == .speech { return speechCeiling }
     guard usesAlignedH3Duration else { return model.studioSettings.duration }
     return (Double(alignedFrames) - 0.5) / Self.h3FPS
+  }
+
+  /// How long the line is allowed to take, from how long the line is.
+  ///
+  /// A fixed ceiling is wrong in both directions: too low truncates a long
+  /// line mid-word, and too high leaves the progress bar reporting a fraction
+  /// of a length that was never going to happen — the engine counts frames
+  /// against this, so a thirty-second ceiling on a five-second line shows 17%
+  /// and then jumps to done. English runs about fourteen characters a second,
+  /// so ten gives roughly half again as much room as the line should need.
+  private var speechCeiling: Double {
+    let characters = model.generationPrompt
+      .trimmingCharacters(in: .whitespacesAndNewlines).count
+    return min(maximumDuration, max(8, Double(characters) / 10))
   }
 }
 

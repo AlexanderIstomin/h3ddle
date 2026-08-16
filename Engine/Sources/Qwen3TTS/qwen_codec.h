@@ -36,10 +36,11 @@ typedef struct qwen_codec qwen_codec;
 qwen_codec *qwen_codec_load(const char *path, char *error, size_t error_size);
 void qwen_codec_free(qwen_codec *codec);
 
-/* Move stage 5 to the GPU; `shader_path` is h3.c's h3_shaders.metal. The four
- * stages above it stay on the CPU, so this changes where four fifths of the
- * work happens and nothing about what it computes: the vocoder is f32 on both
- * paths, and the results agree to f32 rounding rather than approximately. */
+/* Move stage 5 to the GPU; `shader_path` is h3.c's h3_shaders.metal, or NULL
+ * to reuse a library h3_gpu_prepare already compiled. The four stages above it
+ * stay on the CPU, so this changes where four fifths of the work happens and
+ * nothing about what it computes: the vocoder is f32 on both paths, and the
+ * results agree to f32 rounding rather than approximately. */
 int qwen_codec_use_metal(qwen_codec *codec, const char *shader_path,
                          char *error, size_t error_size);
 
