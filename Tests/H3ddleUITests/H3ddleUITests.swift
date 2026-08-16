@@ -9,6 +9,36 @@ final class H3ddleUITests: XCTestCase {
   private func clickLaneControl(_ element: XCUIElement) {
     element.coordinate(withNormalizedOffset: CGVector(dx: 0.16, dy: 0.5)).click()
   }
+
+  /// Clicks a button, retrying if the element goes stale mid-click.
+  ///
+  /// XCUITest occasionally invalidates a targeted element during interruption
+  /// handling — the run reports "no longer valid after interruption handling"
+  /// and suggests a retry loop. It is infrequent, but an intermittently red
+  /// suite gets ignored, which costs more than the flake does. `expecting`
+  /// names something the click should bring on screen, so a click that was
+  /// swallowed rather than failed is also retried.
+  @MainActor
+  private func click(
+    _ identifier: String,
+    in app: XCUIApplication,
+    expecting appearance: String,
+    attempts: Int = 3,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    for attempt in 1...attempts {
+      let button = app.buttons[identifier]
+      guard button.waitForExistence(timeout: 8) else { continue }
+      button.click()
+      if app.staticTexts[appearance].waitForExistence(timeout: 8) { return }
+      if attempt < attempts { continue }
+      XCTFail(
+        "clicking \(identifier) never revealed \(appearance) in \(attempts) attempts",
+        file: file, line: line
+      )
+    }
+  }
   @MainActor
   func testEditorOpensWithTwoTracks() {
     let app = XCUIApplication()
@@ -26,8 +56,7 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(app.buttons["transport-split"].exists)
     XCTAssertTrue(app.buttons["transport-delete"].exists)
 
-    app.buttons["model-status"].click()
-    XCTAssertTrue(app.staticTexts["model-settings"].waitForExistence(timeout: 8))
+    click("model-status", in: app, expecting: "model-settings")
     XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
     XCTAssertTrue(app.staticTexts["MiniMax H3 · INT8"].waitForExistence(timeout: 8))
   }
@@ -238,8 +267,7 @@ final class H3ddleUITests: XCTestCase {
     )
 
     XCTAssertTrue(app.buttons["model-status"].waitForExistence(timeout: 5))
-    app.buttons["model-status"].click()
-    XCTAssertTrue(app.staticTexts["model-settings"].waitForExistence(timeout: 8))
+    click("model-status", in: app, expecting: "model-settings")
     XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
     XCTAssertTrue(app.buttons["choose-model-folder-audio"].exists)
   }

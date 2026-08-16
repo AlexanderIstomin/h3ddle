@@ -17,5 +17,10 @@ jobs:
         # the handshake capability check fails without it.
         run: brew install xcodegen ffmpeg
       - name: Verify, test, and build
+        # The UI tests launch a real window and steal keyboard focus, so
+        # Scripts/ci.sh leaves them out unless asked. Nothing is competing for
+        # the screen on a runner, which is where they belong.
+        env:
+          H3DDLE_UI_TESTS: "1"
         run: Scripts/ci.sh
 
