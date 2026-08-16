@@ -68,7 +68,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
       let engineKind: EngineGenerationKind =
         switch request.kind {
         case .image: .image
-        case .audio: .audio
+        case .audio: request.usesSoundEffectModel ? .soundEffect : .audio
         case .video: .video
         }
       guard !request.prompt.isEmpty else {

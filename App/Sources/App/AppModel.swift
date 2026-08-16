@@ -85,6 +85,9 @@ final class AppModel {
   var activeGenerationKind: GenerationKind?
   var isGenerating = false
   var generationPhase = ""
+  /// Audio studio only: whether it is making sound effects rather than
+  /// H3's joint soundtrack. They come from different packages.
+  var audioUsesSoundEffects = false
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
   var generationOverallProgress = 0.0
@@ -479,8 +482,10 @@ final class AppModel {
       }
     }
 
+    let soundEffects = kind == .audio && audioUsesSoundEffects
     let request = GenerationRequest(
       kind: kind,
+      usesSoundEffectModel: soundEffects,
       prompt: H3StructuredPrompt.compose(
         body: resolveStudioPromptMentions(prompt),
         soundscape: studioSoundscape,
@@ -505,7 +510,12 @@ final class AppModel {
       lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
       referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
     )
-    let nativeModelDirectory = usesNativeEngine(for: kind) ? modelDirectory : nil
+    // Sound effects load their own package; the H3 directory would be the
+    // wrong tree entirely.
+    let nativeModelDirectory =
+      soundEffects
+      ? soundEffectModelDirectory
+      : (usesNativeEngine(for: kind) ? modelDirectory : nil)
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
         EngineGenerationProvider(
@@ -789,8 +799,17 @@ final class AppModel {
     switch kind {
     case .video: nativeVideoGenerationIsReady
     case .image: nativeImageGenerationIsReady
-    case .audio: nativeAudioGenerationIsReady
+    case .audio:
+      audioUsesSoundEffects ? soundEffectModelDirectory != nil : nativeAudioGenerationIsReady
     }
+  }
+
+  /// Where the chosen sound-effect package lives, or nil when none is
+  /// installed. It is loaded by its own engine path and never validated as
+  /// an H3 tree.
+  var soundEffectModelDirectory: URL? {
+    selectedAudioModelChoice?.directory
+      ?? modelChoices.first { $0.capability == .audio && $0.isInstalled }?.directory
   }
 
   func cancelGeneration() {
@@ -1103,7 +1122,9 @@ final class AppModel {
   func installedModelChoices(for kind: GenerationKind) -> [ModelChoice] {
     let capability: ModelCapability =
       switch kind {
-      case .video, .image, .audio: .video
+      // H3 makes video, stills and their soundtrack from one package.
+      case .video, .image: .video
+      case .audio: audioUsesSoundEffects ? .audio : .video
       }
     return modelChoices.filter { $0.isInstalled && $0.capability == capability }
   }

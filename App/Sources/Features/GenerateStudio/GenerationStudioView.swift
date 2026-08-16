@@ -121,6 +121,20 @@ struct GenerationStudioView: View {
       Text(kind.rawValue.capitalized)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
+      if kind == .audio {
+        // Two different models, not two settings of one: H3 writes the
+        // joint soundtrack and leans toward speech, while sound effects
+        // come from a package trained on them.
+        H3SegmentedControl(
+          selection: $model.audioUsesSoundEffects,
+          segments: [
+            .init(value: false, title: "VOICE", systemImage: "mic"),
+            .init(value: true, title: "SFX", systemImage: "waveform"),
+          ],
+          isEnabled: !model.isGenerating
+        )
+        .padding(.leading, 4)
+      }
       Spacer()
       Button {
         model.activeGenerationKind = nil
@@ -489,7 +503,7 @@ struct GenerationStudioView: View {
             noModelSection
           }
 
-          if usesNativeSettings {
+          if usesNativeSettings, !model.audioUsesSoundEffects {
             generationControls
           }
 

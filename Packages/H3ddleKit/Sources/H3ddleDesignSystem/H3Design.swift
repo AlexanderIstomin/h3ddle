@@ -133,3 +133,70 @@ public extension Color {
     )
   }
 }
+
+/// A compact segmented control: one filled segment for the active choice and
+/// quiet ones either side, sized for a panel header rather than a form.
+public struct H3SegmentedControl<Value: Hashable>: View {
+  public struct Segment: Identifiable {
+    public var value: Value
+    public var title: String
+    public var systemImage: String?
+
+    public var id: Value { value }
+
+    public init(value: Value, title: String, systemImage: String? = nil) {
+      self.value = value
+      self.title = title
+      self.systemImage = systemImage
+    }
+  }
+
+  @Binding private var selection: Value
+  private let segments: [Segment]
+  private let isEnabled: Bool
+
+  public init(selection: Binding<Value>, segments: [Segment], isEnabled: Bool = true) {
+    self._selection = selection
+    self.segments = segments
+    self.isEnabled = isEnabled
+  }
+
+  public var body: some View {
+    HStack(spacing: 3) {
+      ForEach(segments) { segment in
+        let active = segment.value == selection
+        Button {
+          selection = segment.value
+        } label: {
+          HStack(spacing: 6) {
+            if let systemImage = segment.systemImage {
+              Image(systemName: systemImage)
+                .font(.system(size: 11))
+            }
+            Text(segment.title)
+              .font(.system(size: 10, weight: .semibold, design: .monospaced))
+          }
+          .padding(.horizontal, 12)
+          .frame(height: 24)
+          .foregroundStyle(active ? Color.white : H3Color.textSecondary)
+          .background(
+            active ? H3Color.accent : .clear,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("segment-\(segment.title.lowercased())")
+      }
+    }
+    .padding(3)
+    .background(H3Color.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(H3Color.line, lineWidth: 1)
+    }
+    .opacity(isEnabled ? 1 : 0.5)
+    .disabled(!isEnabled)
+    .animation(.easeOut(duration: 0.15), value: selection)
+  }
+}
