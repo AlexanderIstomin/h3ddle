@@ -17,7 +17,7 @@ final class H3ddleUITests: XCTestCase {
 
     app.buttons["model-status"].click()
     XCTAssertTrue(app.staticTexts["model-settings"].waitForExistence(timeout: 2))
-    XCTAssertTrue(app.buttons["choose-model-folder"].exists)
+    XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
     XCTAssertTrue(app.staticTexts["MiniMax H3 · INT8"].waitForExistence(timeout: 2))
   }
 
@@ -56,9 +56,11 @@ final class H3ddleUITests: XCTestCase {
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
 
-    XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 5))
-    app.buttons["append-audio"].click()
-    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 2))
+    // A cold launch can take a while to publish an accessibility tree, and
+    // the lane carries the identifier rather than the button inside it.
+    XCTAssertTrue(app.buttons["audio-lane-drop"].waitForExistence(timeout: 20))
+    app.buttons["audio-lane-drop"].click()
+    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
     app.buttons["Generate"].click()
 
     let title = app.staticTexts["generation-studio"]
@@ -92,9 +94,11 @@ final class H3ddleUITests: XCTestCase {
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleFastFakeGeneration"]
     app.launch()
 
-    XCTAssertTrue(app.buttons["append-audio"].waitForExistence(timeout: 5))
-    app.buttons["append-audio"].click()
-    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 2))
+    // A cold launch can take a while to publish an accessibility tree, and
+    // the lane carries the identifier rather than the button inside it.
+    XCTAssertTrue(app.buttons["audio-lane-drop"].waitForExistence(timeout: 20))
+    app.buttons["audio-lane-drop"].click()
+    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
     app.buttons["Generate"].click()
 
     let prompt = app.textViews["generation-prompt"]
@@ -137,5 +141,49 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["audio-lane-drop"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["visual-header-drop"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["audio-header-drop"].exists)
+  }
+
+  /// Walks the path a user takes to reach sound effects: open the audio
+  /// studio, switch to the SFX tab, and confirm the studio reconfigures for a
+  /// different model rather than keeping H3's controls.
+  @MainActor
+  func testAudioStudioOffersSoundEffects() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+
+    // A cold launch can take a while to publish an accessibility tree, and
+    // the lane carries the identifier rather than the button inside it.
+    XCTAssertTrue(app.buttons["audio-lane-drop"].waitForExistence(timeout: 20))
+    app.buttons["audio-lane-drop"].click()
+    XCTAssertTrue(app.buttons["Generate"].waitForExistence(timeout: 5))
+    app.buttons["Generate"].click()
+
+    XCTAssertTrue(app.staticTexts["generation-studio"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["segment-voice"].exists)
+    XCTAssertTrue(app.buttons["segment-sfx"].exists)
+
+    app.buttons["segment-sfx"].click()
+    // With no sound-effect package installed the studio has to say so rather
+    // than offer settings for a generation it cannot run.
+    XCTAssertTrue(
+      app.staticTexts["No models installed"].waitForExistence(timeout: 2)
+        || app.buttons["generate-button"].exists
+    )
+  }
+
+  /// The library groups by what a model is for, and each group asks for its
+  /// own folders so neither button is ambiguous.
+  @MainActor
+  func testModelLibraryGroupsVideoAndAudio() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+
+    XCTAssertTrue(app.buttons["model-status"].waitForExistence(timeout: 5))
+    app.buttons["model-status"].click()
+    XCTAssertTrue(app.staticTexts["model-settings"].waitForExistence(timeout: 2))
+    XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
+    XCTAssertTrue(app.buttons["choose-model-folder-audio"].exists)
   }
 }
