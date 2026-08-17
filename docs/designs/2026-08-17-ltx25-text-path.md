@@ -61,9 +61,18 @@ Rotating the whole head would be the natural reading and would corrupt all
 eight global layers while producing perfectly well-formed conditioning.
 
 `rope_type` is `proportional` on the global layers and `default` on the
-sliding ones. Only the second is modelled today. Whether `proportional` means
-anything beyond the theta already applied has **not** been established, and it
-is the one open question in this table.
+sliding ones, and `proportional` is exactly the partial rotation above:
+`rope_angles = int(partial * head_dim // 2)` real frequencies followed by
+`head_dim / 2 - rope_angles` zeros, which rotate nothing.
+
+The part worth stating is where its exponent divides. The frequencies are
+`theta ** -(2i / head_dim)`, over the **full** head dim rather than the rotated
+width, so the rotated quarter keeps its proportional place in the ladder
+instead of being stretched across it — which is what the name is describing.
+Rotating 128 channels with an exponent over 128 is the obvious reading and
+gives an entirely different set of frequencies. `rope_tables` in
+`test_gemma_attention_gpu.c` already divides by the full head dim, so this is
+confirmed rather than outstanding.
 
 ## What is checked, and what that leaves
 
@@ -83,7 +92,8 @@ Qwen and which is worth checking here rather than assuming.
 
 ## Do this first
 
-Resolve `rope_type: proportional`. It is the only entry above that is not
-already implemented and confirmed, it affects eight of forty-eight layers, and
-getting it wrong yields conditioning that is plausible rather than obviously
-broken — which is the failure mode this whole path has been built to avoid.
+Nothing is outstanding in the table above; the runner can be written against
+it. What is left is assembly, so the order that finds mistakes soonest is: load
+and resolve every tensor for all forty-eight layers and assert the ConvRot
+groups agree wherever projections share an input, before running anything. A
+wrong group is silent, and it is the one seam that a shape check cannot catch.
