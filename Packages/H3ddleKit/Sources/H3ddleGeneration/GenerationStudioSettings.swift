@@ -84,6 +84,61 @@ public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifia
   }
 }
 
+/// What a model built for stills renders, as against the video ladder above.
+///
+/// These are square, and that is this build's limit rather than the model's:
+/// the Z-Image path carries one side through the transformer and the decoder,
+/// so a canvas is a single number instead of a pair. The aspect-ratio control
+/// therefore has nothing to act on and is hidden while such a model is
+/// picked, rather than being offered and quietly ignored.
+///
+/// The ladder stops at 1536 because the decoder holds 256 channels at the
+/// full picture — about 12 GB there — and starts at 512 because below it the
+/// model stops following the prompt reliably.
+public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
+  case s512
+  case s768
+  case s1024
+  case s1280
+  case s1536
+
+  public var id: String { rawValue }
+
+  public var side: Int {
+    switch self {
+    case .s512: 512
+    case .s768: 768
+    case .s1024: 1024
+    case .s1280: 1280
+    case .s1536: 1536
+    }
+  }
+
+  public var label: String { "\(side) × \(side)" }
+
+  /// Image tokens at this size, which is what the transformer's cost tracks.
+  public var tokens: Int {
+    let side = self.side / 8 / 2
+    return side * side
+  }
+
+  /// Roughly what a whole render costs on an M1 Pro at eight passes, so the
+  /// price of a tier is visible before it is paid rather than discovered by
+  /// waiting ten minutes.
+  ///
+  /// End to end, including loading and encoding — the number a person waits,
+  /// not the sampler's share of it. 512 and 1536 are measured (78s and 495s);
+  /// the rest are read off the line through them, which is fair because cost
+  /// is close to linear in tokens over this range. The first render after
+  /// launch runs longer than any of these while 14 GB of weights are read
+  /// from disk for the first time; a measured 1024 came in at 322s cold
+  /// against 234s warm.
+  public var approximateMinutes: Double {
+    // 25.9s of fixed cost plus 50.9ms a token, from the two measured ends.
+    (25.9 + 0.0509 * Double(tokens)) / 60
+  }
+}
+
 public enum GenerationPreset: String, CaseIterable, Codable, Sendable, Identifiable {
   case preview
   case standard
@@ -106,6 +161,10 @@ public enum GenerationPreset: String, CaseIterable, Codable, Sendable, Identifia
 
 public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   public var canvas: GenerationCanvas
+  /// Kept beside the video canvas rather than replacing it: the two ladders
+  /// are different shapes, and switching model should not forget which
+  /// resolution the other one was set to.
+  public var imageCanvas: ImageCanvas
   public var denoisingSteps: Int
   public var activeDiTLayers: Int
   public var coreReuse: Int
@@ -119,6 +178,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
 
   public init(
     canvas: GenerationCanvas,
+    imageCanvas: ImageCanvas = .s1024,
     denoisingSteps: Int,
     activeDiTLayers: Int,
     coreReuse: Int,
@@ -126,6 +186,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     fastStill: Bool = false
   ) {
     self.canvas = canvas
+    self.imageCanvas = imageCanvas
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
@@ -135,6 +196,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
 
   enum CodingKeys: String, CodingKey {
     case canvas
+    case imageCanvas
     case denoisingSteps
     case activeDiTLayers
     case coreReuse
@@ -145,6 +207,10 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     canvas = try container.decode(GenerationCanvas.self, forKey: .canvas)
+    // Settings persisted before a dedicated image model existed decode to
+    // the tier its own card quotes a time for.
+    imageCanvas =
+      try container.decodeIfPresent(ImageCanvas.self, forKey: .imageCanvas) ?? .s1024
     denoisingSteps = try container.decode(Int.self, forKey: .denoisingSteps)
     activeDiTLayers = try container.decode(Int.self, forKey: .activeDiTLayers)
     coreReuse = try container.decode(Int.self, forKey: .coreReuse)

@@ -103,4 +103,44 @@ struct GenerationCanvasTests {
     #expect(GenerationCanvas.p480.dimensions(aspect: 0) == (480, 480))
     #expect(GenerationCanvas.p480.dimensions(aspect: .nan) == (480, 480))
   }
+
+  /// The snapshot writes its own coding keys, so a new knob has to be added
+  /// in four places and reaches the wire only if every one of them agrees.
+  /// A round trip is the cheapest way to catch the one that was missed.
+  @Test("The image canvas survives a round trip and defaults when absent")
+  func imageCanvasCoding() throws {
+    let knobs = GenerationKnobSnapshot(
+      canvas: .p768,
+      imageCanvas: .s1280,
+      denoisingSteps: 8,
+      activeDiTLayers: 30,
+      coreReuse: 1
+    )
+    let encoded = try JSONEncoder().encode(knobs)
+    #expect(try JSONDecoder().decode(GenerationKnobSnapshot.self, from: encoded) == knobs)
+
+    // Settings written before the knob existed carry no key at all.
+    let legacy = Data(
+      #"{"canvas":"p768","denoisingSteps":8,"activeDiTLayers":30,"coreReuse":1}"#.utf8
+    )
+    let restored = try JSONDecoder().decode(GenerationKnobSnapshot.self, from: legacy)
+    #expect(restored.imageCanvas == .s1024)
+  }
+
+  /// Every tier the picker offers has to be one the renderer accepts: a
+  /// multiple of 16 whose token count is a multiple of 32. 1440 looks like it
+  /// belongs in this list and does not qualify, which is why it is asserted
+  /// rather than eyeballed.
+  @Test("Every offered image canvas is one the renderer can actually draw")
+  func imageCanvasesAreRenderable() {
+    for canvas in ImageCanvas.allCases {
+      #expect(canvas.side % 16 == 0, "\(canvas.side) is not a multiple of 16")
+      let tokensSide = canvas.side / 8 / 2
+      #expect(
+        (tokensSide * tokensSide) % 32 == 0,
+        "\(canvas.side) gives \(tokensSide * tokensSide) tokens, not a multiple of 32"
+      )
+      #expect(canvas.label == "\(canvas.side) × \(canvas.side)")
+    }
+  }
 }
