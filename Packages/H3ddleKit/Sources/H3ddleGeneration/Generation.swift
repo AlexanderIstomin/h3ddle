@@ -32,10 +32,24 @@ public enum AudioGenerationEngine: String, Codable, Sendable {
   public var usesOwnPackage: Bool { self != .h3 }
 }
 
+/// Which model a still runs through. Both write a PNG, so nothing downstream
+/// differs; what differs is the package and the quality. H3 makes a still by
+/// rendering a very short clip and keeping a frame, which is why the video
+/// knobs apply to it. Z-Image-Turbo is a dedicated text-to-image model.
+public enum ImageGenerationEngine: String, Codable, Sendable {
+  case h3
+  case zImage
+
+  /// Whether this engine loads a package of its own rather than the H3 tree.
+  public var usesOwnPackage: Bool { self != .h3 }
+}
+
 public struct GenerationRequest: Hashable, Codable, Sendable {
   public var kind: GenerationKind
   /// Audio only; ignored by the other kinds.
   public var audioEngine: AudioGenerationEngine = .h3
+  /// Image only; ignored by the other kinds.
+  public var imageEngine: ImageGenerationEngine = .h3
   /// Required when `audioEngine` is `.speech`, ignored otherwise: the line to
   /// speak travels in `prompt`, and everything else about the voice here.
   public var speech: EngineSpeechOptions?

@@ -81,6 +81,14 @@ extension ModelFolderInspection {
     "tokenizer.json",
   ]
 
+  /// Files that identify a Z-Image package, on the same terms: these are what
+  /// zimage_generate opens. The transformer name is shared with nothing else
+  /// here, but the tokenizer is, so all four have to be present.
+  public static let imageNames = [
+    "transformer.safetensors", "text_encoder.safetensors",
+    "vae_decoder.safetensors", "tokenizer.json",
+  ]
+
   /// Whether a folder holds a speech package rather than a Stable Audio one.
   ///
   /// Unlike the video/audio split this much *is* answerable from the files —
@@ -118,6 +126,8 @@ extension ModelFolderInspection {
       return soundEffectNames.allSatisfy(exists) || speechNames.allSatisfy(exists)
     case .video:
       return videoMarkers.contains(where: exists)
+    case .image:
+      return imageNames.allSatisfy(exists)
     }
   }
 }

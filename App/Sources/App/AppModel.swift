@@ -154,6 +154,7 @@ final class AppModel {
     ModelCatalog.stableAudio3SmallSFX,
     ModelCatalog.stableAudio3SmallMusic,
     ModelCatalog.qwen3TTSSpeech,
+    ModelCatalog.zImageTurbo,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   /// What each package still has to fetch, which is less than it weighs
@@ -1402,8 +1403,12 @@ final class AppModel {
     at url: URL
   ) -> String {
     let name = url.lastPathComponent
-    let other: ModelCapability = capability == .audio ? .video : .audio
-    if ModelFolderInspection.matches(other, at: url) {
+    // Every other heading, not "the other one": there are three now, and
+    // asking a single opposite would have told someone who filed a Z-Image
+    // folder under Video that it looked like an audio model.
+    if let other = ModelCapability.allCases.first(where: {
+      $0 != capability && ModelFolderInspection.matches($0, at: url)
+    }) {
       return "\(name) looks like a \(other.sectionTitle.lowercased()) model. "
         + "Add it under \(other.sectionTitle) instead."
     }
@@ -1416,6 +1421,9 @@ final class AppModel {
     case .video:
       return "\(name) does not hold an H3 model: expected either "
         + "FL2VA/transformer/config.json or a diffusion_models folder."
+    case .image:
+      return "\(name) is not an image package. One holds "
+        + "\(ModelFolderInspection.imageNames.joined(separator: ", "))."
     }
   }
 

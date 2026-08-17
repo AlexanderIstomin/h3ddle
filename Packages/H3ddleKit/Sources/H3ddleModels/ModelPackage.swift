@@ -4,6 +4,7 @@ public enum ModelPackageRole: String, Codable, Equatable, Sendable {
   case transformer
   case textEncoder
   case videoVAE
+  case imageVAE
   case audioVAE
   case referenceTransformer
   case previewDecoder
@@ -105,11 +106,15 @@ public enum ModelGenerationProfile: String, Codable, Equatable, Sendable {
 public enum ModelCapability: String, Codable, Sendable, CaseIterable {
   case video
   case audio
+  /// A still from a model built for stills, as against the frame H3 keeps out
+  /// of a very short clip. H3 remains under `.video` and still makes images.
+  case image
 
   public var sectionTitle: String {
     switch self {
     case .video: "Video"
     case .audio: "Audio"
+    case .image: "Image"
     }
   }
 }
@@ -417,6 +422,68 @@ public enum ModelCatalog {
   /// by `Scripts/convert-turbo-package.py`, hosted on Hugging Face. A local
   /// conversion output installs instantly when present; every shared file
   /// reuses the standard package's bytes.
+  /// Z-Image-Turbo, repackaged: one file per subsystem, the autoencoder's
+  /// encoder half dropped because text to image never runs it, and the int8
+  /// matrices stored input-major so the GPU reads them coalesced. No tensor
+  /// was retrained, merged, pruned, or quantized in the repackaging.
+  public static let zImageTurbo = ModelPackageManifest(
+    id: "h3ddle-z-image-turbo-int8-v1",
+    displayName: "Z-Image · Turbo",
+    detail:
+      "A dedicated text-to-image model: eight passes, no guidance pass, "
+      + "markedly better stills than a frame kept from a clip. 1024² takes "
+      + "about three and a half minutes on an M1 Pro; the larger canvases "
+      + "want more memory than the minimum.",
+    repository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
+    revision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
+    licenseName: "Apache License 2.0",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    capability: .image,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "transformer.safetensors",
+        byteCount: 6_175_253_480,
+        sha256: "c7b59609b92545842826ef0302316350772152e8e8491a93c226b9e3511cfa13",
+        sourceRepository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
+        sourceRevision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
+        sourcePath: "transformer.safetensors"
+      ),
+      ModelPackageFile(
+        role: .textEncoder,
+        path: "text_encoder.safetensors",
+        byteCount: 8_044_982_208,
+        sha256: "3182dbe94a375be115bd4f9a1c6d82c7bad8e441e8c27e890cbb053d10ad4f88",
+        sourceRepository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
+        sourceRevision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
+        sourcePath: "text_encoder.safetensors"
+      ),
+      ModelPackageFile(
+        role: .imageVAE,
+        path: "vae_decoder.safetensors",
+        byteCount: 99_106_470,
+        sha256: "b17536564790de05150409e5fb10c90e47459b2502153d38c6465784b016e4c4",
+        sourceRepository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
+        sourceRevision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
+        sourcePath: "vae_decoder.safetensors"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "tokenizer.json",
+        byteCount: 11_422_654,
+        sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        sourceRepository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
+        sourceRevision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
+        sourcePath: "tokenizer.json"
+      ),
+    ]
+  )
+
   public static let minimaxH3TurboInt8 = ModelPackageManifest(
     id: "h3ddle-minimax-h3-turbo-int8-v1",
     displayName: "MiniMax H3 · Turbo (Experimental)",

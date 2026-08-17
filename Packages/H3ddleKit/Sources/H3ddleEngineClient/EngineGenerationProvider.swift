@@ -108,6 +108,9 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           lastFrameURL: request.lastFrameURL,
           referenceImageURLs: request.referenceImageURLs,
           speech: request.speech,
+          image: request.kind == .image && request.imageEngine == .zImage
+            ? EngineImageOptions(model: .zImage, steps: request.denoisingSteps)
+            : nil,
           modelDirectory: modelDirectory,
           outputURL: outputURL
         )
