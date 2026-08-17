@@ -5,6 +5,46 @@ import Testing
 
 @Suite("Engine JSON-lines protocol")
 struct EngineProtocolTests {
+  /// The request has hand-written CodingKeys and a hand-written decoder, so a
+  /// new field can be added to the struct, compile, satisfy the memberwise
+  /// initialiser, and still never cross the wire. That is exactly what
+  /// happened to `image`: the service saw nil, fell through to H3's loader and
+  /// failed with a model-layout error that said nothing about the real cause.
+  /// Every optional settings group gets a round trip here for that reason.
+  @Test("Per-model settings survive the wire, not just the initialiser")
+  func optionalSettingsRoundTrip() throws {
+    let request = EngineGenerationRequest(
+      kind: .image,
+      prompt: "A red apple on a wooden table",
+      duration: 0,
+      canvasWidth: 1024,
+      canvasHeight: 1024,
+      speech: EngineSpeechOptions(temperature: 0.9),
+      image: EngineImageOptions(model: .zImage, steps: 8),
+      outputURL: URL(fileURLWithPath: "/tmp/apple.png")
+    )
+
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+
+    #expect(decoded.image?.model == .zImage)
+    #expect(decoded.image?.steps == 8)
+    #expect(decoded.speech?.temperature == 0.9)
+    #expect(decoded == request)
+  }
+
+  /// Absent settings mean H3, which is what `.image` meant before a second
+  /// model existed. A client that has never heard of v14 keeps working.
+  @Test("A still with no image settings still means H3")
+  func absentImageSettingsMeanH3() throws {
+    let request = EngineGenerationRequest(
+      kind: .image, prompt: "x", duration: 0,
+      outputURL: URL(fileURLWithPath: "/tmp/x.png"))
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+    #expect(decoded.image == nil)
+  }
+
   @Test("Commands round trip without losing job identity")
   func commandRoundTrip() throws {
     let jobID = UUID()

@@ -449,6 +449,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case lastFrameURL
     case referenceImageURLs
     case speech
+    case image
     case modelDirectory
     case outputURL
   }
@@ -479,6 +480,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     referenceImageURLs =
       try container.decodeIfPresent([URL].self, forKey: .referenceImageURLs) ?? []
     speech = try container.decodeIfPresent(EngineSpeechOptions.self, forKey: .speech)
+    image = try container.decodeIfPresent(EngineImageOptions.self, forKey: .image)
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -505,6 +507,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
       try container.encode(referenceImageURLs, forKey: .referenceImageURLs)
     }
     try container.encodeIfPresent(speech, forKey: .speech)
+    try container.encodeIfPresent(image, forKey: .image)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }
