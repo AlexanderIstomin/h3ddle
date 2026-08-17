@@ -90,10 +90,66 @@ applied to each activation with the group the marker gives. Projections sharing
 an input must agree on that group, which `h3_text_encoder.c` already checks for
 Qwen and which is worth checking here rather than assuming.
 
-## Do this first
+## The runner, and what it settled
 
-Nothing is outstanding in the table above; the runner can be written against
-it. What is left is assembly, so the order that finds mistakes soonest is: load
-and resolve every tensor for all forty-eight layers and assert the ConvRot
-groups agree wherever projections share an input, before running anything. A
-wrong group is silent, and it is the one seam that a shape check cannot catch.
+Written and passing: `tests/test_real_ltx_text.c`, against
+`gen_ltx_text_anchor.py` in the session scratchpad. All forty-eight layers
+resolve, the first seven run against Hugging Face's own `Gemma4UnifiedTextModel`
+fed the same weights dequantized, and the whole tower plus both aggregation
+projections runs in **8.1 s at 77 tokens**. Eleven of eleven behavioural
+mutations in the tower are caught and six of six in the aggregation.
+
+The reference is built by undoing the quantization rather than reimplementing
+it — each torch weight is `(W_i8 * scale) @ H^T` from the same released file —
+so both sides consume the same numbers by different routes.
+
+**The bounds are measured, not chosen.** The reference is run twice, once with
+its dequantized weights exact and once with them rounded to BF16, and the
+second is printed beside the engine's deviation. Per layer the engine sits at
+6.6e-03 to 8.7e-03 of peak where the reference costs itself 6.0e-03 to
+9.6e-03; on the aggregation the engine is *closer* to F32 than the BF16
+reference is. Any bound not derived this way is a bound fitted to the answer.
+
+Four things the runner settled that reading could not:
+
+- **The hidden states are the residual stream entering each layer, plus the
+  final normed output.** State *i* is layer *i−1*'s output, and layer 47's raw
+  output is never a state at all. That is what makes forty-eight layers give
+  the forty-nine the aggregation's 188160 expects, and it is not the reading
+  anyone would reach for.
+- **The embedding scale is BF16.** `sqrt(3840)` is 61.96773 but the reference
+  multiplies by `embed_scale.to(bf16)`, so what runs is 62.0. Held to an F32
+  reference alone the exact value scores *better*, so the test compares the
+  embeddings against the BF16 reference directly; without that the comparison
+  rewards the wrong scale, and a mutation proving it went unnoticed.
+- **`sliding_window` is 1024**, which the config confirms and nothing above
+  mentioned. Below that length it is a no-op, which is why nothing has needed
+  it; the runner checks the prompt length and refuses rather than silently
+  attending everywhere. Windowing is outstanding work, not a solved problem.
+- **The value norm's scale is unobservable.** `k_norm.weight` is one constant
+  repeated across the head (std exactly 0), so giving it to the scale-free
+  value norm multiplies every value by a single number, which the RMS norm
+  after `o_proj` divides straight back out. Worth knowing before anyone
+  "fixes" it.
+
+Two traps in the reference itself, both of which produced silently wrong
+output rather than an error. Building the model under `torch.device("meta")`
+and calling `to_empty` leaves the *non-persistent* buffers — `embed_scale` and
+the rotary `inv_freq` tables — as uninitialized memory, and neither appears in
+a state dict, so loading weights does not repair them; a garbage `embed_scale`
+zeroed every activation. And `Gemma4UnifiedTextConfig` rewrites its own last
+layer to `full_attention`, which is right for a whole model and wrong for a
+prefix of one: asking for seven layers directly made layer 6 global. Build at
+full depth and truncate afterwards.
+
+## What is left
+
+The connector, which needs the DiT file open while this output is still live —
+see the memory constraint above. It is verified at toy dimensions and not on
+released weights.
+
+Then the question this path does not answer at all: **what actually gets fed to
+the tower.** The runner takes token ids from its fixture, so the prompt
+template, the special tokens, and whether the pipeline prepends anything are
+all still open. The tokenizer is verified and the tower is verified; what sits
+between them is not.
