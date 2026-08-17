@@ -53,6 +53,29 @@ enum AudioGenerationMode: Hashable {
   }
 }
 
+/// Which model renders a still. Two models, not settings of one: H3 makes an
+/// image by rendering a very short clip and keeping a frame, so the video
+/// knobs apply to it, while Z-Image is a dedicated text-to-image model with
+/// its own package and a schedule of eight passes.
+enum ImageGenerationMode: Hashable, CaseIterable {
+  case h3
+  case zImage
+
+  var engine: ImageGenerationEngine {
+    switch self {
+    case .h3: .h3
+    case .zImage: .zImage
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .h3: "H3"
+    case .zImage: "Z-Image"
+    }
+  }
+}
+
 enum ManagedModelState: Equatable {
   case checking
   case available
@@ -129,6 +152,9 @@ final class AppModel {
   /// joint soundtrack; the other two are the same Stable Audio transformer
   /// trained on different material.
   var audioMode: AudioGenerationMode = .speech
+  /// H3 by default, so an existing project renders what it always did.
+  var imageMode: ImageGenerationMode = .h3
+  var selectedImageModelID: String?
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
   var generationOverallProgress = 0.0
@@ -568,7 +594,8 @@ final class AppModel {
     generationPreviewImage = nil
     phaseTimeline = GenerationPhaseTimeline()
     let audioEngine = kind == .audio ? audioMode.engine : .h3
-    let ownPackage = audioEngine.usesOwnPackage
+    let imageEngine = kind == .image ? imageMode.engine : .h3
+    let ownPackage = audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
     // Speech reports frames against the ceiling it was sent, and that ceiling
     // is deliberately generous so a long line is never cut off mid-word — so
     // its fraction stops wherever the line ends, measured at 49% on a run that
@@ -581,10 +608,13 @@ final class AppModel {
       return max(1, min(4, duration / expected))
     }()
     let runningModelName =
-      ownPackage
-      ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
-        .displayName ?? "an audio model")
-      : (selectedModelChoice?.displayName ?? "a local model folder")
+      imageEngine.usesOwnPackage
+      ? (modelChoices.first { $0.isInstalled && $0.capability == .image }?
+        .displayName ?? "an image model")
+      : (audioEngine.usesOwnPackage
+        ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
+          .displayName ?? "an audio model")
+        : (selectedModelChoice?.displayName ?? "a local model folder"))
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
       ownPackage: ownPackage,
@@ -655,6 +685,7 @@ final class AppModel {
     let request = GenerationRequest(
       kind: kind,
       audioEngine: audioEngine,
+      imageEngine: imageEngine,
       // The duration is a ceiling for speech, not a target: the model stops
       // when the line is spoken.
       // Always present for speech, even with no clip: a nil reference means
@@ -685,12 +716,14 @@ final class AppModel {
       lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
       referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
     )
-    // The audio models load their own packages; the H3 directory would be
-    // the wrong tree entirely.
+    // The audio models and Z-Image load their own packages; the H3 directory
+    // would be the wrong tree entirely.
     let nativeModelDirectory =
-      ownPackage
-      ? audioPackageDirectory
-      : (usesNativeEngine(for: kind) ? modelDirectory : nil)
+      imageEngine.usesOwnPackage
+      ? imagePackageDirectory
+      : (audioEngine.usesOwnPackage
+        ? audioPackageDirectory
+        : (usesNativeEngine(for: kind) ? modelDirectory : nil))
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
         EngineGenerationProvider(
@@ -987,6 +1020,16 @@ final class AppModel {
   /// generate the wrong kind of audio. Reading the installed choices rather
   /// than the manifests means a folder added by hand counts too, which it
   /// previously did not — it could be selected but never generated from.
+  /// Where the Z-Image package lives, on the same terms as the audio ones:
+  /// whichever installed image package is chosen, or the first there is.
+  var imagePackageDirectory: URL? {
+    let usable = modelChoices.filter { $0.isInstalled && $0.capability == .image }
+    if let chosen = usable.first(where: { $0.id == selectedImageModelID }) {
+      return chosen.directory
+    }
+    return usable.first?.directory
+  }
+
   var audioPackageDirectory: URL? {
     let role = audioMode.audioRole
     let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == role }

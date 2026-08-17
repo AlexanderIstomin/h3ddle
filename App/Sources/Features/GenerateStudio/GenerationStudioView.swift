@@ -121,6 +121,20 @@ struct GenerationStudioView: View {
       Text(kind.rawValue.capitalized)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
+      if kind == .image {
+        // Two models, not settings of one: H3 makes a still by rendering a
+        // very short clip and keeping a frame, so its video knobs apply;
+        // Z-Image is a dedicated text-to-image model with its own package.
+        H3SegmentedControl(
+          selection: $model.imageMode,
+          segments: [
+            .init(value: .h3, title: "H3", systemImage: "film"),
+            .init(value: .zImage, title: "Z-IMAGE", systemImage: "photo"),
+          ],
+          isEnabled: !model.isGenerating
+        )
+        .padding(.leading, 4)
+      }
       if kind == .audio {
         // Two models, not settings of one: speech is Qwen3-TTS, which says the
         // words you typed in a voice cloned from a clip; music and sound
