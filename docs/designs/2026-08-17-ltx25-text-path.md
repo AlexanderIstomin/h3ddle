@@ -142,14 +142,47 @@ layer to `full_attention`, which is right for a whole model and wrong for a
 prefix of one: asking for seven layers directly made layer 6 global. Build at
 full depth and truncate afterwards.
 
+## The connector, which closes the path
+
+`tests/test_real_ltx_connector.c`, checked against the vendored
+`Embeddings1DConnector`. Both streams, eight blocks each, **1.55 s and 0.40 s**
+over a 128-token span. Video agrees to 3.6e-01 where the reference's own BF16
+pass costs it 4.8e-01; audio to 1.48e-01 against 1.49e-01. Eleven of eleven
+mutations caught.
+
+It is a **separate binary**, and that is the memory constraint above becoming
+architecture rather than a note. The text runner writes its aggregated features
+out; the connector reads them back with only the DiT open. The app needs that
+shape regardless, so it is worth the test having it too.
+
+Three things only visible at released scale:
+
+- **The span must be a multiple of 128**, the register count — the reference
+  asserts it outright. 77 real tokens become a span of 128.
+- **Attention is bidirectional with no mask at all.** The reference zeroes its
+  mask the moment it substitutes registers, so valid tokens attend to
+  registers and the registers' content shapes the result. They are model
+  weights, not scaffolding, which is why the check compares the padded rows
+  separately: agreeing only on the valid rows would hide a register mistake.
+- **The frequencies are float64** by config, spread geometrically over the
+  whole inner width and split across heads, so no two of the 32 rotate alike.
+
+Two conventions differ from the Gemma tower and both are silent if confused:
+every norm between the residuals is parameter-free, and the query/key norms
+span the full 4096 rather than one 128-wide head.
+
 ## What is left
 
-The connector, which needs the DiT file open while this output is still live —
-see the memory constraint above. It is verified at toy dimensions and not on
-released weights.
+The conditioning path is complete and checked end to end. What it does not
+answer is **what gets fed to the tower.** The runner takes token ids from its
+fixture, so the prompt template, the special tokens, and whether the pipeline
+prepends anything are all still open. The tokenizer is verified and the tower
+is verified; what sits between them is not.
 
-Then the question this path does not answer at all: **what actually gets fed to
-the tower.** The runner takes token ids from its fixture, so the prompt
-template, the special tokens, and whether the pipeline prepends anything are
-all still open. The tokenizer is verified and the tower is verified; what sits
-between them is not.
+Related and unresolved: **whether the pipeline pads before the tower or after.**
+This pads after. Under causal attention with right padding the two are
+equivalent for the valid rows, which is an argument rather than a check, and it
+stops being an argument if the padding is on the left.
+
+And prompts past the **1024-token sliding window** are refused rather than
+windowed. Below it the window is a no-op, which is why nothing has needed it.
