@@ -5,10 +5,11 @@ released weights against the public implementation found was that they are
 different models — and the difference is invisible to a loader that matches on
 tensor names.
 
-**The decoder now runs** — `tests/test_real_ltx_video_vae.c` against
-`gen_ltx_vae_anchor.py`, all fourteen stages within 1.2e-05 of peak, 14 of 15
-mutations caught. What that took, and what the patch turned out to rest on, is
-in "What running it settled" at the bottom.
+**Both halves now run** — `tests/test_real_ltx_video_vae.c` against
+`gen_ltx_vae_anchor.py`, every stage inside its measured floor, 25 of 26
+mutations caught, and the engine's own encode→decode round trip at **30.80 dB
+— the reference's number to the decimal**. What that took, and what the patch
+turned out to rest on, is in "What running it settled" at the bottom.
 
 ## The finding
 
@@ -165,14 +166,53 @@ so weights load with no rearrangement and only activations need permuting.
 which is precisely the split LTX needs: pad time explicitly by replication
 first, then let the kernel handle the spatial axes.
 
+### The encoder, and the three places it disagrees with the decoder
+
+They are mirror images, and none of these three is stated anywhere upstream:
+
+- **the encoder is causal and the decoder is not.** `Encoder.forward` passes no
+  `causal` argument at all, so every convolution takes the default — two copies
+  of the first frame in front, none behind. The decoder was built with
+  `causal_decoder: False` and pads one at each end. Same class, opposite
+  convention. Both directions of getting this backwards are mutation-caught.
+- **the encoder's downsample carries a skip the upsample has no counterpart
+  for**: space-to-depth of its own input, averaged over consecutive channel
+  groups. The group size is nowhere in the checkpoint — it follows from the
+  widths, `in_channels * prod(stride) / out_channels`.
+- **frame handling is asymmetric.** The encoder *prepends* a duplicate first
+  frame before a temporal downsample; the decoder *discards* its first output
+  frame after a temporal upsample. That pair is what holds `8*(k-1)+1` in both
+  directions.
+
+### The tolerance had to become per-stage, and measuring is what settled it
+
+One encoder stage failed a flat 5e-05 bound at 9.9e-05. Running the reference
+twice — F32 and F64, `gen_ltx_vae_anchor.py --floor` — showed the spread is
+**not uniform across the stack**: near 5e-06 almost everywhere, but **1.65e-04**
+at the encoder's first downsample and 7.1e-05 at the block after it. That stage
+builds a peak of 85 out of inputs near 19, summing a 64-channel convolution
+against a group-averaged skip, so it cancels hard. The engine's deviation there
+is *smaller* than what F32 costs the reference.
+
+So the flat bound was the defect, not the engine. **A single tolerance across a
+50-block stack is a guess**; the two elevated stages now carry their measured
+floor, and everything else keeps 5e-05.
+
+### The round trip is the check the per-stage ones cannot make
+
+Every stage comparison says the engine is close to a reference *at that point*.
+The engine's own encode→decode says the two halves are inverses of each other,
+and it lands on 30.80 dB — the reference's figure exactly.
+
 ### What is still missing
 
-The four pixel shuffles run on the host, one readback each. At the anchor size
+The eight repackings — four depth-to-space, four space-to-depth — run on the
+host, one readback each. At the anchor size
 the largest moves 1.2M floats and costs little, but a real decode wants a
 kernel — `b (c p1 p2 p3) d h w -> b c (d p1) (h p2) (w p3)`, a pure gather. It
 is the only piece of the decoder the GPU cannot do end to end, and it is a
 performance gap rather than a correctness one. Deliberately left out of the
 shared Metal files.
 
-A 9-frame 128×128 decode takes 2.65 s, nearly all of it weight loading at this
-size. The encoder is unported — the round trip above runs it in torch.
+A 9-frame 128×128 encode is 2.45 s and the decode 2.61 s, nearly all of it
+weight loading at this size.
