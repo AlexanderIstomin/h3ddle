@@ -1,8 +1,12 @@
-# Bringing the retuned int8 GEMM to H3
+# Bringing the retuned int8 GEMM to H3 and LTX-2.5
 
 Deferred until the Z-Image lane is integrated. Written down because the
 measurement is done and the work is not, and because it is worth more than
 anything remaining in the image lane.
+
+The filename says H3 because that is what it was written for. LTX-2.5 was
+measured afterwards and settles a converter default rather than a migration,
+so it is a section here rather than a note of its own.
 
 ## What was found
 
@@ -98,6 +102,65 @@ Two measurement rules earned the hard way, both of which apply here:
 - **`gpu_seconds` undercounts whenever MPSGraph is in the graph**, because it
   times only the root command buffer and MPSGraph schedules children.
   `command_wait_seconds` is the honest one.
+
+## And LTX-2.5, which is not converted yet
+
+The same harness at LTX's shapes, read from the released checkpoint rather
+than the paper. M1 Pro, 4096 video tokens and 256 audio ones:
+
+| shape | K → N | 8x8, as shipped | 64x40, input-major | | TFLOP/s |
+|-------|-------|-----------------|--------------------|---|---------|
+| v qkv | 4096 → 4096 | 274.3 ms | 39.6 ms | 6.93x | 3.47 |
+| v out | 4096 → 4096 | 270.9 ms | 39.6 ms | 6.84x | 3.47 |
+| v ff1 | 4096 → 16384 | 1015.3 ms | 152.7 ms | 6.65x | 3.60 |
+| v ff2 | 16384 → 4096 | 1419.4 ms | 161.9 ms | 8.77x | 3.40 |
+| a2v q | 4096 → 2048 | 133.5 ms | 20.9 ms | 6.38x | 3.29 |
+| a2v out | 2048 → 4096 | 108.5 ms | 20.1 ms | 5.39x | 3.41 |
+| a qkv | 2048 → 2048 | 3.3 ms | 1.4 ms | 2.39x | 1.57 |
+| a ff1 | 2048 → 8192 | 13.3 ms | 3.1 ms | 4.26x | 2.76 |
+| a ff2 | 8192 → 2048 | 16.9 ms | 5.0 ms | 3.38x | 1.72 |
+
+The video stream reaches 3.4-3.6 TFLOP/s, which is where the tile runs on the
+shapes it was actually swept against. That is the finding worth more than the
+ratios: LTX's widths are close enough to H3's that the geometry is at its
+tuned efficiency here, not merely better than what it replaced. Weighted by
+how often each shape runs, a block's projections go 4545 ms to 635 ms, 7.2x.
+
+Trust the second run. The first measured a 45% spread between `a2v q` and
+`v2a k`, which are the same shape; interleaving within a shape does not cover
+shader compilation and first-touch cost across the sweep.
+
+The audio stream is a different regime and should not be quoted at the video
+stream's ratio. At 256 rows the tile is four deep, so occupancy decides rather
+than the weight re-read the sweep was reasoning about, and throughput roughly
+halves. It still wins everywhere, and it is a small share of a block, so this
+is a reason not to generalise the number rather than a reason to re-sweep.
+
+**None of the migration hazards above apply.** LTX has no converter yet, so
+this is a default to set rather than a layout to change, and two of the three
+traps are absent outright: the feed-forward is plain GELU at 4x — `ff.net.0.proj`
+is [16384, 4096] and `net.2` consumes all 16384 — so there is no w1/w3 fusion
+to survive the transpose. What does need deciding at converter-writing time is
+whether to fuse q, k and v into one N=12288 GEMM; they share an input, so it is
+worth doing, and it is a fusion along output channels, which is exactly the
+class that becomes a within-row operation after transposing.
+
+The third trap has already touched work in the tree: `test_ltx_int8_format.c`
+loads nine real LTX projections through `h3_weight_load_i8_linear`, which
+infers the scale count from the matrix's first dimension. Input-major storage
+changes that test's loader path along with everything else's.
+
+Two things this measurement does not settle. **The attention share is probably
+larger for LTX than for H3** — eight attentions a block over a video sequence
+in the thousands — so the f32 SDPA switch above may be worth more here than
+the tile is, and the stubbing technique should decide that before anyone
+assumes the GEMM is the target. And **the absolute number deserves attention on
+its own**: 635 ms a block across 48 blocks is about 31 s per denoise step on
+this machine at 4096 video tokens, GEMM alone, with attention and the
+elementwise work on top. That is with the tuned kernel. Untuned it is 3.7
+minutes a step, so for LTX this is not an optimization but the difference
+between a slow feature and an unusable one — and even after it, step count is
+what decides whether the lane ships.
 
 ## Gate
 
