@@ -6,10 +6,16 @@ different models — and the difference is invisible to a loader that matches on
 tensor names.
 
 **Both halves now run** — `tests/test_real_ltx_video_vae.c` against
-`gen_ltx_vae_anchor.py`, every stage inside its measured floor, 25 of 26
+`gen_ltx_vae_anchor.py`, every stage inside its measured floor, 29 of 30
 mutations caught, and the engine's own encode→decode round trip at **30.80 dB
-— the reference's number to the decimal**. What that took, and what the patch
-turned out to rest on, is in "What running it settled" at the bottom.
+— the reference's number to the decimal**.
+
+**The patch below turned out to be unnecessary, and relying on it hid a real
+defect.** `ltx_core` — the package that ships with the model — carries its own
+`model/video_vae/` which matches the checkpoint *unpatched*. Switching to it
+exposed a missing latent normalization that no round trip could ever have
+caught. See "What `ltx_core` corrected" at the bottom; the sections between are
+kept because the version-drift finding about `ltx_video` still stands.
 
 ## The finding
 
@@ -216,3 +222,64 @@ shared Metal files.
 
 A 9-frame 128×128 encode is 2.45 s and the decode 2.61 s, nearly all of it
 weight loading at this size.
+
+## What `ltx_core` corrected
+
+The whole analysis above was done against `ltx_video`, patched. That was the
+wrong reference to be using, and finding the right one changed the answer.
+
+`ltx_core` — the package the DiT and the text tower were already anchored
+against — contains `model/video_vae/`. It **matches the checkpoint unpatched**,
+all 86 tensors including the per-channel statistics, and its decoder agrees
+with the patched `ltx_video` one **bit for bit** once one step is supplied.
+
+So the patch was right about the convolution stack. It could not be right about
+the thing it had no way to express:
+
+### The latent is normalized, and the VAE is what normalizes it
+
+`VideoEncoder.forward` ends with `per_channel_statistics.normalize(means)` —
+`(x - mean) / std`. `VideoDecoder.forward` *begins* with `un_normalize` —
+`x * std + mean`. Both read the `per_channel_statistics.*` tensors stored
+beside the weights. `ltx_video` has neither.
+
+This is the space the DiT works in, so it is not optional and it is not small:
+
+```
+std   0.0742 .. 0.9141
+mean -0.5547 .. +0.4277
+```
+
+A decoder without it is wrong by up to 13× per channel plus an offset. Fed a
+real DiT latent it produces noise.
+
+### Why the round trip could not see it
+
+The first version of this port scored an engine encode→decode at 30.80 dB and
+treated that as evidence the halves were right. They were — but **both omitted
+the same step, at opposite ends, where the omissions are exact inverses**.
+
+Forcing the statistics to an identity today gives:
+
+```
+FAIL enc_normalized     9.11e-01 of peak      ... every stage off by 3x to 12x
+FAIL dec_denormalized   4.05e+00 of peak
+FAIL conv_in            3.96e+00 of peak
+  ok round trip         30.80 dB              <- unchanged, to the decimal
+```
+
+**A round trip validates the composition, not the boundary.** The tensor it
+never inspects is the one in the middle, and that is exactly where this lived.
+That mutation is now in the suite, first in the list, for this reason.
+
+### What to take from it
+
+The rule was already written down after the `ltx_video` shape mismatch: *check
+any LTX reference against the checkpoint, and prefer the one that came with the
+model.* Half of it got followed — the shapes were checked — and the other half
+was not: I stopped looking for a better reference once I had one I could patch
+into agreement. `ltx-core` is a published PyPI package; one `pip index` would
+have found it.
+
+A patched reference should be a last resort with an expiry date on it, not a
+foundation.
