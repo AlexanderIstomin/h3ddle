@@ -9,9 +9,45 @@ import Foundation
 /// position is read from the step counter in the phase name, with the
 /// within-phase fraction filling in the current step.
 public enum GenerationRemaining {
+  /// The share of the bar given to everything before the first denoising
+  /// pass — loading weights and encoding the prompt.
+  ///
+  /// It is a fixed slice rather than a measured one because preparation is a
+  /// roughly constant cost while denoising grows with canvas and step count,
+  /// so its true share is different every run and cannot be known at the
+  /// start. Fifteen percent is about what it is for a 1024-pixel Z-Image
+  /// render, which is the case where the wait was long enough to complain
+  /// about: two minutes of a bar that had not moved.
+  public static let preparationShare = 0.15
+
+  /// The share held back for decoding, which happens after the last pass.
+  /// Without it the bar reaches 100% while the picture is still being made,
+  /// and the last stretch of the wait happens against a full bar.
+  public static let decodeShare = 0.05
+
+  /// Where the bar sits once denoising is done and the decoder is running.
+  public static let decodeProgress = 1 - decodeShare
+
   /// Overall completion in 0...1, or nil when the phase carries no step
   /// counter to anchor against.
+  ///
+  /// Denoising occupies the middle: above `preparationShare` so the bar never
+  /// goes backwards when the first pass lands, and below `decodeProgress` so
+  /// there is somewhere left to go afterwards.
   public static func overallProgress(
+    phase: String,
+    phaseFraction: Double
+  ) -> Double? {
+    guard let fraction = denoiseFraction(phase: phase, phaseFraction: phaseFraction)
+    else { return nil }
+    return preparationShare + (decodeProgress - preparationShare) * fraction
+  }
+
+  /// How far through the *denoising* the run is, which is what a projection
+  /// may extrapolate from. Preparation is deliberately excluded: it runs at
+  /// its own unrelated pace, and a projection made from it says four minutes
+  /// where the answer is fifteen.
+  public static func denoiseFraction(
     phase: String,
     phaseFraction: Double
   ) -> Double? {
@@ -21,6 +57,13 @@ public enum GenerationRemaining {
     let completedSteps = Double(step - 1)
     let fraction = min(max(phaseFraction, 0), 1)
     return min(1, max(0, (completedSteps + fraction) / Double(total)))
+  }
+
+  /// Where the bar sits while the run is still preparing. Real work drives
+  /// it — layers of the text encoder — rather than a timer, so a stall shows
+  /// as a stall instead of a bar that keeps moving over a hung process.
+  public static func preparationProgress(phaseFraction: Double) -> Double {
+    preparationShare * min(1, max(0, phaseFraction))
   }
 
   /// Pulls "3" and "6" out of "denoise step 3/6 transformer".
