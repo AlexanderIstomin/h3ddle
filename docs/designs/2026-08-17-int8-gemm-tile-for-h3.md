@@ -80,12 +80,115 @@ Note also that `h3_weight_load_i8_linear` infers the scale count from the
 matrix's first dimension. That stops being the output count after transposing,
 so weight and scales must be loaded separately.
 
-## Do this first
+## Measured, 2026-08-17: it is 97% of a pass
 
-**Nobody has measured what fraction of H3 video generation is the DiT GEMM.**
-7.8x on a third of the runtime is 1.4x overall, and this is not a hypothetical
-worry: every in-situ figure in the Z-Image port came in below its isolated one,
-twice by enough to reverse a decision.
+This section replaces the instruction that used to stand here to measure the
+share before doing anything. It has been measured, and the caution below it
+was misplaced in the other direction — the GEMM is not a third of the runtime,
+it is nearly all of it.
+
+A real generation, 640x352 at 22 frames, turbo package, preview quality: 1625
+rows, 50 blocks. The four projections were skipped inside the run and the
+whole thing timed by difference, twice each way:
+
+| | per denoising pass |
+|---|---|
+| whole pass | 145.2 s |
+| with the four projections skipped | 4.6 s |
+| **the int8 GEMM** | **140.5 s — 97%** |
+
+Four runs, order swapped, agreeing to 0.1 s; this machine's usual 20% drift
+did not appear at all. An isolated benchmark of the same four shapes at 1625
+rows predicted 139.7 s against the 140.5 s measured in situ, which is the
+first time in this work those two have agreed rather than the isolated figure
+flattering itself.
+
+At the 7.53x measured for these shapes at 1625 rows, a pass goes 145.2 s to
+23.3 s — **6.2x on the denoising**, and on a whole run, where loading 27 GB of
+text encoder is a fixed 176 s:
+
+| passes | now | after | |
+|--------|-----|-------|---|
+| 2  | 466 s  | 222 s | 2.1x |
+| 8  | 1338 s | 362 s | 3.7x |
+| 20 | 3080 s | 642 s | 4.8x |
+
+**The transpose is bit-exact.** Both kernels take the same arguments and
+neither can tell which layout it was handed, so this was the one thing that
+could fail silently. Transposed weights through the retuned tile against the
+original weights through the shipped one: worst difference 0, at all four DiT
+shapes and at a deliberately ragged 97 x 5376 -> 251 that exercises the edge
+path. Not close — identical.
+
+Harnesses for all of this are in the session scratchpad: `h3_gemm_bench.c`
+(both tiles at H3's shapes, variants interleaved and the sweep order-swapped),
+`h3_tile_equiv.c` (the equivalence check), `gemm-share2.sh` with
+`analyse-gemm-share.py` (the in-situ stub measurement), and
+`transpose-h3-int8.py`. The stub itself was a four-line gate in `h3_dit.c`
+behind `H3_STUB_DIT_GEMM`, reverted afterwards rather than left in a shared
+submodule.
+
+### Done: the tile without the layout
+
+The two changes are independent, and only the second needs new weights. Taking
+the tile alone — a 64x40 kernel that reads the matrix `[output][input]`, the
+way every package on disk already holds it — needs no re-quantization, no
+converter change, no loader change and no 21 GB re-download.
+
+`h3_gpu_linear_i8_weight_bf16_square_output_major` is that kernel, and
+`h3_dit.c`'s four projections now go through a chooser; `H3_DIT_TILE=8x8`
+restores the old one, which is how the two were compared in one build.
+
+Measured end to end, same seed, interleaved and order-swapped:
+
+| | per pass | whole run, 2 passes |
+|---|---|---|
+| 8x8, as shipped | 144.3 s | 471 s |
+| 64x40, as-stored | 26.7 s | 238 s |
+| | **5.41x** | **1.98x** |
+
+Four runs, spread under 1%. **Every one produced identical pixels** — decoded
+to raw frames and hashed, all four the same. Only the mp4 container differed,
+which is a creation timestamp and not the picture; hashing the file rather
+than the frames would have reported a difference that was not there.
+
+The 233 s a run spends outside the passes is not loading, which is what it was
+first assumed to be — it is 180 s of video VAE decode and 7 s of text encoder.
+See `2026-08-17-video-vae-weight-residency.md`, which is where that went next.
+
+### What the layout would still buy, and why it is not worth it
+
+| | block at 1625 rows | |
+|---|---|---|
+| 8x8 | 2688.8 ms | |
+| 64x40 as-stored | 440.6 ms | 6.10x |
+| 64x40 input-major | 377.9 ms | 7.12x |
+
+The layout is worth 17% here rather than the 9% measured on Z-Image's shapes,
+and it is not spread evenly: `qkv`, `out` and `fc1` cost 6-8% to leave alone,
+while **`fc2` costs 52%**. Its K is 14336, so output-major puts the two
+weights a lane reads 14 KB apart instead of adjacent, and each lane takes its
+own cache line.
+
+That makes the remaining migration worth about 7% of a whole run in exchange
+for re-quantizing and re-hosting four 21 GB packages, and a loader that must
+be taught which layout it was handed. Not worth it as stated — but `fc2` alone
+is, and it is 3.85 GB of the package rather than all of it. Transposing just
+that projection, or writing a k-contiguous variant for deep-K shapes, would
+recover most of the 17% without touching the rest.
+
+### What is left
+
+`h3_text_encoder.c` is still on the 8x8 tile. It is worth much less than it
+looks: the text encoder is 7 s of a run, not the 182 s of "loading" this
+section used to claim. That figure was arrived at by subtracting the passes
+from the total and calling the remainder loading, without looking — it was
+almost entirely the video VAE decode, and measuring it rather than inferring
+it is what found the next 2.2x.
+
+**The f32 SDPA switch is retired for H3.** Attention lives inside the 4.6 s
+that remained when the projections were stubbed — at most 3% of a pass before
+this change, and it is unchanged by it.
 
 The technique that worked is stubbing operations inside a real run rather than
 benchmarking them alone — replace an op with a copy, measure the whole forward,
