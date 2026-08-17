@@ -127,18 +127,35 @@ stored `mel_stft`, n_fft 512, hop 80) and out at 48 kHz.
 
 ## What is done and what is next
 
-Resolved and anchored: `gen_ltx_audio_vae.py` runs both VAE halves on the
-released weights, saves all twenty stages, and the round trip reconstructs
-(residual/variance 0.077 on synthetic stereo).
+**The decoder runs** — `tests/test_real_ltx_audio_vae.c`, twelve stages inside
+the measured floor (worst 2.6e-06 of peak), 15 of 16 mutations caught, 0.5 s
+for 29 frames. It needed no new kernel: `h3_gpu_conv3d_same_f32` covers the 2D
+convolution by mapping frames onto the depth axis and mel onto width with
+height 1, so depth is left unpadded for the explicit causal pad while mel is
+same-padded by the kernel — exactly the split this VAE wants.
+`h3_gpu_nearest2x_nhwc_f32` is the upsample.
 
-Not implemented: the C driver for either half, and the vocoder. The decoder is
-the natural next unit — it is the piece that turns a DiT audio latent into a
-mel, it is smaller than the video decoder, and every kernel it needs exists.
-`h3_gpu_conv3d_same_f32` covers the 2D convolution by mapping frames onto the
-depth axis and mel onto width with height 1: depth is left unpadded, so the
-causal frame padding is explicit and the mel axis is same-padded by the kernel,
-which is exactly the split this VAE wants. `h3_gpu_nearest2x_nhwc_f32` is the
-upsample.
+Two things the implementation pinned that reading alone had not:
+
+- **the causal pad is zeros, not replicated frames.** The video VAE replicates
+  edge frames in the same position; this one zero-fills. Nothing but
+  `CausalConv2d` says so, and both readings produce a plausible mel;
+- **the statistics index is `c * 16 + f`, channel-major.** Reading it mel-major
+  is a permutation of the same 128 values — it fits, it runs, and it is wrong.
+  Caught only because the boundary tensor is compared directly, which is the
+  lesson the video half taught the hard way.
+
+The reference's own F32-vs-F64 spread is a flat 1.0e-06 to 2.9e-06 the whole
+way down, unlike the video stack which spikes by two orders at one stage, so a
+single bound is defensible here.
+
+Not implemented: **the encoder** (the mirror of the above, and only needed to
+*condition* on existing audio rather than to generate it) and **the vocoder**.
+
+The vocoder is now the last thing between a DiT audio latent and a waveform,
+and per the table above it is architecturally what `h3_audio_vae.c` already
+does. The first question to settle is whether that driver is written against
+its rate tables or against H3's constants.
 
 The input mel is built in the generator rather than taken from the checkpoint,
 because the VAE's own front end (n_fft 1024, hop 160) is preprocessing and only
