@@ -514,11 +514,19 @@ private func generationProgressCallback(
   )
 }
 
-/// Sound effects report one tick per denoising pass. There is no preview
-/// to decode, so unlike H3 this carries no frame callback.
+/// Z-Image reports every stage, not just the sampler: loading and encoding
+/// take about two minutes before the first pass, and a run that says nothing
+/// until then looks stopped.
+///
+/// The denoise phase is spelled "denoise step N/M" because that is the form
+/// `GenerationRemaining` parses to place the run as a whole. Reporting a bare
+/// "denoise" — which this did — left overall progress pinned at zero and the
+/// estimate reading "calculating" for the entire generation.
+///
 /// Returns whether the sampler should keep going, which is the opposite sense
 /// to `progress`, whose non-zero means cancel.
 private func zimageStepCallback(
+  _ phase: UnsafePointer<CChar>?,
   _ completed: Int32,
   _ total: Int32,
   _ opaque: UnsafeMutableRawPointer?
@@ -526,7 +534,18 @@ private func zimageStepCallback(
   guard let opaque else { return 1 }
   let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
     .takeUnretainedValue()
-  return context.progress(phase: "denoise", completed: completed, total: total) == 0
+  let name = phase.map { String(cString: $0) } ?? "denoise"
+  guard name == "denoise" else {
+    return context.progress(phase: name, completed: completed, total: total) == 0
+      ? 1 : 0
+  }
+  // The step counter goes in the phase name, and the fraction reports the
+  // step itself as finished. H3 subdivides a pass and reports how far into
+  // one it is; a Z-Image pass is atomic, so anything less than whole here
+  // would be read as "part way through step N" and place the run at
+  // (N-1 + N/M)/M — behind where it actually is, all the way to the end.
+  return context.progress(
+    phase: "denoise step \(completed)/\(total)", completed: 1, total: 1) == 0
     ? 1 : 0
 }
 
@@ -642,6 +661,19 @@ private final class EngineRuntime: @unchecked Sendable {
             command,
             message: "Z-Image cannot render \(pixels) pixels square; "
               + "256, 512, 768, 1024, 1280, 1536 and 2048 it can")
+          return
+        }
+        /* Refused rather than dropped. This model conditions on the prompt
+         * alone, so a request carrying pictures cannot be answered as asked
+         * — and a picture that ignores the reference it was given looks like
+         * a bad model rather than a rejected request. */
+        guard request.firstFrameURL == nil, request.lastFrameURL == nil,
+          request.referenceImageURLs.isEmpty
+        else {
+          EngineOutput.fail(
+            command,
+            message: "Z-Image renders from the prompt alone; it cannot take "
+              + "start or end frames or reference images")
           return
         }
       } else {

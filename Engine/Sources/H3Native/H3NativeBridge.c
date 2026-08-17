@@ -438,10 +438,11 @@ typedef struct {
     void *opaque;
 } zimage_bridge_context;
 
-static int zimage_bridge_step(int step, int steps, void *context) {
+static int zimage_bridge_step(const char *phase, int step, int steps,
+                              void *context) {
     zimage_bridge_context *bridge = context;
     if (!bridge->on_step) return 1;
-    return bridge->on_step(step, steps, bridge->opaque);
+    return bridge->on_step(phase, step, steps, bridge->opaque);
 }
 
 int h3ddle_zimage_supports_canvas(int pixels) {

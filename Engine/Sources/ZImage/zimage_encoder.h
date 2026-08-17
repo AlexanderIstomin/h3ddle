@@ -20,8 +20,13 @@
  * would consume, and neither is used. */
 #define ZIMAGE_ENCODER_USED   (ZIMAGE_ENCODER_LAYERS - 1)
 
+/* Called once a layer, so a caller can show that something is happening
+ * across the half-minute this takes. Optional. */
+typedef void (*zimage_encode_tick)(int layer, int layers, void *context);
+
 /* `out` must hold count * ZIMAGE_CAP_DIM floats. Returns 0 on failure. */
 int zimage_encode(qwen_weights *encoder, const uint32_t *ids, int count,
-                  float *out, char *error, size_t error_size);
+                  float *out, zimage_encode_tick tick, void *tick_context,
+                  char *error, size_t error_size);
 
 #endif

@@ -15,7 +15,8 @@
 #define EPSILON   1e-6f
 
 int zimage_encode(qwen_weights *encoder, const uint32_t *ids, int count,
-                  float *out, char *error, size_t error_size) {
+                  float *out, zimage_encode_tick tick, void *tick_context,
+                  char *error, size_t error_size) {
     const qwen_block_config config = {
         .width = WIDTH, .heads = HEADS, .kv_heads = KV_HEADS,
         .head_dim = HEAD_DIM, .ffn = FFN,
@@ -76,6 +77,9 @@ int zimage_encode(qwen_weights *encoder, const uint32_t *ids, int count,
         if (!ok) break;
         qwen_block_forward(&config, &block, &rope, out, count, 0,
                            keys, values, count, &scratch);
+        /* After the block rather than before it, so the count reports work
+         * finished rather than work started. */
+        if (tick) tick(layer + 1, ZIMAGE_ENCODER_USED, tick_context);
     }
     /* No final norm, deliberately: the DiT taps the stack one block early,
      * before model.norm would apply. */

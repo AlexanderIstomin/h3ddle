@@ -46,7 +46,11 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
  * `on_step` fires once per sampler step and returns zero to abandon the
  * generation; that is how cancellation reaches the sampler. A cancelled call
  * returns zero with an empty `error`. */
-typedef int (*h3ddle_zimage_step)(int completed, int total, void *opaque);
+/* `phase` names the stage — "text encoder", "transformer", "denoise",
+ * "image VAE" — and `completed`/`total` count within it. Returning zero
+ * cancels. */
+typedef int (*h3ddle_zimage_step)(const char *phase, int completed, int total,
+                                  void *opaque);
 int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            const char *prompt, int pixels, int steps,
                            unsigned long long seed, unsigned char *rgb,

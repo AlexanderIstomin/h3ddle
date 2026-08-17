@@ -30,9 +30,17 @@ typedef struct {
     uint64_t seed;
 } zimage_request;
 
-/* Called after each sampler step. Returning zero abandons the generation,
- * which is how the service cancels. */
-typedef int (*zimage_progress)(int step, int steps, void *context);
+/* Called as the run proceeds. Returning zero abandons the generation, which
+ * is how the service cancels.
+ *
+ * `phase` names what is happening — "text encoder", "transformer", "denoise",
+ * "image VAE" — because the sampler is only part of the wait: loading and
+ * encoding take about two minutes before the first step, and a caller that
+ * hears nothing until then shows a still bar and reads as hung.
+ *
+ * `step` and `steps` are within the phase, so they restart at each one. */
+typedef int (*zimage_progress)(const char *phase, int step, int steps,
+                               void *context);
 
 /* `image` receives 3 * pixels * pixels floats, channel-major, in [-1, 1] —
  * the range the reference's own post-processing expects. Returns 0 on failure

@@ -16,6 +16,21 @@
 #define TRAIN_STEPS 1000.0f
 #define VAE_SCALE   8
 
+/* The encoder's per-layer tick, forwarded to the caller's progress callback.
+ * Cancellation is deliberately not honoured here: `zimage_encode` has no way
+ * to abandon a layer part-way, so a cancel during encoding takes effect at
+ * the first sampler step instead. */
+typedef struct {
+    zimage_progress progress;
+    void *context;
+} encode_relay;
+
+static void relay_encode_tick(int layer, int layers, void *context) {
+    encode_relay *relay = context;
+    if (relay->progress) relay->progress("text encoder", layer, layers,
+                                         relay->context);
+}
+
 static int fail(char *error, size_t error_size, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
@@ -93,10 +108,13 @@ int zimage_generate(const zimage_request *request, float *image,
 
     /* ---- encode ------------------------------------------------------ */
     snprintf(path, sizeof(path), "%s/text_encoder.safetensors", request->package);
+    if (progress) progress("text encoder", 0, ZIMAGE_ENCODER_USED, context);
     qwen_weights *encoder = qwen_weights_open(path, error, error_size);
     float *caption = encoder ? malloc(count * ZIMAGE_CAP_DIM * sizeof(float)) : NULL;
+    encode_relay relay = { .progress = progress, .context = context };
     if (!encoder || !caption ||
-        !zimage_encode(encoder, ids, (int)count, caption, error, error_size)) {
+        !zimage_encode(encoder, ids, (int)count, caption, relay_encode_tick,
+                       &relay, error, error_size)) {
         free(caption);
         if (encoder) qwen_weights_close(encoder);
         h3_tokenizer_ids_free(ids);
@@ -109,6 +127,11 @@ int zimage_generate(const zimage_request *request, float *image,
 
     /* ---- sample ------------------------------------------------------ */
     snprintf(path, sizeof(path), "%s/transformer.safetensors", request->package);
+    /* Opening is a mapping and costs nothing; what follows is the GPU sizing
+     * and the caption refiner, and together they are long enough to need
+     * saying so. There is no inner counter to report, so this phase moves
+     * once — which is still the difference between "working" and "hung". */
+    if (progress) progress("transformer", 0, 1, context);
     qwen_weights *transformer = qwen_weights_open(path, error, error_size);
     if (!transformer) { free(caption); return 0; }
 
@@ -134,6 +157,7 @@ int zimage_generate(const zimage_request *request, float *image,
         return 0;
     }
     free(caption);
+    if (progress) progress("transformer", 1, 1, context);
 
     const size_t latent_count = (size_t)ZIMAGE_LATENT_CHANNELS * side * side;
     float *latent = malloc(latent_count * sizeof(float));
@@ -176,7 +200,8 @@ int zimage_generate(const zimage_request *request, float *image,
         const float dt = sigmas[step + 1] - sigmas[step];
         for (size_t index = 0; index < latent_count; index++)
             latent[index] += dt * -velocity[index];
-        if (progress && !progress(step + 1, steps, context)) cancelled = 1;
+        if (progress && !progress("denoise", step + 1, steps, context))
+            cancelled = 1;
     }
     zimage_dit_release(&dit);
     qwen_weights_close(transformer);
@@ -196,6 +221,10 @@ int zimage_generate(const zimage_request *request, float *image,
         latent[index] = latent[index] / ZIMAGE_VAE_SCALING + ZIMAGE_VAE_SHIFT;
 
     snprintf(path, sizeof(path), "%s/vae_decoder.safetensors", request->package);
+    /* Tens of seconds at the larger canvases, and it lands after the last
+     * step — so without this the bar sits full while the picture is still
+     * being made. */
+    if (progress) progress("image VAE", 0, 1, context);
     if (request->shaders) {
         zimage_vae_gpu *vae = zimage_vae_gpu_create(request->shaders, path, NULL,
                                                     side, error, error_size);
