@@ -32,6 +32,30 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
                         const char *output_path, h3ddle_sa3_step on_step,
                         void *opaque, char *error, size_t error_size);
 
+/* Z-Image-Turbo: a prompt in, a square picture out.
+ *
+ * The package is loaded and released per call. At 14 GB that is not cheap,
+ * but holding it resident would compete with H3 for exactly the memory that
+ * constrains this app, and the decoder alone wants 12 GB of working buffers
+ * at 1536 pixels.
+ *
+ * `rgb` receives pixels * pixels * 3 bytes, interleaved and 8-bit, which is
+ * what the service's PNG encoder already takes. `shaders` may be NULL to stay
+ * on the CPU, which is correct and roughly twenty times slower.
+ *
+ * `on_step` fires once per sampler step and returns zero to abandon the
+ * generation; that is how cancellation reaches the sampler. A cancelled call
+ * returns zero with an empty `error`. */
+typedef int (*h3ddle_zimage_step)(int completed, int total, void *opaque);
+int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
+                           const char *prompt, int pixels, int steps,
+                           unsigned long long seed, unsigned char *rgb,
+                           h3ddle_zimage_step on_step, void *opaque,
+                           char *error, size_t error_size);
+/* Whether this build renders `pixels` square; the token count must be a
+ * multiple of 32, so 1440 is out where 1024 and 1536 are in. */
+int h3ddle_zimage_supports_canvas(int pixels);
+
 /* Decodes any audio file AVFoundation reads into mono float at
  * `sample_rate`, which for a Qwen3-TTS reference clip must be 24 kHz — its
  * mel filterbank is defined at that rate. The caller owns *pcm and frees it. */

@@ -114,6 +114,7 @@ private let engineCapabilities = EngineCapabilities(
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
       .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
+      .zImageGeneration,
     ]
   }()
 )
@@ -452,7 +453,10 @@ private final class GenerationCallbackContext: @unchecked Sendable {
     return isCancelled ? 1 : 0
   }
 
-  private static func encodePNG(_ frame: h3_frame) -> Data? {
+  /* fileprivate rather than private: the Z-Image lane writes a still
+   * without going through the callback context, and one PNG encoder in
+   * this file is better than two. */
+  fileprivate static func encodePNG(_ frame: h3_frame) -> Data? {
     guard let rgb = frame.rgb, frame.width > 0, frame.height > 0,
       frame.stride >= frame.width * 3,
       let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
@@ -512,6 +516,20 @@ private func generationProgressCallback(
 
 /// Sound effects report one tick per denoising pass. There is no preview
 /// to decode, so unlike H3 this carries no frame callback.
+/// Returns whether the sampler should keep going, which is the opposite sense
+/// to `progress`, whose non-zero means cancel.
+private func zimageStepCallback(
+  _ completed: Int32,
+  _ total: Int32,
+  _ opaque: UnsafeMutableRawPointer?
+) -> Int32 {
+  guard let opaque else { return 1 }
+  let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
+    .takeUnretainedValue()
+  return context.progress(phase: "denoise", completed: completed, total: total) == 0
+    ? 1 : 0
+}
+
 private func soundEffectStepCallback(
   _ completed: Int32,
   _ total: Int32,
@@ -606,9 +624,31 @@ private final class EngineRuntime: @unchecked Sendable {
         return
       }
     case .image:
-      guard engineCapabilities.supports(.imageGeneration) else {
-        EngineOutput.fail(command, message: "This engine cannot produce stills")
-        return
+      /* Two models can render a still and they are gated separately: an
+       * engine may have one package and not the other. */
+      if request.image?.model == .zImage {
+        guard engineCapabilities.supports(.zImageGeneration) else {
+          EngineOutput.fail(command, message: "This engine cannot run Z-Image")
+          return
+        }
+        let pixels = request.canvasWidth ?? 0
+        guard pixels == (request.canvasHeight ?? pixels) else {
+          EngineOutput.fail(
+            command, message: "Z-Image renders square canvases only")
+          return
+        }
+        guard h3ddle_zimage_supports_canvas(Int32(pixels)) != 0 else {
+          EngineOutput.fail(
+            command,
+            message: "Z-Image cannot render \(pixels) pixels square; "
+              + "256, 512, 768, 1024, 1280, 1536 and 2048 it can")
+          return
+        }
+      } else {
+        guard engineCapabilities.supports(.imageGeneration) else {
+          EngineOutput.fail(command, message: "This engine cannot produce stills")
+          return
+        }
       }
     }
     guard let modelDirectory = request.modelDirectory, modelDirectory.isFileURL,
@@ -731,6 +771,84 @@ private final class EngineRuntime: @unchecked Sendable {
     )
   }
 
+  /// Z-Image-Turbo, like Stable Audio 3, keeps none of H3's machinery: no
+  /// shared model cache, no preview decoder, nothing to mux. It loads its
+  /// package, samples, decodes, and writes a PNG.
+  ///
+  /// The package is released as the call returns rather than cached. Fourteen
+  /// gigabytes is not cheap to reload, but the decoder alone wants twelve of
+  /// working buffers at the larger canvases, and holding the model resident
+  /// would compete with H3 for the memory that actually constrains this app.
+  private func runZImage(
+    _ request: EngineGenerationRequest,
+    options: EngineImageOptions,
+    command: EngineCommand,
+    packageDirectory: URL,
+    callbackContext: GenerationCallbackContext
+  ) {
+    let pixels = request.canvasWidth ?? 1024
+    var error = [CChar](repeating: 0, count: 512)
+    var rgb = [UInt8](repeating: 0, count: 3 * pixels * pixels)
+    let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    let produced = packageDirectory.path.withCString { packagePath in
+      request.prompt.withCString { prompt in
+        "h3_shaders.metal".withCString { shaders in
+          rgb.withUnsafeMutableBufferPointer { pixelBuffer in
+            h3ddle_zimage_generate(
+              packagePath,
+              shaders,
+              prompt,
+              Int32(pixels),
+              Int32(options.steps ?? 0),
+              request.seed ?? 42,
+              pixelBuffer.baseAddress,
+              zimageStepCallback,
+              opaque,
+              &error,
+              error.count
+            )
+          }
+        }
+      }
+    }
+    guard produced != 0 else {
+      let message = String(cString: error)
+      if message.isEmpty {
+        /* An empty message with a zero return is the sampler honouring a
+         * cancel, not a failure. */
+        EngineOutput.emit(
+          EngineEvent(
+            requestID: command.requestID, jobID: command.jobID, kind: .cancelled))
+      } else {
+        EngineOutput.fail(command, message: message)
+      }
+      return
+    }
+    var frame = h3_frame()
+    frame.width = Int32(pixels)
+    frame.height = Int32(pixels)
+    frame.stride = Int32(pixels * 3)
+    let wrote: Bool = rgb.withUnsafeBufferPointer { pixelBuffer in
+      frame.rgb = pixelBuffer.baseAddress
+      guard let png = GenerationCallbackContext.encodePNG(frame) else {
+        return false
+      }
+      return (try? png.write(to: request.outputURL, options: .atomic)) != nil
+    }
+    guard wrote else {
+      EngineOutput.fail(command, message: "Could not write the picture")
+      return
+    }
+    EngineOutput.emit(
+      EngineEvent(
+        requestID: command.requestID,
+        jobID: command.jobID,
+        kind: .completed,
+        outputURL: request.outputURL
+      )
+    )
+  }
+
   /// Qwen3-TTS, like Stable Audio 3, keeps none of H3's machinery. The
   /// duration is a ceiling rather than a target — the model stops when the
   /// line is spoken — so the completed event reports what was produced.
@@ -826,6 +944,17 @@ private final class EngineRuntime: @unchecked Sendable {
     if request.kind == .soundEffect {
       runSoundEffect(
         request,
+        command: command,
+        packageDirectory: modelDirectory,
+        callbackContext: callbackContext
+      )
+      return
+    }
+
+    if request.kind == .image, request.image?.model == .zImage {
+      runZImage(
+        request,
+        options: request.image ?? EngineImageOptions(model: .zImage),
         command: command,
         packageDirectory: modelDirectory,
         callbackContext: callbackContext

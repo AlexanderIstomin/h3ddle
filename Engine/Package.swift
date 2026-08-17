@@ -73,6 +73,7 @@ let package = Package(
         .headerSearchPath("Vendor/h3.c"),
         .headerSearchPath("Sources/SA3"),
         .headerSearchPath("Sources/Qwen3TTS"),
+        .headerSearchPath("Sources/ZImage"),
         // h3_ffmpeg.c uses SSIZE_MAX, whose SDK expansion requires LONG_MAX.
         .unsafeFlags(["-include", "limits.h"]),
       ],

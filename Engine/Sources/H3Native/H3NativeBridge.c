@@ -1,4 +1,5 @@
 #include "H3Native.h"
+#include "zimage_generate.h"
 #include "h3_gpu.h"
 #include "h3_host.h"
 #include "h3_tokenizer.h"
@@ -428,4 +429,66 @@ int h3ddle_qwen_generate(const char *package_directory, const char *text,
     }
     free(audio);
     return ok;
+}
+
+/* ---- Z-Image-Turbo ------------------------------------------------- */
+
+typedef struct {
+    h3ddle_zimage_step on_step;
+    void *opaque;
+} zimage_bridge_context;
+
+static int zimage_bridge_step(int step, int steps, void *context) {
+    zimage_bridge_context *bridge = context;
+    if (!bridge->on_step) return 1;
+    return bridge->on_step(step, steps, bridge->opaque);
+}
+
+int h3ddle_zimage_supports_canvas(int pixels) {
+    return zimage_supports_canvas(pixels);
+}
+
+int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
+                           const char *prompt, int pixels, int steps,
+                           unsigned long long seed, unsigned char *rgb,
+                           h3ddle_zimage_step on_step, void *opaque,
+                           char *error, size_t error_size) {
+    if (!rgb) {
+        snprintf(error, error_size, "somewhere to put the picture is required");
+        return 0;
+    }
+    const zimage_request request = {
+        .package = package_directory,
+        .shaders = shaders,
+        .prompt = prompt,
+        .pixels = pixels,
+        .steps = steps,
+        .seed = seed,
+    };
+    const size_t count = (size_t)3 * pixels * pixels;
+    float *planes = malloc(count * sizeof(float));
+    if (!planes) {
+        snprintf(error, error_size, "out of memory for a %d pixel picture", pixels);
+        return 0;
+    }
+    zimage_bridge_context bridge = {on_step, opaque};
+    if (!zimage_generate(&request, planes, zimage_bridge_step, &bridge,
+                         error, error_size)) {
+        free(planes);
+        return 0;
+    }
+    /* Channel-major [-1, 1] to interleaved 8-bit, which is the reference's own
+     * post-processing: halve, centre, clamp. Clamping after the shift rather
+     * than before is the difference between a correct picture and a blown-out
+     * one. */
+    const size_t area = (size_t)pixels * pixels;
+    for (size_t index = 0; index < area; index++)
+        for (int channel = 0; channel < 3; channel++) {
+            float value = planes[(size_t)channel * area + index] * 0.5f + 0.5f;
+            if (value < 0.0f) value = 0.0f;
+            if (value > 1.0f) value = 1.0f;
+            rgb[index * 3 + channel] = (unsigned char)(value * 255.0f + 0.5f);
+        }
+    free(planes);
+    return 1;
 }
