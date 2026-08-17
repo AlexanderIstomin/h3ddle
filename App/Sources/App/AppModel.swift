@@ -53,29 +53,6 @@ enum AudioGenerationMode: Hashable {
   }
 }
 
-/// Which model renders a still. Two models, not settings of one: H3 makes an
-/// image by rendering a very short clip and keeping a frame, so the video
-/// knobs apply to it, while Z-Image is a dedicated text-to-image model with
-/// its own package and a schedule of eight passes.
-enum ImageGenerationMode: Hashable, CaseIterable {
-  case h3
-  case zImage
-
-  var engine: ImageGenerationEngine {
-    switch self {
-    case .h3: .h3
-    case .zImage: .zImage
-    }
-  }
-
-  var label: String {
-    switch self {
-    case .h3: "H3"
-    case .zImage: "Z-Image"
-    }
-  }
-}
-
 enum ManagedModelState: Equatable {
   case checking
   case available
@@ -152,12 +129,22 @@ final class AppModel {
   /// joint soundtrack; the other two are the same Stable Audio transformer
   /// trained on different material.
   var audioMode: AudioGenerationMode = .speech
-  /// H3 by default, so an existing project renders what it always did.
-  var imageMode: ImageGenerationMode = .h3
-  var selectedImageModelID: String?
+  /// Which model the image lane draws with. Unlike audio's three modes this
+  /// is not a choice beside the model: H3 and Z-Image are two models that
+  /// both make a still, so the picker holds the decision and the engine is
+  /// read back off whatever was picked.
+  var selectedImageModelID: String? {
+    didSet {
+      userDefaults.set(selectedImageModelID, forKey: Self.selectedImageModelKey)
+    }
+  }
   var generationProgress = 0.0
   /// Completion across the whole run, as distinct from the current phase.
-  var generationOverallProgress = 0.0
+  /// Where the run is, as against `generationProgress`, which is phase-local
+  /// and restarts at every stage. Displaying that directly is what made the
+  /// bar hit 100% on each pass and drop to 0 at the next one.
+  var generationProgressTracker = GenerationProgressTracker()
+  var generationOverallProgress: Double { generationProgressTracker.overall }
   var generationElapsed: TimeInterval = 0
   var generationPreviewImage: CGImage?
   var generationPrompt = ""
@@ -350,8 +337,15 @@ final class AppModel {
   /// preset ladder — but it stays overridable for experimentation.
   static let soundEffectDefaultSteps = 8
 
+  /// Z-Image is distilled to eight passes the way Stable Audio is. It cannot
+  /// borrow `.turbo` to say so — that flag also tells the model library a
+  /// package is built locally rather than downloaded — so the count lives
+  /// here and is applied when the model is picked.
+  static let imageModelDefaultSteps = 8
+
   private static let selectedModelKey = "H3ddle.selectedModelID"
   private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
+  private static let selectedImageModelKey = "H3ddle.selectedImageModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
   /// Audio folders are kept under their own key rather than tagged inside
   /// the existing one, so bookmarks saved before this distinction existed
@@ -476,7 +470,7 @@ final class AppModel {
     errorMessage = nil
     generationPhase = ""
     generationProgress = 0
-    generationOverallProgress = 0
+    generationProgressTracker = GenerationProgressTracker()
     generationElapsed = 0
     generationPreviewImage = nil
     activeGenerationKind = kind
@@ -592,10 +586,27 @@ final class AppModel {
     errorMessage = nil
     generationElapsed = 0
     generationPreviewImage = nil
+    // A second run from an already-open studio never passed through
+    // `presentGeneration`, so without these it would start against the last
+    // run's numbers: a full bar, and no preparation band because the
+    // denoising fraction was still set from before.
+    generationProgress = 0
+    generationPhase = ""
     phaseTimeline = GenerationPhaseTimeline()
     let audioEngine = kind == .audio ? audioMode.engine : .h3
-    let imageEngine = kind == .image ? imageMode.engine : .h3
+    let imageEngine: ImageGenerationEngine = kind == .image ? self.imageEngine : .h3
     let ownPackage = audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
+    /// Frames and references are H3's conditioning; no other engine here
+    /// reads a picture. Video always qualifies — its `imageEngine` is `.h3`
+    /// because the question does not arise.
+    let acceptsImageInputs = kind != .audio && imageEngine == .h3
+    // Speech and sound effects run in one phase and report no pass counter,
+    // so their phase fraction is the run's rather than a band within it.
+    // Rebuilt per run: a second generation from an already-open studio never
+    // passes through `presentGeneration`, and would otherwise start against
+    // the last run's numbers — a full bar and no preparation band.
+    generationProgressTracker = GenerationProgressTracker(
+      countsPasses: audioEngine == .h3)
     // Speech reports frames against the ceiling it was sent, and that ceiling
     // is deliberately generous so a long line is never cut off mid-word — so
     // its fraction stops wherever the line ends, measured at 49% on a run that
@@ -608,9 +619,8 @@ final class AppModel {
       return max(1, min(4, duration / expected))
     }()
     let runningModelName =
-      imageEngine.usesOwnPackage
-      ? (modelChoices.first { $0.isInstalled && $0.capability == .image }?
-        .displayName ?? "an image model")
+      kind == .image
+      ? (selectedImageModelChoice?.displayName ?? "an image model")
       : (audioEngine.usesOwnPackage
         ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
           .displayName ?? "an audio model")
@@ -712,9 +722,12 @@ final class AppModel {
       seed: seed,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight,
-      firstFrameURL: kind == .audio ? nil : studioStartFrame?.url,
-      lastFrameURL: kind == .audio ? nil : studioEndFrame?.url,
-      referenceImageURLs: kind == .audio ? [] : studioReferenceImages.map(\.url)
+      // Only H3 conditions on pictures. The studio hides these while Z-Image
+      // is picked, but a selection made under H3 outlives the switch, so
+      // dropping them here is what actually keeps them out of the request.
+      firstFrameURL: acceptsImageInputs ? studioStartFrame?.url : nil,
+      lastFrameURL: acceptsImageInputs ? studioEndFrame?.url : nil,
+      referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : []
     )
     // The audio models and Z-Image load their own packages; the H3 directory
     // would be the wrong tree entirely.
@@ -751,17 +764,17 @@ final class AppModel {
             generationProgress = fractionComplete
             // The reported fraction is phase-local; the run's own position
             // comes from the denoising step counter when one is present.
-            let overall = GenerationRemaining.overallProgress(
-              phase: phase, phaseFraction: fractionComplete)
-            if let overall {
-              generationOverallProgress = overall
-            }
-            // Models that run in one phase — speech, sound effects — have no
-            // step counter, and for them the phase fraction *is* the run's.
+            // Everything below only ever moves the bar forward, so no stage
+            // boundary can send it backwards.
+            generationProgressTracker.record(
+              phase: phase,
+              phaseFraction: fractionComplete,
+              elapsed: generationElapsed
+            )
             // Just short of 100 while it is still running: arriving there and
             // staying reads as finished when it is not.
             DockAttention.showProgress(
-              min(0.99, (overall ?? fractionComplete) * progressScale))
+              min(0.99, generationOverallProgress * progressScale))
             phaseTimeline.record(
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
@@ -771,6 +784,7 @@ final class AppModel {
               generationPreviewImage = image
             }
           case .completed(let asset):
+            generationProgressTracker.finish()
             studioResults.insert(
               GenerationResult(
                 id: UUID(),
@@ -801,14 +815,12 @@ final class AppModel {
   /// something — an early guess swings wildly and reads as a broken clock.
   var generationRemainingDescription: String? {
     guard isGenerating else { return nil }
-    if let remaining = GenerationRemaining.estimate(
-      elapsed: generationElapsed, progress: generationOverallProgress)
-    {
+    if let remaining = generationProgressTracker.remaining(elapsed: generationElapsed) {
       return GenerationRemaining.phrase(remaining)
     }
     // Denoising is done and the decoder is finishing: there is no step
     // counter left to project from.
-    if generationOverallProgress >= 0.999 { return "finishing" }
+    if generationProgressTracker.isFinishing { return "finishing" }
     // Too early to project — the first step has to land before the pace
     // means anything. Say so rather than showing nothing, because a label
     // that only appears minutes in looks like a fault.
@@ -1007,9 +1019,23 @@ final class AppModel {
   func usesNativeEngine(for kind: GenerationKind) -> Bool {
     switch kind {
     case .video: nativeVideoGenerationIsReady
-    case .image: nativeImageGenerationIsReady
+    // An image package answers for itself; the H3 readiness check asks
+    // whether an H3 tree validated, which is the wrong question for it.
+    case .image:
+      imageEngine == .zImage
+        ? imagePackageDirectory != nil : nativeImageGenerationIsReady
     case .audio: audioPackageDirectory != nil
     }
+  }
+
+  /// Where the chosen image package lives, on the same terms as the audio
+  /// ones — loaded by its own engine path, never validated as an H3 tree.
+  /// Nil when the still is coming from H3 instead, which is not a failure:
+  /// that path wants `modelDirectory` like video does.
+  var imagePackageDirectory: URL? {
+    guard let choice = selectedImageModelChoice, choice.capability == .image
+    else { return nil }
+    return choice.directory
   }
 
   /// Where the chosen audio package lives, or nil when none is installed. It
@@ -1020,16 +1046,6 @@ final class AppModel {
   /// generate the wrong kind of audio. Reading the installed choices rather
   /// than the manifests means a folder added by hand counts too, which it
   /// previously did not — it could be selected but never generated from.
-  /// Where the Z-Image package lives, on the same terms as the audio ones:
-  /// whichever installed image package is chosen, or the first there is.
-  var imagePackageDirectory: URL? {
-    let usable = modelChoices.filter { $0.isInstalled && $0.capability == .image }
-    if let chosen = usable.first(where: { $0.id == selectedImageModelID }) {
-      return chosen.directory
-    }
-    return usable.first?.directory
-  }
-
   var audioPackageDirectory: URL? {
     let role = audioMode.audioRole
     let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == role }
@@ -1222,6 +1238,7 @@ final class AppModel {
         clearModelDirectory()
       }
       if selectedAudioModelID == manifest.id { selectedAudioModelID = nil }
+      if selectedImageModelID == manifest.id { selectedImageModelID = nil }
       managedStatuses[manifest.id] = ManagedPackageStatus(
         state: .available,
         message: availableMessage(for: manifest)
@@ -1362,9 +1379,45 @@ final class AppModel {
     modelChoices.first { $0.id == selectedAudioModelID }
   }
 
+  /// Which model draws a still, resolved rather than merely stored: nothing
+  /// picked follows the video lane's model, so a project that never opened
+  /// this picker renders stills the way it always did.
+  var selectedImageModelChoice: ModelChoice? {
+    let usable = installedModelChoices(for: .image)
+    if let chosen = usable.first(where: { $0.id == selectedImageModelID }) {
+      return chosen
+    }
+    if let sameAsVideo = usable.first(where: { $0.id == selectedModelID }) {
+      return sameAsVideo
+    }
+    return usable.first { $0.capability == .video } ?? usable.first
+  }
+
+  /// Which engine renders a still, read off the chosen model rather than
+  /// kept beside it. A package built for stills brings its own engine;
+  /// anything else is H3 keeping a frame out of a very short clip.
+  var imageEngine: ImageGenerationEngine {
+    selectedImageModelChoice?.capability == .image ? .zImage : .h3
+  }
+
   /// Which identifier a category's selection is held in.
   func selectedModelID(for capability: ModelCapability) -> String? {
-    capability == .audio ? selectedAudioModelID : selectedModelID
+    switch capability {
+    case .audio: selectedAudioModelID
+    case .image: selectedImageModelID
+    case .video: selectedModelID
+    }
+  }
+
+  /// What the picker shows as chosen on a lane. The image lane resolves to a
+  /// model even with nothing stored, so this is the effective choice rather
+  /// than the remembered one.
+  func selectedModelID(for kind: GenerationKind) -> String? {
+    switch kind {
+    case .video: selectedModelID
+    case .image: selectedImageModelChoice?.id
+    case .audio: selectedAudioModelID
+    }
   }
 
   var installedModelChoices: [ModelChoice] {
@@ -1372,18 +1425,23 @@ final class AppModel {
   }
 
   /// Installed models that can produce this kind of output. H3 makes video,
-  /// stills and their soundtrack from one package, so all three ask for a
-  /// video model; sound effects come from a different one entirely.
+  /// stills and their soundtrack from one package, so video asks for a video
+  /// model; sound effects come from a different one entirely.
+  ///
+  /// Stills are the one kind two categories can both make, so the image lane
+  /// lists both and the picked model decides which engine runs. That is also
+  /// why a Z-Image-only install now counts as having a model here, where the
+  /// video-only filter used to report none.
   func installedModelChoices(for kind: GenerationKind) -> [ModelChoice] {
-    let capability: ModelCapability =
+    let capabilities: Set<ModelCapability> =
       switch kind {
-      // H3 makes video, stills and their soundtrack from one package.
-      case .video, .image: .video
-      case .audio: .audio
+      case .video: [.video]
+      case .image: [.video, .image]
+      case .audio: [.audio]
       }
     let role = kind == .audio ? audioMode.audioRole : nil
     return modelChoices.filter {
-      $0.isInstalled && $0.capability == capability
+      $0.isInstalled && capabilities.contains($0.capability)
         && (role == nil || $0.audioRole == role)
     }
   }
@@ -1392,19 +1450,35 @@ final class AppModel {
     selectedModelChoice?.generationProfile ?? .standard
   }
 
-  func selectModel(_ id: String) {
+  /// What a freshly picked model should start at, where it knows better than
+  /// the quality preset. Nil leaves the preset's own count alone.
+  func defaultDenoisingSteps(for choice: ModelChoice) -> Int? {
+    choice.capability == .image
+      ? Self.imageModelDefaultSteps : choice.generationProfile.defaultDenoisingSteps
+  }
+
+  /// `kind` says which lane asked, because a video package means two things:
+  /// on the video lane it is the model to load, and on the image lane it also
+  /// means "draw stills with H3" rather than with a package built for them.
+  /// Omitting it — as the model library does — leaves the image lane alone.
+  func selectModel(_ id: String, for kind: GenerationKind? = nil) {
     guard
       let choice = modelChoices.first(where: { $0.id == id }),
       let directory = choice.directory
     else { return }
-    guard choice.capability != .audio else {
+    switch choice.capability {
+    case .audio:
       // Audio packages are read by their own engine path, so this must
       // not become the directory the H3 loader is pointed at.
       selectedAudioModelID = id
-      return
+    case .image:
+      // Likewise its own path: an image package is not an H3 tree.
+      selectedImageModelID = id
+    case .video:
+      if kind == .image { selectedImageModelID = id }
+      selectedModelID = id
+      selectModelDirectory(directory)
     }
-    selectedModelID = id
-    selectModelDirectory(directory)
   }
 
   /// The caller says which list the folder joins, because the folder itself
@@ -1483,6 +1557,9 @@ final class AppModel {
     if selectedAudioModelID == id {
       selectedAudioModelID = nil
     }
+    if selectedImageModelID == id {
+      selectedImageModelID = nil
+    }
     refreshModelChoices()
   }
 
@@ -1557,6 +1634,7 @@ final class AppModel {
       userDefaults.array(forKey: Self.localAudioModelsKey) as? [Data] ?? []
     selectedModelID = userDefaults.string(forKey: Self.selectedModelKey)
     selectedAudioModelID = userDefaults.string(forKey: Self.selectedAudioModelKey)
+    selectedImageModelID = userDefaults.string(forKey: Self.selectedImageModelKey)
     // A pre-picker install selected one folder through a single bookmark;
     // carry it into the library as a local folder.
     if localModelBookmarks.isEmpty, selectedModelID == nil,

@@ -87,10 +87,10 @@ struct GenerationStudioView: View {
 
           ModelDropdownMenu(
             choices: model.installedModelChoices(for: kind),
-            selectedID: model.selectedModelID
+            selectedID: model.selectedModelID(for: kind)
           ) { choice in
-            model.selectModel(choice.id)
-            if let steps = choice.generationProfile.defaultDenoisingSteps {
+            model.selectModel(choice.id, for: kind)
+            if let steps = model.defaultDenoisingSteps(for: choice) {
               model.updateStudioKnobs { $0.denoisingSteps = steps }
             }
             modelMenuOpen = false
@@ -121,20 +121,6 @@ struct GenerationStudioView: View {
       Text(kind.rawValue.capitalized)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(H3Color.textSecondary)
-      if kind == .image {
-        // Two models, not settings of one: H3 makes a still by rendering a
-        // very short clip and keeping a frame, so its video knobs apply;
-        // Z-Image is a dedicated text-to-image model with its own package.
-        H3SegmentedControl(
-          selection: $model.imageMode,
-          segments: [
-            .init(value: .h3, title: "H3", systemImage: "film"),
-            .init(value: .zImage, title: "Z-IMAGE", systemImage: "photo"),
-          ],
-          isEnabled: !model.isGenerating
-        )
-        .padding(.leading, 4)
-      }
       if kind == .audio {
         // Two models, not settings of one: speech is Qwen3-TTS, which says the
         // words you typed in a voice cloned from a clip; music and sound
@@ -240,7 +226,11 @@ struct GenerationStudioView: View {
         voiceReferenceSection
       }
 
-      if kind != .audio {
+      // H3 keeps a frame out of a very short clip, so anchors and references
+      // apply to its stills as much as to its video. Z-Image takes a prompt
+      // and nothing else — its request carries no image input at all — so
+      // offering these would collect pictures it silently discards.
+      if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
         frameAnchorSection
         referenceSection
         if let note = conditioningNote {
@@ -585,7 +575,10 @@ struct GenerationStudioView: View {
     VStack(alignment: .leading, spacing: 0) {
       ScrollView {
         VStack(alignment: .leading, spacing: 28) {
-          if kind != .audio {
+          // Hidden rather than shown-and-ignored while a square-only model is
+          // drawing: offering a ratio the renderer cannot honour is how the
+          // lane came to fail with "renders square canvases only".
+          if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
             labeled("ASPECT RATIO") {
               HStack(spacing: 9) {
                 ForEach(ProgramAspectRatio.allCases) { ratio in
@@ -606,8 +599,20 @@ struct GenerationStudioView: View {
             noModelSection
           }
 
-          if usesNativeSettings, kind != .audio {
+          // Every knob in here describes an H3 pass — DiT layers, core reuse,
+          // how many frames a still is kept from. A package with its own
+          // engine reads none of them, so the image lane shows them only
+          // while H3 is the model drawing.
+          if usesNativeSettings,
+            kind == .video || (kind == .image && model.imageEngine == .h3)
+          {
             generationControls
+          }
+
+          if usesNativeSettings, kind == .image, model.imageEngine == .zImage {
+            imageResolutionControls
+            imagePassesControls
+            seedControls
           }
 
           // Both are keyed on the audio mode, which every tab shares — so
@@ -743,11 +748,97 @@ struct GenerationStudioView: View {
         .foregroundStyle(H3Color.textSecondary)
       ModelDropdown(
         choices: model.installedModelChoices(for: kind),
-        selectedID: model.selectedModelID,
+        selectedID: model.selectedModelID(for: kind),
         isOpen: $modelMenuOpen,
         onFrameChange: { modelPickerFrame = $0 }
       )
     }
+  }
+
+  /// Its own ladder, because the video one is a short edge to be combined
+  /// with an aspect ratio and this model renders a square. Each tier carries
+  /// what it costs: the top of this list is a quarter of an hour, which is
+  /// worth knowing before choosing it rather than after.
+  private var imageResolutionControls: some View {
+    labeled("RESOLUTION") {
+      Menu {
+        ForEach(ImageCanvas.allCases) { canvas in
+          Button("\(canvas.label)  ·  ~\(minutesLabel(canvas.approximateMinutes))") {
+            model.updateStudioKnobs { $0.imageCanvas = canvas }
+          }
+        }
+      } label: {
+        HStack {
+          Text(knobs.imageCanvas.label)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+          Spacer()
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 36)
+        .background(H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      Text("Square only in this build, so the project's aspect ratio does "
+        + "not apply. About \(minutesLabel(knobs.imageCanvas.approximateMinutes)) "
+        + "on an M1 Pro; the first render after launch takes longer.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityIdentifier("image-resolution")
+  }
+
+  private func minutesLabel(_ minutes: Double) -> String {
+    minutes < 1
+      ? "\(Int((minutes * 60).rounded()))s"
+      : String(format: "%.1f min", minutes)
+  }
+
+  /// The same one knob, for the same reason: Z-Image is distilled to eight
+  /// passes too. The ceiling is lower than sound's because a still costs
+  /// minutes where a sound costs seconds, so finding out that the top of the
+  /// range buys nothing is an expensive discovery to offer.
+  private var imagePassesControls: some View {
+    labeled("PASSES") {
+      HStack(spacing: 10) {
+        Slider(
+          value: Binding(
+            get: { Double(model.studioSettings.knobs.denoisingSteps) },
+            set: { value in
+              model.updateStudioKnobs { knobs in
+                knobs.denoisingSteps = Int(value.rounded())
+              }
+            }
+          ),
+          in: 1...16,
+          step: 1
+        )
+        .tint(H3Color.accent)
+        Text("\(model.studioSettings.knobs.denoisingSteps)")
+          .font(.system(size: 11, weight: .medium, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 22, alignment: .trailing)
+        Button("Reset") {
+          model.updateStudioKnobs { knobs in
+            knobs.denoisingSteps = AppModel.imageModelDefaultSteps
+          }
+        }
+        .buttonStyle(H3QuietButtonStyle())
+      }
+      Text("Distilled for 8. Fewer degrades quickly; more mostly costs time.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+    }
+    .accessibilityIdentifier("image-passes")
   }
 
   /// The one knob this model has. It is distilled to eight passes, so this
@@ -988,36 +1079,43 @@ struct GenerationStudioView: View {
         .accessibilityIdentifier("generation-preview-toggle")
       }
 
-      labeled("SEED") {
-        HStack(spacing: 10) {
-          Text(String(model.studioSettings.seed))
-            .font(.system(size: 13, weight: .medium, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 11)
-            .frame(height: 36)
+      seedControls
+    }
+  }
+
+  /// Its own view because it belongs to every model that draws, not to H3's
+  /// pass settings it happened to sit among: a seed reproduces a Z-Image
+  /// render exactly as it reproduces a clip.
+  private var seedControls: some View {
+    labeled("SEED") {
+      HStack(spacing: 10) {
+        Text(String(model.studioSettings.seed))
+          .font(.system(size: 13, weight: .medium, design: .monospaced))
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 11)
+          .frame(height: 36)
+          .background(H3Color.chrome)
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        Button {
+          model.studioSettings.seed = UInt64.random(in: 1..<100_000_000)
+        } label: {
+          Image(systemName: "dice")
+            .font(.system(size: 14, weight: .semibold))
+            .frame(width: 36, height: 36)
             .background(H3Color.chrome)
             .overlay {
               RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(H3Color.line, lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          Button {
-            model.studioSettings.seed = UInt64.random(in: 1..<100_000_000)
-          } label: {
-            Image(systemName: "dice")
-              .font(.system(size: 14, weight: .semibold))
-              .frame(width: 36, height: 36)
-              .background(H3Color.chrome)
-              .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                  .stroke(H3Color.line, lineWidth: 1)
-              }
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          }
-          .buttonStyle(.plain)
-          .help("The same seed with the same settings reproduces a generation. Click to reroll.")
-          .accessibilityIdentifier("generation-seed")
         }
+        .buttonStyle(.plain)
+        .help("The same seed with the same settings reproduces a generation. Click to reroll.")
+        .accessibilityIdentifier("generation-seed")
       }
     }
   }
@@ -1037,7 +1135,10 @@ struct GenerationStudioView: View {
             verb: kind.rawValue,
             phase: model.generationPhase,
             elapsed: model.generationElapsedDescription,
-            progress: model.generationProgress,
+            // The run's position, not the current phase's. A phase-local
+            // fraction restarts at every stage, which reads as the bar
+            // finishing and starting over several times per generation.
+            progress: model.generationOverallProgress,
             remaining: model.generationRemainingDescription,
             preview: model.generationPreviewImage
           )
@@ -1143,7 +1244,13 @@ struct GenerationStudioView: View {
     modelMenuOpen = false
     resultIDAtStart = model.latestStudioResult?.id
     stage = .run
-    let size = knobs.canvas.dimensions(aspect: Double(model.studioAspect.fraction))
+    // A model built for stills brings its own square ladder; the video one is
+    // a short edge that the project's aspect ratio widens, which is the pair
+    // this renderer refuses.
+    let size: (width: Int, height: Int) =
+      kind == .image && model.imageEngine == .zImage
+      ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
+      : knobs.canvas.dimensions(aspect: Double(model.studioAspect.fraction))
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
