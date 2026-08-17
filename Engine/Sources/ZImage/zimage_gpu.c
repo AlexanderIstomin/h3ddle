@@ -107,13 +107,34 @@ static h3_gpu_tensor *permute_norm(zimage_gpu *z, const char *name,
  * them. Rows may be shuffled on the way through: the scales are per output
  * row so they shuffle identically, and ConvRot rotates along the *input*
  * dimension so it is undisturbed. */
+/* `rows` and `columns` are the logical [output][input] shape; the package
+ * stores the matrix transposed so the GPU reads it coalesced, so that is what
+ * the loader asks for. Rows of the logical matrix are columns of the stored
+ * one, which is why the head permutation below works on the stored layout
+ * rather than on rows. */
 static int load_linear(zimage_gpu *z, const char *name, uint64_t rows,
                        uint64_t columns, h3_gpu_tensor **weight,
                        h3_gpu_tensor **scales, uint32_t *group,
                        int permute_heads, char *error, size_t size) {
-    if (!h3_weight_load_i8_linear(z->store, z->gpu, name, rows, columns,
-                                  weight, scales, error, size))
-        return 0;
+    /* Loaded apart rather than through h3_weight_load_i8_linear, which infers
+     * the scale count from the matrix's first dimension. That held while the
+     * matrix was [output][input]; the package stores it transposed now, and
+     * the scales are still one per *output* channel, so the two shapes no
+     * longer share an axis. */
+    const uint64_t stored[2] = {columns, rows};
+    *weight = h3_weight_load_i8(z->store, z->gpu, name, 2, stored, error, size);
+    if (!*weight) return 0;
+    char scale_name[288];
+    snprintf(scale_name, sizeof(scale_name), "%.*s.weight_scale",
+             (int)(strlen(name) - strlen(".weight")), name);
+    const uint64_t column_scale[2] = {rows, 1};
+    const uint64_t flat_scale[1] = {rows};
+    *scales = h3_weight_load_f32(z->store, z->gpu, scale_name, 2, column_scale,
+                                 error, size);
+    if (!*scales)
+        *scales = h3_weight_load_f32(z->store, z->gpu, scale_name, 1, flat_scale,
+                                     error, size);
+    if (!*scales) return 0;
     if (!h3_weight_i8_linear_convrot_group(z->store, name, group, error, size))
         return 0;
     if (!permute_heads) return 1;
@@ -133,13 +154,22 @@ static int load_linear(zimage_gpu *z, const char *name, uint64_t rows,
     permuted_index(map);
     /* Only q and k — the first two of the three DIM-row blocks. v keeps its
      * order, which is what leaves the attention output needing no fix-up. */
+    /* Output channels are the minor axis now, so the permutation moves
+     * elements within each stored row rather than moving whole rows. */
     memcpy(shuffled, values, count);
+    for (size_t k = 0; k < columns; k++)
+        for (int block = 0; block < 2; block++)
+            for (int head = 0; head < HEADS; head++)
+                for (int index = 0; index < HEAD_DIM; index++) {
+                    const size_t to = (size_t)block * DIM + head * HEAD_DIM + index;
+                    const size_t from = (size_t)block * DIM + head * HEAD_DIM + map[index];
+                    shuffled[k * rows + to] = values[k * rows + from];
+                }
     for (int block = 0; block < 2; block++)
         for (int head = 0; head < HEADS; head++)
             for (int index = 0; index < HEAD_DIM; index++) {
                 const size_t to = (size_t)block * DIM + head * HEAD_DIM + index;
                 const size_t from = (size_t)block * DIM + head * HEAD_DIM + map[index];
-                memcpy(shuffled + to * columns, values + from * columns, columns);
                 scale_shuffled[to] = scale_values[from];
             }
     for (size_t row = (size_t)2 * DIM; row < rows; row++)
@@ -173,17 +203,25 @@ static int load_fused_mlp(zimage_gpu *z, const char *prefix,
                                  "(%u against %u), so they cannot be fused",
                     prefix, w1_group, w3_group);
 
+    /* Stored [input][output], so the two matrices interleave by row rather
+     * than stacking: row k of the fused matrix is w1's row k followed by w3's. */
     const size_t half = (size_t)FFN * DIM;
     int8_t *fused = malloc(half * 2);
+    int8_t *first = malloc(half), *second = malloc(half);
     float *scales = malloc((size_t)FFN * 2 * sizeof(float));
-    if (!fused || !scales ||
-        !h3_gpu_tensor_read_i8(w1, fused, half) ||
-        !h3_gpu_tensor_read_i8(w3, fused + half, half) ||
+    if (!fused || !first || !second || !scales ||
+        !h3_gpu_tensor_read_i8(w1, first, half) ||
+        !h3_gpu_tensor_read_i8(w3, second, half) ||
         !h3_gpu_tensor_read_f32(w1_scales, scales, FFN) ||
         !h3_gpu_tensor_read_f32(w3_scales, scales + FFN, FFN)) {
-        free(fused); free(scales);
+        free(fused); free(first); free(second); free(scales);
         return fail(error, size, "cannot fuse %s w1 and w3", prefix);
     }
+    for (size_t k = 0; k < DIM; k++) {
+        memcpy(fused + k * FFN * 2, first + k * FFN, FFN);
+        memcpy(fused + k * FFN * 2 + FFN, second + k * FFN, FFN);
+    }
+    free(first); free(second);
     h3_gpu_tensor_free(w1); h3_gpu_tensor_free(w1_scales);
     h3_gpu_tensor_free(w3); h3_gpu_tensor_free(w3_scales);
     block->w13 = h3_gpu_tensor_from_i8(z->gpu, fused, half * 2);

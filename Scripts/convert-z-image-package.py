@@ -54,8 +54,9 @@ The diffusion transformer is the INT8-ConvRot quantization published by Martin
 Rizzo, also under the Apache License 2.0. Every layer is copied byte for byte.
 
 Modifications by H3ddle: the weights were repackaged from the released
-safetensors into one file per subsystem, and the autoencoder's encoder half was
-dropped because generating an image never runs it. The final layer's two small
+safetensors into one file per subsystem, the int8 matrices were transposed to
+input-major so the GPU reads them coalesced, and the autoencoder's encoder half
+was dropped because generating an image never runs it. The final layer's two small
 linears were dequantized back to bf16 so that the head can run without a second
 copy of the transformer; this reverses quantization rather than applying it, and
 changes 1.2M of 6.15B parameters. Nothing was retrained, merged, or pruned, and
@@ -258,6 +259,24 @@ def main():
         del tensors[stem + ".comfy_quant"]
     print(f"transformer: {len(head)} head linears returned to bf16, "
           f"the rest copied unchanged")
+    # int8 matrices are stored [input][output], transposed from the release.
+    #
+    # The GPU tile reads two weights a lane and one column apart. Row-major
+    # [output][input] puts those `input_dim` bytes apart and consecutive lanes
+    # `2 * input_dim` apart — 7680 here — so every lane of a simdgroup touches
+    # its own cache line on the traffic that dominates the kernel. Stored the
+    # other way round both reads are adjacent, which measured 9% on every shape
+    # the DiT runs. The values are untouched: this is a layout, and ConvRot
+    # rotates the activation rather than the weight, so nothing about the
+    # quantization changes.
+    for name in [n for n in tensors if tensors[n][0] == "I8"]:
+        dtype, shape, payload = tensors[name]
+        rows, columns = shape
+        flat = numpy.frombuffer(payload, dtype=numpy.int8).reshape(rows, columns)
+        tensors[name] = (dtype, [columns, rows],
+                         numpy.ascontiguousarray(flat.T).tobytes())
+    print(f"transformer: {quantized} int8 matrices stored input-major")
+
     write_safetensors(os.path.join(args.out, "transformer.safetensors"),
                       tensors, {})
 
