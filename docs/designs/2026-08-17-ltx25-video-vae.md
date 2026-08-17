@@ -5,6 +5,11 @@ released weights against the public implementation found was that they are
 different models — and the difference is invisible to a loader that matches on
 tensor names.
 
+**The decoder now runs** — `tests/test_real_ltx_video_vae.c` against
+`gen_ltx_vae_anchor.py`, all fourteen stages within 1.2e-05 of peak, 14 of 15
+mutations caught. What that took, and what the patch turned out to rest on, is
+in "What running it settled" at the bottom.
+
 ## The finding
 
 `CausalVideoAutoencoder` in `Lightricks/LTX-Video@main` builds a decoder whose
@@ -104,3 +109,70 @@ The audio side is a larger piece and is untouched: `ltx-2.5-audio-vae-bf16`
 holds 1329 tensors, of which 102 are the VAE proper (2D convolutions) and
 **1227 are a vocoder**. That is a separate subsystem, not a variation on this
 one.
+
+## What running it settled
+
+The patch is right, and there are now two independent reasons rather than one.
+The shape argument was always a bit circular — I chose the patch that made the
+shapes line up, so of course they line up. Two things fix that.
+
+First, the patch does not invent a mechanism. `out_channels_reduction_factor`
+is already a parameter of `DepthToSpaceUpsample`, already passed by
+`compress_all`. The change passes an argument the class already accepts to the
+two siblings that were not given it. That is a plausible upstream omission, not
+a plausible coincidence.
+
+Second, and this is the one that does not depend on my reading at all: the
+patched encoder and decoder **round-trip a structured image at 30.8 dB**. A
+decoder whose blocks are shaped right but ordered or wired wrong still loads
+and still runs; it does not reconstruct edges and gradients. Shapes agreeing
+shows the parts fit. Only a round trip shows they fit *together*.
+
+### The conventions, all mutation-checked
+
+| convention | the other plausible reading |
+|---|---|
+| temporal padding **replicates**, spatial padding **zero-fills** | both the same, on the same convolution |
+| `compress_time`/`compress_all` drop their **first** output frame, unconditionally | drop the last, or drop none |
+| pixel norm is parameter-free, epsilon **inside** the root | epsilon outside, or a learned weight |
+| unpatchify packs channels **(c, t, w, h)** | (c, t, h, w) — transposes every 4×4 patch |
+| the shuffle decomposes channels **major-to-minor** as (c, p1, p2, p3) | minor-to-major, or depth innermost |
+
+The dropped frame is why 2 latent frames become 3, then 5, then 9 rather than
+4, 8, 16 — it is what keeps the stack on the `8*(k-1)+1` frame count.
+
+### The epsilon is inert, and that is measured rather than assumed
+
+Setting pixel norm's `1e-8` to zero changes nothing this test can see, so no
+mutation catches it. That is a true statement about the model at these
+magnitudes, not a hole in the test — the smallest mean square anywhere in the
+stack is **5.0e+02**, about 5e10 times the epsilon. The test now prints that
+margin and fails if it ever closes, which is the useful form: "shown not to
+apply here" rather than "untested".
+
+### Two engine facts worth keeping
+
+**Uploads must not happen inside an open command buffer.** A convolution
+encoded after an upload into the same buffer reads the allocation as zeros and
+emits its bias alone — which is exactly what happened, and was diagnosable only
+because the bias was recognisable in the output. Load first, then
+`h3_gpu_begin`. The same applies in reverse at the end: submit before freeing
+anything the encoded work still reads.
+
+**Layout is NDHWC with OIDHW weights.** OIDHW is torch's own `Conv3d` layout,
+so weights load with no rearrangement and only activations need permuting.
+`h3_gpu_conv3d_same_f32` zero-pads height and width and leaves depth alone,
+which is precisely the split LTX needs: pad time explicitly by replication
+first, then let the kernel handle the spatial axes.
+
+### What is still missing
+
+The four pixel shuffles run on the host, one readback each. At the anchor size
+the largest moves 1.2M floats and costs little, but a real decode wants a
+kernel — `b (c p1 p2 p3) d h w -> b c (d p1) (h p2) (w p3)`, a pure gather. It
+is the only piece of the decoder the GPU cannot do end to end, and it is a
+performance gap rather than a correctness one. Deliberately left out of the
+shared Metal files.
+
+A 9-frame 128×128 decode takes 2.65 s, nearly all of it weight loading at this
+size. The encoder is unported — the round trip above runs it in torch.
