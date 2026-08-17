@@ -58,6 +58,7 @@ let package = Package(
         // Z-Image-Turbo, on the same footing as SA3 and Qwen3-TTS. The text
         // encoder is Qwen3-4B, so the block arithmetic is borrowed outright
         // from Qwen3TTS rather than written twice.
+        "Sources/ZImage/zimage_generate.c",
         "Sources/ZImage/zimage_block.c",
         "Sources/ZImage/zimage_dit.c",
         "Sources/ZImage/zimage_gpu.c",

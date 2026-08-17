@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 13
+  public static let currentVersion = 14
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -102,10 +102,45 @@ public struct EngineSpeechOptions: Hashable, Codable, Sendable {
   }
 }
 
+/// Which model renders a still.
+///
+/// H3 produces one by generating a very short clip and keeping a frame, which
+/// is why the request's video knobs — retained DiT blocks, block cache, beta
+/// schedule — apply to it and mean nothing to the other. Z-Image-Turbo is a
+/// dedicated text-to-image model: markedly better pictures, eight forwards
+/// rather than a clip's worth, and its own package.
+public enum EngineImageModel: String, Codable, Sendable {
+  case h3
+  case zImage
+}
+
+/// Settings that apply to a still and to nothing else. Absent means H3, which
+/// is what `.image` meant before this existed.
+public struct EngineImageOptions: Hashable, Codable, Sendable {
+  /// Z-Image-Turbo is step-distilled and released at eight; fewer trades
+  /// detail for time and more buys very little.
+  public static let stepsRange = 1...32
+
+  public var model: EngineImageModel
+  /// Overrides the model's released schedule when set. Ignored by H3, which
+  /// takes its budget from `denoisingSteps`.
+  public var steps: Int?
+
+  public init(model: EngineImageModel = .h3, steps: Int? = nil) {
+    self.model = model
+    self.steps = steps.map { Self.stepsRange.clamping($0) }
+  }
+}
+
 public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case modelInspection
   case videoGeneration
   case imageGeneration
+  /// Z-Image-Turbo: a dedicated text-to-image model, as against the still H3
+  /// makes by rendering a very short clip and keeping a frame. Separate from
+  /// `imageGeneration` because an engine can have one package and not the
+  /// other, and the app must not offer a model the engine cannot load.
+  case zImageGeneration
   case standaloneAudioGeneration
   case soundEffectGeneration
   case speechGeneration
@@ -344,6 +379,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public static let audioCanvasSize = 32
   /// Required by `.speech` and ignored by every other kind.
   public var speech: EngineSpeechOptions?
+  /// Which model renders a still, and its own settings. Absent keeps H3.
+  public var image: EngineImageOptions?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -366,6 +403,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     lastFrameURL: URL? = nil,
     referenceImageURLs: [URL] = [],
     speech: EngineSpeechOptions? = nil,
+    image: EngineImageOptions? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -387,6 +425,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.lastFrameURL = lastFrameURL
     self.referenceImageURLs = Array(referenceImageURLs.prefix(Self.referenceImageLimit))
     self.speech = speech
+    self.image = image
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
