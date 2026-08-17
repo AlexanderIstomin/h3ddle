@@ -22,6 +22,9 @@
 #define SLOTS       5
 #define UNIT_SLOTS  2
 #define UNIT_GATE   1
+
+/* Below this many rows the bf16 path wins; above it the f32 one does. */
+#define ZIMAGE_F32_ATTENTION_ROWS 512
 #define SHIFT_SLOT  0
 #define SCALE_MSA   1
 #define GATE_MSA    2
@@ -49,6 +52,7 @@ struct zimage_gpu {
     h3_gpu_tensor *hidden, *normed, *branch, *heads;
     h3_gpu_tensor *qkv, *query, *key, *value;
     h3_gpu_tensor *ff, *activated;
+    h3_gpu_tensor *query32, *key32, *value32, *heads32;
     h3_gpu_tensor *modulation, *mod_linear, *adaln_input;
     h3_gpu_tensor *row_map, *rope_cos, *rope_sin, *ones;
     double seconds;
@@ -306,6 +310,11 @@ zimage_gpu *zimage_gpu_create(const char *shaders, const char *weights,
     if (!z->gpu || !z->store) { zimage_gpu_release(z); return NULL; }
 
     const size_t wide = (size_t)max_tokens * DIM;
+#define NEW32(field, elements) do {                                           \
+        z->field = h3_gpu_tensor_new_f32(z->gpu, (elements));                 \
+        if (!z->field) { fail(error, size, "out of GPU memory sizing " #field); \
+                         zimage_gpu_release(z); return NULL; }                \
+    } while (0)
 #define NEW(field, elements) do {                                             \
         z->field = h3_gpu_tensor_new_bf16(z->gpu, (elements));                \
         if (!z->field) { fail(error, size, "out of GPU memory sizing " #field); \
@@ -323,6 +332,8 @@ zimage_gpu *zimage_gpu_create(const char *shaders, const char *weights,
     NEW(modulation, (size_t)SLOTS * DIM);
     NEW(mod_linear, (size_t)DIM * 4);
     NEW(adaln_input, ADALN);
+    NEW32(query32, wide); NEW32(key32, wide);
+    NEW32(value32, wide); NEW32(heads32, wide);
     NEW(rope_cos, (size_t)max_tokens * ROPE_HALF);
     NEW(rope_sin, (size_t)max_tokens * ROPE_HALF);
 #undef NEW
@@ -369,6 +380,7 @@ void zimage_gpu_release(zimage_gpu *z) {
     h3_gpu_tensor *tensors[] = {
         z->hidden, z->normed, z->branch, z->heads, z->qkv, z->query, z->key,
         z->value, z->ff, z->activated, z->modulation, z->mod_linear,
+        z->query32, z->key32, z->value32, z->heads32,
         z->adaln_input, z->row_map, z->rope_cos, z->rope_sin, z->ones,
     };
     for (size_t index = 0; index < sizeof(tensors) / sizeof(tensors[0]); index++)
@@ -429,15 +441,35 @@ static int run_block(zimage_gpu *z, const zimage_gpu_block *block,
                                 block->q_norm, block->k_norm, z->rope_cos,
                                 z->rope_sin, rows, HEADS, HEAD_DIM, ROPE_HALF,
                                 NORM_EPS), "QK norm and RoPE");
-    /* Stays bf16 despite MPSGraph's f32 SDPA measuring 2.3x faster in
-     * isolation — 118 ms against 270 at this exact shape. Casting q, k and v
-     * up and the result back made the whole forward *slower*, 39 s against
-     * 26.3, and the cause was not the cast traffic (about 380 MB a block, some
-     * 60 ms a forward) nor graph-cache collision, since the key carries the
-     * dtype. Unexplained, and the in-situ number is the one that decides. */
-    OP(h3_gpu_sdpa_bf16(z->gpu, z->heads, z->query, z->key, z->value, rows,
+    /* Casting costs time linear in the rows while the saving is quadratic in
+     * them, so the trade turns over with the canvas: measured, bf16 wins by
+     * 2.5% at 320 tokens, f32 by 3.7% at 1056 and by 9% at 4128. */
+    if (rows <= ZIMAGE_F32_ATTENTION_ROWS) {
+        OP(h3_gpu_sdpa_bf16(z->gpu, z->heads, z->query, z->key, z->value, rows,
                             HEADS, HEAD_DIM, 1.0f / sqrtf((float)HEAD_DIM)),
            "attention");
+    } else {   /* Attention runs f32 even though everything around it is bf16.
+         *
+         * MPSGraph's bf16 SDPA reaches 0.97 TFLOP/s on this shape where its
+         * f32 path reaches 2.21, and casting three inputs up and the result
+         * back still comes out ahead: interleaved and with the order swapped,
+         * every f32 forward measured between 17.6 and 21.2 s against every
+         * bf16 one between 22.5 and 23.0. Roughly a tenth off the forward at
+         * the median.
+         *
+         * An earlier test said the opposite. It ran the two arms as sequential
+         * blocks while the machine was drifting about 20%, which is the same
+         * size as the effect — so it measured the drift. Interleave and swap
+         * the order before believing any comparison here. */
+        const uint32_t span = rows * DIM;
+        OP(h3_gpu_cast_bf16_to_f32(z->gpu, z->query32, z->query, span), "cast q");
+        OP(h3_gpu_cast_bf16_to_f32(z->gpu, z->key32, z->key, span), "cast k");
+        OP(h3_gpu_cast_bf16_to_f32(z->gpu, z->value32, z->value, span), "cast v");
+        OP(h3_gpu_sdpa_f32(z->gpu, z->heads32, z->query32, z->key32, z->value32,
+                           rows, HEADS, HEAD_DIM,
+                           1.0f / sqrtf((float)HEAD_DIM)), "attention");
+        OP(h3_gpu_cast_f32_to_bf16(z->gpu, z->heads, z->heads32, span), "cast out");
+    }
     if (!rotated_linear(z, z->branch, z->heads, block, block->out,
                         block->out_scales, NULL, block->out_group, rows,
                         DIM, DIM, "attention output", error, size)) return 0;
