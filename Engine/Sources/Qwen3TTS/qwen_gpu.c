@@ -271,9 +271,12 @@ static int forward_block(h3_gpu *gpu, const qwen_gpu_layer *layer,
                                  HEAD_DIM, RMS_EPSILON), "query head RMSNorm");
     OP(h3_gpu_head_rms_norm_coop_bf16(gpu, work->key, layer->k_norm, rows, KV_HEADS,
                                  HEAD_DIM, RMS_EPSILON), "key head RMSNorm");
+    /* Zero head stride: every head reads the same rope table, which is what
+     * this model wants and what the call did before the parameter existed.
+     * A non-zero stride gives each head its own table. */
     OP(h3_gpu_rope_text_bf16(gpu, work->query, work->key, work->rope_window_cos,
                              work->rope_window_sin, rows, HEADS, KV_HEADS,
-                             HEAD_DIM), "RoPE");
+                             HEAD_DIM, 0), "RoPE");
 
     /* Cached keys are normalised and rotated, so a later step only has to dot
      * against them. */
