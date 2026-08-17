@@ -21,8 +21,9 @@ What is deliberately left behind:
   * the VAE *encoder* and `quant_conv`. Text to image never encodes an image,
     so half the autoencoder is dead weight. Editing would need them back, and
     would need SigLIP 2 as well, which this package also omits.
-  * nothing else. No tensor value changes, which is what makes a tensor-by-
-    tensor check against the reference meaningful.
+  * nothing else. Every DiT layer is copied byte for byte, which is what makes
+    a tensor-by-tensor check against the reference meaningful. The one
+    exception is the head's two linears, dequantized back to bf16 — see below.
 
 Constants that live in the reference's Python rather than in any tensor — the
 flow-match shift, the latent scaling and shift, the DiT's own hyperparameters —
@@ -42,18 +43,23 @@ import shutil
 import struct
 import sys
 
+import numpy
+
 # The engine rejects anything else, so refuse to emit it.
 REQUIRED_QUANT_FORMAT = "int8_tensorwise"
 
 NOTICE = """Z-Image-Turbo by Alibaba Tongyi Lab, licensed under the Apache License 2.0.
 
 The diffusion transformer is the INT8-ConvRot quantization published by Martin
-Rizzo, also under the Apache License 2.0, and is copied here byte for byte.
+Rizzo, also under the Apache License 2.0. Every layer is copied byte for byte.
 
 Modifications by H3ddle: the weights were repackaged from the released
 safetensors into one file per subsystem, and the autoencoder's encoder half was
-dropped because generating an image never runs it. No tensor values were
-changed. No weights were retrained, merged, pruned, or quantized here.
+dropped because generating an image never runs it. The final layer's two small
+linears were dequantized back to bf16 so that the head can run without a second
+copy of the transformer; this reverses quantization rather than applying it, and
+changes 1.2M of 6.15B parameters. Nothing was retrained, merged, or pruned, and
+no weights were quantized here.
 """
 
 DTYPE_SIZES = {"BF16": 2, "F16": 2, "F32": 4, "F64": 8,
@@ -118,6 +124,33 @@ def write_safetensors(path, tensors, metadata):
         handle.write(blob)
         for name in ordered:
             handle.write(tensors[name][2])
+
+
+def unrotate(values, group):
+    """Undo ConvRot along the input dimension.
+
+    The engine's h3_convrot kernel is a radix-4 pass over each group with the
+    *regular* Hadamard butterfly — not Sylvester's — scaled 1/16 so it is
+    orthonormal. That matrix is symmetric as well as orthogonal, so the
+    transform is its own inverse and un-rotating is applying it again.
+    """
+    shape = values.shape
+    x = values.reshape(-1, shape[-1] // group, group).copy()
+    stride = 1
+    for _ in range(4):
+        y = x.reshape(x.shape[0], x.shape[1], group // (4 * stride), 4, stride)
+        a, b, c, d = y[..., 0, :], y[..., 1, :], y[..., 2, :], y[..., 3, :]
+        x = numpy.stack([a + b + c - d, a + b - c + d,
+                         a - b + c + d, -a + b + c + d], axis=-2).reshape(x.shape)
+        stride *= 4
+    return (x * 0.0625).reshape(shape)
+
+
+def bf16_bytes(values):
+    """Round f32 to bf16, half-to-even, and return the raw payload."""
+    bits = values.astype(numpy.float32).view(numpy.uint32)
+    bits = bits + 0x7FFF + ((bits >> 16) & 1)
+    return (bits >> 16).astype(numpy.uint16).tobytes()
 
 
 def regular_hadamard_size(size):
@@ -194,9 +227,39 @@ def main():
 
     with open(os.path.join(args.base, "transformer", "config.json")) as handle:
         dit_config = json.load(handle)
-    # Copied whole: the file is already exactly what the engine reads, and
-    # rewriting it would only risk reordering or re-encoding what is correct.
-    shutil.copyfile(source, os.path.join(args.out, "transformer.safetensors"))
+
+    # The head's two linears come back to bf16; everything else is copied
+    # byte for byte.
+    #
+    # The blocks run on the GPU and read int8 happily, but the head stays on
+    # the CPU — it is one layer norm and two small products, not worth a
+    # device round trip — and the CPU path has no int8 reader. Leaving them
+    # quantized forces a second, unquantized copy of the whole 6 GB
+    # transformer to be kept alongside just to serve two tensors, which on a
+    # 32 GB machine is the difference between the weights staying in page
+    # cache between generations and being re-read from disk each time.
+    #
+    # The saving was never real anyway: together they are 1.2M parameters,
+    # 2.5 MB at bf16 against 1.2 MB at int8. And `final_layer.linear` at
+    # [64, 3840] is the most aggressively quantized tensor in the model — 64
+    # output rows, one scale each — so this slightly improves the picture too.
+    head = [name for name in tensors
+            if name.startswith("final_layer.") and name.endswith(".weight")
+            and tensors[name][0] == "I8"]
+    for name in head:
+        stem = name[: -len(".weight")]
+        dtype, shape, payload = tensors[name]
+        scales = numpy.frombuffer(tensors[stem + ".weight_scale"][2],
+                                  dtype=numpy.float32).reshape(shape[0], 1)
+        values = numpy.frombuffer(payload, dtype=numpy.int8)
+        values = values.reshape(shape).astype(numpy.float32) * scales
+        tensors[name] = ("BF16", shape, bf16_bytes(unrotate(values, group)))
+        del tensors[stem + ".weight_scale"]
+        del tensors[stem + ".comfy_quant"]
+    print(f"transformer: {len(head)} head linears returned to bf16, "
+          f"the rest copied unchanged")
+    write_safetensors(os.path.join(args.out, "transformer.safetensors"),
+                      tensors, {})
 
     # --- the text encoder, merged from its shards ----------------------
     encoder = read_sharded(os.path.join(args.base, "text_encoder"),
