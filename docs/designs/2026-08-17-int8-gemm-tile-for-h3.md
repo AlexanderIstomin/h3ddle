@@ -199,8 +199,38 @@ a 3-second clip at 5095 rows:
 
 3.135x the rows and 9.5x the cost, against 9.83x for a square law. That is
 attention, it is 38% of a pass at a size someone would actually ask for, and
-it overtakes the GEMM shortly above it. It is the next thing to work on, and
-the reason to distrust a profile taken at the smallest size that runs.
+it overtakes the GEMM shortly above it — and the reason to distrust a profile
+taken at the smallest size that runs.
+
+### Done: attention runs f32 above 512 rows
+
+MPSGraph's bf16 SDPA is slower than its f32 path by enough that casting three
+operands up and the result back still wins. Measured at H3's 56 heads of 128,
+alternating and order-swapped:
+
+| rows | bf16 | f32 + casts | |
+|------|------|-------------|---|
+| 1625 | 83.6 ms | 44.6 ms | 1.87x |
+| 5095 | 870.6 ms | 494.4 ms | 1.76x |
+| 8192 | 2015.5 ms | 1171.4 ms | 1.72x |
+
+End to end on the 5095-row clip, interleaved: **114.1 s a pass to 97.0 s, and
+a run 592 s to 521 s**. The four f32 buffers are 146 MB each at that size and
+are allocated only above the threshold; failing to get them falls back to
+bf16 rather than failing the run.
+
+Nothing is given up for it. The head-major SDPA variant, which exists so the
+int8 attention output can read its own layout, is unreachable for a
+pre-quantized package — `int8_attention_out` is `!prequantized_int8` — so the
+row-major output this path writes is what that path was already producing. An
+A/B of the head-major flag on a pre-quantized package measures nothing, which
+is what it measured.
+
+**This one changes the picture, unlike the tile.** f32 attention rounds less
+than bf16, so it is the more accurate of the two, but denoising amplifies any
+difference into a different sample of the same scene. The frames are not
+comparable byte for byte and PSNR against the old output is not the gate;
+that the composition survives is.
 
 The technique that worked is stubbing operations inside a real run rather than
 benchmarking them alone — replace an op with a copy, measure the whole forward,
