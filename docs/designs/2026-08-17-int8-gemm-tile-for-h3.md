@@ -186,9 +186,21 @@ from the total and calling the remainder loading, without looking — it was
 almost entirely the video VAE decode, and measuring it rather than inferring
 it is what found the next 2.2x.
 
-**The f32 SDPA switch is retired for H3.** Attention lives inside the 4.6 s
-that remained when the projections were stubbed — at most 3% of a pass before
-this change, and it is unchanged by it.
+**The f32 SDPA switch was retired here on a bad measurement, and is not.**
+Attention lives inside the 4.6 s that remained when the projections were
+stubbed, which is 17% of a pass — but that was a 0.9-second clip at 1625 rows,
+and everything outside the GEMM grows with the square of them. Re-measured on
+a 3-second clip at 5095 rows:
+
+| per pass | 1625 rows | 5095 rows | |
+|---|---|---|---|
+| the projections | 22.1 s (83%) | 72.5 s (62%) | 3.28x — linear |
+| everything else | 4.6 s (17%) | 43.8 s (38%) | 9.5x — quadratic |
+
+3.135x the rows and 9.5x the cost, against 9.83x for a square law. That is
+attention, it is 38% of a pass at a size someone would actually ask for, and
+it overtakes the GEMM shortly above it. It is the next thing to work on, and
+the reason to distrust a profile taken at the smallest size that runs.
 
 The technique that worked is stubbing operations inside a real run rather than
 benchmarking them alone — replace an op with a copy, measure the whole forward,
