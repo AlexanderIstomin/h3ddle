@@ -39,6 +39,10 @@
 
 enum {
     LATENT_CHANNELS = LTX_VIDEO_LATENT_CHANNELS,
+    /* `latent_log_var: uniform` gives the encoder one channel beyond the
+     * means: a single shared log variance the deterministic path never reads.
+     */
+    MOMENT_CHANNELS = LATENT_CHANNELS + 1,
     PATCH = 4,
     IMAGE_CHANNELS = LTX_VIDEO_CHANNELS,
     PACKED_CHANNELS = IMAGE_CHANNELS * PATCH * PATCH,
@@ -208,12 +212,13 @@ typedef struct { h3_gpu_tensor *weight, *bias; } conv3d;
  * same buffer reads the allocation as zeros and emits its bias alone. So every
  * load happens before `h3_gpu_begin`, and the mirror rule applies at the end --
  * submit before freeing anything encoded work still reads. */
-static void load_conv(run *r, const char *name, uint32_t out_channels,
-                      uint32_t in_channels, conv3d *into) {
+static void load_conv(run *r, const char *half, const char *name,
+                      uint32_t out_channels, uint32_t in_channels,
+                      conv3d *into) {
     memset(into, 0, sizeof(*into));
     char full[256];
     const size_t taps = (size_t)KERNEL * KERNEL * KERNEL;
-    snprintf(full, sizeof(full), "decoder.%s.conv.weight", name);
+    snprintf(full, sizeof(full), "%s.%s.conv.weight", half, name);
     float *weight = read_tensor(r, full,
                                 (size_t)out_channels * in_channels * taps);
     if (weight) {
@@ -221,7 +226,7 @@ static void load_conv(run *r, const char *name, uint32_t out_channels,
                               (size_t)out_channels * in_channels * taps);
         free(weight);
     }
-    snprintf(full, sizeof(full), "decoder.%s.conv.bias", name);
+    snprintf(full, sizeof(full), "%s.%s.conv.bias", half, name);
     float *bias = read_tensor(r, full, out_channels);
     if (bias) { into->bias = upload(r, bias, out_channels); free(bias); }
 }
@@ -237,10 +242,24 @@ static void free_conv(conv3d *which) {
 /* Frames are the outermost axis of a channels-last buffer, so each is a
  * contiguous run and a handful of copies do the whole job. The decoder pads one
  * frame at each end; the encoder (not here) pads two in front. */
-static h3_gpu_tensor *pad_time(run *r, const h3_gpu_tensor *input, shape of) {
+static h3_gpu_tensor *pad_time(run *r, const h3_gpu_tensor *input, shape of,
+                               int causal) {
     const size_t frame = (size_t)of.height * of.width * of.channels;
     h3_gpu_tensor *out = allocate(r, (size_t)(of.depth + 2) * frame);
     if (!out) return NULL;
+    if (causal) {
+        /* The encoder is causal: both pad frames go in *front*, duplicating
+         * the first, so no output frame ever reads a later input one. The
+         * decoder replicates at both ends instead. That asymmetry is what
+         * makes the two halves inverses rather than mirrors. */
+        GPU_OP(r, h3_gpu_copy_f32(r->gpu, out, 2 * frame, input, 0,
+                                  (size_t)of.depth * frame), "pad interior");
+        GPU_OP(r, h3_gpu_copy_f32(r->gpu, out, 0, input, 0, frame),
+               "pad first");
+        GPU_OP(r, h3_gpu_copy_f32(r->gpu, out, frame, input, 0, frame),
+               "pad second");
+        return out;
+    }
     GPU_OP(r, h3_gpu_copy_f32(r->gpu, out, frame, input, 0,
                               (size_t)of.depth * frame), "pad interior");
     GPU_OP(r, h3_gpu_copy_f32(r->gpu, out, 0, input, 0, frame), "pad front");
@@ -255,8 +274,8 @@ static h3_gpu_tensor *pad_time(run *r, const h3_gpu_tensor *input, shape of) {
  * reference's explicit temporal concatenation plus `padding=(0, 1, 1)` gives. */
 static h3_gpu_tensor *run_conv(run *r, const conv3d *kernel,
                                const h3_gpu_tensor *input, shape of,
-                               uint32_t out_channels) {
-    h3_gpu_tensor *padded = pad_time(r, input, of);
+                               uint32_t out_channels, int causal) {
+    h3_gpu_tensor *padded = pad_time(r, input, of, causal);
     shape result = {of.depth, of.height, of.width, out_channels};
     h3_gpu_tensor *out = allocate(r, volume(result));
     if (out)
@@ -280,6 +299,51 @@ static void pixel_norm(run *r, h3_gpu_tensor *out, const h3_gpu_tensor *input,
 }
 
 /* --------------------------------------------------- packing on the host */
+
+/* The inverse of `depth_to_space`: `b c (d p1) (h p2) (w p3) -> b (c p1 p2 p3)
+ * d h w`, channels last. Same index order, read the other way -- the depth
+ * factor stays the slowest of the three sub-indices, which is the detail that
+ * makes the two exact inverses rather than merely similar. */
+static void space_to_depth(const float *input, float *out, shape of,
+                           uint32_t depth_down, uint32_t height_down,
+                           uint32_t width_down) {
+    const uint32_t factor = depth_down * height_down * width_down;
+    const uint32_t out_depth = of.depth / depth_down;
+    const uint32_t out_height = of.height / height_down;
+    const uint32_t out_width = of.width / width_down;
+    const uint32_t out_channels = of.channels * factor;
+    for (uint32_t d = 0; d < out_depth; d++)
+        for (uint32_t h = 0; h < out_height; h++)
+            for (uint32_t w = 0; w < out_width; w++) {
+                float *target = out +
+                    (((size_t)d * out_height + h) * out_width + w) * out_channels;
+                for (uint32_t c = 0; c < of.channels; c++)
+                    for (uint32_t i = 0; i < depth_down; i++)
+                        for (uint32_t j = 0; j < height_down; j++)
+                            for (uint32_t k = 0; k < width_down; k++) {
+                                const size_t at =
+                                    ((((size_t)(d * depth_down + i) * of.height +
+                                       h * height_down + j) * of.width +
+                                      w * width_down + k) * of.channels) + c;
+                                target[((c * depth_down + i) * height_down + j) *
+                                       width_down + k] = input[at];
+                            }
+            }
+}
+
+/* The downsample's skip path averages each group of `group` channels down to
+ * one, which is how the widened stack meets the narrowed convolution. */
+static void group_mean(const float *input, float *out, size_t count,
+                       uint32_t width, uint32_t group) {
+    const uint32_t narrow = width / group;
+    for (size_t row = 0; row < count; row++)
+        for (uint32_t channel = 0; channel < narrow; channel++) {
+            double sum = 0.0;
+            for (uint32_t index = 0; index < group; index++)
+                sum += input[row * width + channel * group + index];
+            out[row * narrow + channel] = (float)(sum / (double)group);
+        }
+}
 
 /* `b (c p1 p2 p3) d h w -> b c (d p1) (h p2) (w p3)`, channels last. The
  * channel index decomposes major-to-minor as (c, p1, p2, p3), so the depth
@@ -336,6 +400,35 @@ static void unpatchify(const float *input, float *out, shape of) {
 
 /* --------------------------------------------------------------- the blocks */
 
+/* Frames in [C][D][H][W] to the packed [D][H][W][C'] the encoder's first
+ * convolution reads: each `PATCH`-square tile of every frame becomes one
+ * position whose channels run (c, y, x). The decoder's `unpatchify` undoes
+ * exactly this. */
+static void patchify(const float *image, float *out, shape packed) {
+    const uint32_t height = packed.height * PATCH, width = packed.width * PATCH;
+    const size_t plane = (size_t)packed.depth * height * width;
+    for (uint32_t d = 0; d < packed.depth; d++)
+        for (uint32_t h = 0; h < packed.height; h++)
+            for (uint32_t w = 0; w < packed.width; w++) {
+                float *target = out +
+                    (((size_t)d * packed.height + h) * packed.width + w) *
+                    packed.channels;
+                for (uint32_t c = 0; c < IMAGE_CHANNELS; c++)
+                    for (uint32_t r = 0; r < PATCH; r++)
+                        for (uint32_t q = 0; q < PATCH; q++)
+                            /* The sub-index that moves fastest in the *target*
+                             * is the patch's row, and the one that selects the
+                             * channel group is its column -- the tile is
+                             * transposed on the way in. Writing it the
+                             * intuitive way round packs a plausible tensor
+                             * that the first convolution then reads across. */
+                            target[(c * PATCH + r) * PATCH + q] =
+                                image[(size_t)c * plane +
+                                      ((size_t)d * height + h * PATCH + q) *
+                                      width + w * PATCH + r];
+            }
+}
+
 typedef struct {
     const char *kind;
     int layers;                 /* res_x only */
@@ -362,26 +455,42 @@ static const vae_block DECODE[BLOCKS] = {
  * res_x block keeps its channel count, so the reference's shortcut projection
  * and its third norm are both Identity, which is why the checkpoint carries
  * neither. */
-static void resnet(run *r, int block, int layer, h3_gpu_tensor *x, shape of) {
+/* `encoder_blocks` from the checkpoint config, in order. The decoder's list
+ * reversed is not the same thing: the encoder's compressions carry a residual
+ * the decoder's expansions do not, which is what the `_res` suffix names. */
+static const vae_block ENCODE[BLOCKS] = {
+    {"res_x",              4, 0, 0, 0, 0},
+    {"compress_space_res", 0, 2, 1, 2, 2},
+    {"res_x",              6, 0, 0, 0, 0},
+    {"compress_time_res",  0, 2, 2, 1, 1},
+    {"res_x",              4, 0, 0, 0, 0},
+    {"compress_all_res",   0, 2, 2, 2, 2},
+    {"res_x",              2, 0, 0, 0, 0},
+    {"compress_all_res",   0, 1, 2, 2, 2},
+    {"res_x",              2, 0, 0, 0, 0}
+};
+
+static void resnet(run *r, const char *half, int block, int layer,
+                   h3_gpu_tensor *x, shape of, int causal) {
     char name[160];
     conv3d first, second;
-    snprintf(name, sizeof(name), "up_blocks.%d.res_blocks.%d.conv1", block,
-             layer);
-    load_conv(r, name, of.channels, of.channels, &first);
-    snprintf(name, sizeof(name), "up_blocks.%d.res_blocks.%d.conv2", block,
-             layer);
-    load_conv(r, name, of.channels, of.channels, &second);
+    snprintf(name, sizeof(name), "%s_blocks.%d.res_blocks.%d.conv1",
+             causal ? "down" : "up", block, layer);
+    load_conv(r, half, name, of.channels, of.channels, &first);
+    snprintf(name, sizeof(name), "%s_blocks.%d.res_blocks.%d.conv2",
+             causal ? "down" : "up", block, layer);
+    load_conv(r, half, name, of.channels, of.channels, &second);
     h3_gpu_tensor *scratch = allocate(r, volume(of));
 
     GPU_OP(r, h3_gpu_begin(r->gpu), "begin resnet");
     pixel_norm(r, scratch, x, of);
     GPU_OP(r, h3_gpu_silu_f32(r->gpu, scratch, scratch, (uint32_t)volume(of)),
            "resnet activation");
-    h3_gpu_tensor *hidden = run_conv(r, &first, scratch, of, of.channels);
+    h3_gpu_tensor *hidden = run_conv(r, &first, scratch, of, of.channels, causal);
     pixel_norm(r, scratch, hidden, of);
     GPU_OP(r, h3_gpu_silu_f32(r->gpu, scratch, scratch, (uint32_t)volume(of)),
            "resnet activation");
-    h3_gpu_tensor *second_out = run_conv(r, &second, scratch, of, of.channels);
+    h3_gpu_tensor *second_out = run_conv(r, &second, scratch, of, of.channels, causal);
     GPU_OP(r, h3_gpu_add_scaled_f32(r->gpu, x, x, second_out, 1.0f, 1.0f,
                                     (uint32_t)volume(of)), "resnet residual");
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit resnet");
@@ -404,9 +513,9 @@ static h3_gpu_tensor *upsample(run *r, int block, const vae_block *plan,
     const uint32_t wide = of->channels * factor / (uint32_t)plan->multiplier;
     snprintf(name, sizeof(name), "up_blocks.%d.conv", block);
     conv3d kernel;
-    load_conv(r, name, wide, of->channels, &kernel);
+    load_conv(r, "decoder", name, wide, of->channels, &kernel);
     GPU_OP(r, h3_gpu_begin(r->gpu), "begin upsample");
-    h3_gpu_tensor *convolved = run_conv(r, &kernel, x, *of, wide);
+    h3_gpu_tensor *convolved = run_conv(r, &kernel, x, *of, wide, 0);
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit upsample");
     drain(r);
     free_conv(&kernel);
@@ -440,6 +549,235 @@ static h3_gpu_tensor *upsample(run *r, int block, const vae_block *plan,
 }
 
 /* ------------------------------------------------------------------ decode */
+
+/* The encoder's compression: a strided convolution and a skip, both packed
+ * down by `space_to_depth`, added. The skip averages groups of channels to
+ * meet the convolution's narrower output — that averaged residual is the whole
+ * difference between these blocks and the decoder's expansions. */
+static h3_gpu_tensor *downsample(run *r, int block, const vae_block *plan,
+                                 h3_gpu_tensor *x, shape *of) {
+    char name[160];
+    const uint32_t factor = plan->depth_step * plan->height_step *
+                            plan->width_step;
+    const uint32_t out_channels = of->channels * (uint32_t)plan->multiplier;
+    const uint32_t group = of->channels * factor / out_channels;
+    const uint32_t narrow = out_channels / factor;
+
+    shape extended = *of;
+    h3_gpu_tensor *source = x;
+    if (plan->depth_step == 2) {
+        /* A duplicated leading frame, so an odd frame count halves cleanly and
+         * the first output frame still sees only itself. */
+        const size_t frame = (size_t)of->height * of->width * of->channels;
+        extended.depth += 1;
+        source = allocate(r, (size_t)extended.depth * frame);
+        if (!source) return NULL;
+        GPU_OP(r, h3_gpu_begin(r->gpu), "begin frame duplication");
+        GPU_OP(r, h3_gpu_copy_f32(r->gpu, source, frame, x, 0,
+                                  (size_t)of->depth * frame), "extend interior");
+        GPU_OP(r, h3_gpu_copy_f32(r->gpu, source, 0, x, 0, frame),
+               "extend front");
+        GPU_OP(r, h3_gpu_submit(r->gpu), "submit frame duplication");
+        drain(r);
+        h3_gpu_tensor_free(x);
+    }
+
+    snprintf(name, sizeof(name), "down_blocks.%d.conv", block);
+    conv3d kernel;
+    load_conv(r, "encoder", name, narrow, extended.channels, &kernel);
+    GPU_OP(r, h3_gpu_begin(r->gpu), "begin downsample");
+    h3_gpu_tensor *convolved = run_conv(r, &kernel, source, extended, narrow, 1);
+    GPU_OP(r, h3_gpu_submit(r->gpu), "submit downsample");
+    drain(r);
+    free_conv(&kernel);
+
+    shape packed = {extended.depth / plan->depth_step,
+                    extended.height / plan->height_step,
+                    extended.width / plan->width_step, out_channels};
+    float *skip = NULL, *branch = NULL;
+    if (!r->failed) {
+        skip = malloc(volume(packed) * sizeof(*skip));
+        branch = malloc(volume(packed) * sizeof(*branch));
+        if (!skip || !branch) oops(r, "cannot allocate a downsample stack");
+    }
+    if (!r->failed) {
+        float *host = download(r, source, volume(extended));
+        float *wide = malloc(positions(packed) * extended.channels * factor *
+                             sizeof(*wide));
+        if (!host || !wide) oops(r, "cannot allocate the skip stack");
+        else {
+            space_to_depth(host, wide, extended, plan->depth_step,
+                           plan->height_step, plan->width_step);
+            group_mean(wide, skip, positions(packed),
+                       extended.channels * factor, group);
+        }
+        free(wide); free(host);
+    }
+    if (!r->failed) {
+        shape narrow_shape = {extended.depth, extended.height, extended.width,
+                              narrow};
+        float *host = download(r, convolved, volume(narrow_shape));
+        if (host) {
+            space_to_depth(host, branch, narrow_shape, plan->depth_step,
+                           plan->height_step, plan->width_step);
+            free(host);
+        }
+    }
+    h3_gpu_tensor_free(source);
+    h3_gpu_tensor_free(convolved);
+    h3_gpu_tensor *out = NULL;
+    if (!r->failed) {
+        for (size_t index = 0; index < volume(packed); index++)
+            branch[index] += skip[index];
+        out = upload(r, branch, volume(packed));
+    }
+    free(skip); free(branch);
+    *of = packed;
+    return out;
+}
+
+/* `H3_LTX_DUMP=/prefix_` writes each encoder stage as raw F32, the way the
+ * vocoder runner does. The halves of this VAE are long enough that "the answer
+ * is wrong" localizes nothing on its own. */
+static void dump_stage(run *r, const char *label, const h3_gpu_tensor *tensor,
+                       shape of) {
+    const char *prefix = getenv("H3_LTX_DUMP");
+    if (!prefix || !*prefix || r->failed) return;
+    float *host = download(r, tensor, volume(of));
+    if (!host) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s%s.bin", prefix, label);
+    FILE *out = fopen(path, "wb");
+    if (out) {
+        fwrite(host, sizeof(float), volume(of), out);
+        fclose(out);
+    }
+    free(host);
+}
+
+int ltx_video_encode(h3_gpu *gpu, const h3_weight_store *store,
+                     const float *pixels, uint32_t frames, uint32_t height,
+                     uint32_t width, float *latent,
+                     char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!gpu || !store || !pixels || !latent || !frames || !height || !width) {
+        if (error && error_size)
+            snprintf(error, error_size, "ltx_video_encode wants a gpu, a "
+                                        "store, frames and somewhere to put "
+                                        "the latent");
+        return 0;
+    }
+    if (height % LTX_VIDEO_SPATIAL || width % LTX_VIDEO_SPATIAL) {
+        if (error && error_size)
+            snprintf(error, error_size, "%ux%u is not a multiple of %d",
+                     width, height, LTX_VIDEO_SPATIAL);
+        return 0;
+    }
+    if (frames != 1 && (frames - 1) % 8) {
+        if (error && error_size)
+            snprintf(error, error_size, "%u frames is not 1 or 8k+1", frames);
+        return 0;
+    }
+    run r = {0};
+    r.gpu = gpu; r.store = store; r.error = error; r.error_size = error_size;
+
+    /* F32, because this half runs in F32 throughout and `h3_gpu_rms_norm_f32`
+     * reads its weight as F32 — a BF16 buffer here is reinterpreted rather
+     * than converted, and every pixel norm quietly divides by nonsense. */
+    float *ones = malloc(WIDEST_CHANNELS * sizeof(*ones));
+    if (!ones) { oops(&r, "cannot allocate the norm weight"); return 0; }
+    for (int index = 0; index < WIDEST_CHANNELS; index++) ones[index] = 1.0f;
+    r.ones = upload(&r, ones, WIDEST_CHANNELS);
+    free(ones);
+    if (!r.ones) return 0;
+
+    shape at = {frames, height / PATCH, width / PATCH, PACKED_CHANNELS};
+    h3_gpu_tensor *x = NULL;
+    {
+        float *staged = malloc(volume(at) * sizeof(*staged));
+        if (!staged) oops(&r, "cannot allocate the patchified frames");
+        else {
+            patchify(pixels, staged, at);
+            x = upload(&r, staged, volume(at));
+            free(staged);
+        }
+    }
+    if (!r.failed) {
+        conv3d kernel;
+        load_conv(&r, "encoder", "conv_in", 128, PACKED_CHANNELS, &kernel);
+        GPU_OP(&r, h3_gpu_begin(gpu), "begin enc conv_in");
+        h3_gpu_tensor *out = run_conv(&r, &kernel, x, at, 128, 1);
+        GPU_OP(&r, h3_gpu_submit(gpu), "submit enc conv_in");
+        drain(&r);
+        free_conv(&kernel);
+        h3_gpu_tensor_free(x);
+        x = out;
+        at.channels = 128;
+    }
+    dump_stage(&r, "enc_conv_in", x, at);
+
+    for (int index = 0; index < BLOCKS && !r.failed; index++) {
+        const vae_block *plan = &ENCODE[index];
+        if (plan->layers)
+            for (int layer = 0; layer < plan->layers && !r.failed; layer++)
+                resnet(&r, "encoder", index, layer, x, at, 1);
+        else
+            x = downsample(&r, index, plan, x, &at);
+        char label[64];
+        snprintf(label, sizeof(label), "enc_block%d_%s", index, plan->kind);
+        dump_stage(&r, label, x, at);
+    }
+
+    h3_gpu_tensor *normed = allocate(&r, volume(at));
+    if (normed) {
+        GPU_OP(&r, h3_gpu_begin(gpu), "begin enc tail");
+        pixel_norm(&r, normed, x, at);
+        GPU_OP(&r, h3_gpu_submit(gpu), "submit enc norm");
+        drain(&r);
+    }
+    dump_stage(&r, "enc_norm_out", normed, at);
+    h3_gpu_tensor_free(x);
+    x = NULL;
+
+    h3_gpu_tensor *moments = NULL;
+    if (!r.failed) {
+        conv3d tail;
+        load_conv(&r, "encoder", "conv_out", MOMENT_CHANNELS, at.channels,
+                  &tail);
+        GPU_OP(&r, h3_gpu_begin(gpu), "begin enc head");
+        GPU_OP(&r, h3_gpu_silu_f32(gpu, normed, normed, (uint32_t)volume(at)),
+               "encoder output activation");
+        moments = run_conv(&r, &tail, normed, at, MOMENT_CHANNELS, 1);
+        GPU_OP(&r, h3_gpu_submit(gpu), "submit enc head");
+        drain(&r);
+        free_conv(&tail);
+    }
+    h3_gpu_tensor_free(normed);
+    at.channels = MOMENT_CHANNELS;
+
+    /* The leading 128 channels are the means and the last is the shared log
+     * variance, which the deterministic path drops. Normalizing by the
+     * checkpoint's per-channel statistics is what puts the result in the space
+     * the DiT works in -- and it is invisible to a round trip, because the
+     * decoder's inverse cancels it exactly. */
+    float *host = download(&r, moments, volume(at));
+    h3_gpu_tensor_free(moments);
+    float *mean = read_tensor(&r, "per_channel_statistics.mean-of-means",
+                              LATENT_CHANNELS);
+    float *deviation = read_tensor(
+        &r, "per_channel_statistics.std-of-means", LATENT_CHANNELS);
+    if (!r.failed && host && mean && deviation) {
+        const shape out_shape = {at.depth, at.height, at.width, LATENT_CHANNELS};
+        for (size_t position = 0; position < positions(out_shape); position++)
+            for (uint32_t channel = 0; channel < LATENT_CHANNELS; channel++)
+                latent[position * LATENT_CHANNELS + channel] =
+                    (host[position * MOMENT_CHANNELS + channel] -
+                     mean[channel]) / deviation[channel];
+    }
+    free(host); free(mean); free(deviation);
+    h3_gpu_tensor_free(r.ones);
+    return !r.failed;
+}
 
 int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
                      const float *latent, uint32_t frames, uint32_t height,
@@ -495,9 +833,9 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
 
     {
         conv3d kernel;
-        load_conv(&r, "conv_in", WIDEST_CHANNELS, at.channels, &kernel);
+        load_conv(&r, "decoder", "conv_in", WIDEST_CHANNELS, at.channels, &kernel);
         GPU_OP(&r, h3_gpu_begin(gpu), "begin conv_in");
-        h3_gpu_tensor *out = run_conv(&r, &kernel, x, at, WIDEST_CHANNELS);
+        h3_gpu_tensor *out = run_conv(&r, &kernel, x, at, WIDEST_CHANNELS, 0);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit conv_in");
         drain(&r);
         free_conv(&kernel);
@@ -510,7 +848,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         const vae_block *plan = &DECODE[index];
         if (plan->layers)
             for (int layer = 0; layer < plan->layers; layer++)
-                resnet(&r, index, layer, x, at);
+                resnet(&r, "decoder", index, layer, x, at, 0);
         else
             x = upsample(&r, index, plan, x, &at);
     }
@@ -526,11 +864,11 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
     }
     {
         conv3d tail;
-        load_conv(&r, "conv_out", PACKED_CHANNELS, at.channels, &tail);
+        load_conv(&r, "decoder", "conv_out", PACKED_CHANNELS, at.channels, &tail);
         GPU_OP(&r, h3_gpu_begin(gpu), "begin head");
         GPU_OP(&r, h3_gpu_silu_f32(gpu, x, x, (uint32_t)volume(at)),
                "output activation");
-        h3_gpu_tensor *out = run_conv(&r, &tail, x, at, PACKED_CHANNELS);
+        h3_gpu_tensor *out = run_conv(&r, &tail, x, at, PACKED_CHANNELS, 0);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit head");
         drain(&r);
         free_conv(&tail);
