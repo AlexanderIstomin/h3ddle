@@ -286,6 +286,43 @@ static void attention_forward(const norm2d *norm, const float *wq,
     free(q); free(k); free(v); free(out);
 }
 
+/* Halving, which is what Downsample2D does: pad one column on the right and
+ * one row at the bottom — never on the left or top — then a 3x3 stride-2
+ * convolution with no padding of its own. The asymmetry is the whole point,
+ * and getting it wrong shifts the picture half a pixel per stage. */
+static void downsample_convolve(const conv2d *conv, const float *in, float *out,
+                                int height, int width) {
+    const int out_height = height / 2, out_width = width / 2;
+    dispatch_apply((size_t)conv->out, DISPATCH_APPLY_AUTO, ^(size_t slot) {
+        const int oc = (int)slot;
+        float *plane = out + (size_t)oc * out_height * out_width;
+        const float bias = conv->bias ? conv->bias[oc] : 0.0f;
+        for (int index = 0; index < out_height * out_width; index++)
+            plane[index] = bias;
+        for (int ic = 0; ic < conv->in; ic++) {
+            const float *source = in + (size_t)ic * height * width;
+            const float *weights = conv->weight +
+                ((size_t)oc * conv->in + ic) * conv->kernel * conv->kernel;
+            for (int ky = 0; ky < conv->kernel; ky++)
+                for (int kx = 0; kx < conv->kernel; kx++) {
+                    const float weight = weights[ky * conv->kernel + kx];
+                    if (weight == 0.0f) continue;
+                    for (int y = 0; y < out_height; y++) {
+                        const int sy = y * 2 + ky;
+                        if (sy >= height) continue;
+                        float *row = plane + (size_t)y * out_width;
+                        const float *from = source + (size_t)sy * width;
+                        for (int x = 0; x < out_width; x++) {
+                            const int sx = x * 2 + kx;
+                            if (sx >= width) continue;
+                            row[x] += weight * from[sx];
+                        }
+                    }
+                }
+        }
+    });
+}
+
 /* Nearest-neighbour doubling, which is what Upsample2D does before its conv. */
 static void upsample(const float *in, float *out, int channels,
                      int height, int width) {
@@ -400,6 +437,126 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
     emit(tap, context, "image", image, (size_t)3 * height * width);
 
     (void)final_side;
+    free(x); free(scratch); free(branch); free(spare);
+    return 1;
+}
+
+/* The encoder: RGB down to sixteen latent channels, an eighth of a side.
+ *
+ * The mirror of the decoder above, and deliberately built from the same
+ * pieces — the same convolution, group norm, resnet and attention that were
+ * checked stage by stage against the reference. What is new here is only the
+ * order, the strided downsample, and the last step: `conv_out` produces
+ * thirty-two channels, a mean and a log-variance interleaved as halves, and
+ * this returns the mean.
+ *
+ * Sampling from that distribution is what the reference pipeline does, but
+ * the variance a trained image autoencoder reports is vanishingly small — the
+ * check harness prints it — so the mean is the same picture and img2img stays
+ * reproducible from its seed alone.
+ *
+ * `image` is [3][image_side][image_side] roughly in [-1, 1]; `latent`
+ * receives [16][image_side/8][image_side/8] raw, before the DiT's scale and
+ * shift. */
+int zimage_vae_encode(qwen_weights *encoder, const float *image, int image_side,
+                      float *latent, zimage_vae_tap tap, void *context) {
+    model = encoder;
+    const int side = image_side;
+    const int channels[4] = {128, 256, 512, 512};   /* per down block, in order */
+
+    /* The stack is widest at the start: 128 channels at the full picture.
+     * Every later stage doubles the channels only after quartering the area,
+     * so 128*s^2 is the peak and nothing after it comes close. */
+    const size_t peak = (size_t)128 * (size_t)side * (size_t)side;
+    float *x = calloc(peak, sizeof(float));
+    float *scratch = calloc(peak, sizeof(float));
+    float *branch = calloc(peak, sizeof(float));
+    float *spare = calloc(peak, sizeof(float));
+    if (!x || !scratch || !branch || !spare) {
+        free(x); free(scratch); free(branch); free(spare);
+        return 0;
+    }
+
+    conv2d conv_in = take_conv("encoder.conv_in", -1, -1, 128, 3, 3, 1);
+    convolve(&conv_in, image, x, side, side);
+    emit(tap, context, "conv_in", x, (size_t)128 * side * side);
+
+    int current = 128, height = side, width = side;
+    for (int block_index = 0; block_index < 4; block_index++) {
+        const int out_channels = channels[block_index];
+        for (int index = 0; index < 2; index++) {
+            const int in_channels = index == 0 ? current : out_channels;
+            resnet block = {
+                take_norm("encoder.down_blocks.%d.resnets.%d.norm1",
+                          block_index, index, in_channels),
+                take_norm("encoder.down_blocks.%d.resnets.%d.norm2",
+                          block_index, index, out_channels),
+                take_conv("encoder.down_blocks.%d.resnets.%d.conv1",
+                          block_index, index, out_channels, in_channels, 3, 1),
+                take_conv("encoder.down_blocks.%d.resnets.%d.conv2",
+                          block_index, index, out_channels, out_channels, 3, 1),
+                /* only the two resnets that change channel count carry one */
+                take_conv("encoder.down_blocks.%d.resnets.%d.conv_shortcut",
+                          block_index, index, out_channels, in_channels, 1, 0),
+            };
+            resnet_forward(&block, x, in_channels, out_channels, height, width,
+                           scratch, branch);
+        }
+        current = out_channels;
+
+        if (block_index < 3) {
+            conv2d down = take_conv("encoder.down_blocks.%d.downsamplers.0.conv",
+                                    block_index, -1, current, current, 3, 1);
+            downsample_convolve(&down, x, spare, height, width);
+            height /= 2; width /= 2;
+            memcpy(x, spare, (size_t)current * height * width * sizeof(float));
+        }
+        char name[24];
+        snprintf(name, sizeof(name), "down_block_%d", block_index);
+        emit(tap, context, name, x, (size_t)current * height * width);
+    }
+
+    /* mid block: resnet, attention, resnet — the decoder's, in the same order */
+    for (int index = 0; index < 2; index++) {
+        resnet block = {
+            take_norm("encoder.mid_block.resnets.%d.norm1", index, -1, 512),
+            take_norm("encoder.mid_block.resnets.%d.norm2", index, -1, 512),
+            take_conv("encoder.mid_block.resnets.%d.conv1", index, -1, 512, 512, 3, 1),
+            take_conv("encoder.mid_block.resnets.%d.conv2", index, -1, 512, 512, 3, 1),
+            {NULL, NULL, 0, 0, 0},
+        };
+        resnet_forward(&block, x, 512, 512, height, width, scratch, branch);
+        if (index == 0) {
+            norm2d norm = take_norm("encoder.mid_block.attentions.0.group_norm",
+                                    -1, -1, 512);
+            attention_forward(
+                &norm,
+                take_linear("encoder.mid_block.attentions.0.to_q.weight", 512, 512),
+                take_vector("encoder.mid_block.attentions.0.to_q.bias", 512),
+                take_linear("encoder.mid_block.attentions.0.to_k.weight", 512, 512),
+                take_vector("encoder.mid_block.attentions.0.to_k.bias", 512),
+                take_linear("encoder.mid_block.attentions.0.to_v.weight", 512, 512),
+                take_vector("encoder.mid_block.attentions.0.to_v.bias", 512),
+                take_linear("encoder.mid_block.attentions.0.to_out.0.weight", 512, 512),
+                take_vector("encoder.mid_block.attentions.0.to_out.0.bias", 512),
+                x, 512, height, width, scratch);
+        }
+    }
+    emit(tap, context, "mid_block", x, (size_t)512 * height * width);
+
+    norm2d out_norm = take_norm("encoder.conv_norm_out", -1, -1, 512);
+    group_norm(&out_norm, x, scratch, 512, height, width, 1);
+    conv2d conv_out = take_conv("encoder.conv_out", -1, -1, 32, 512, 3, 1);
+    convolve(&conv_out, scratch, spare, height, width);
+    emit(tap, context, "moments", spare, (size_t)32 * height * width);
+
+    /* The first sixteen channels are the mean; the rest are the log-variance,
+     * which the tap above still carries for anyone who wants to look. */
+    const size_t plane = (size_t)height * width;
+    memcpy(latent, spare, (size_t)ZIMAGE_VAE_LATENT_CHANNELS * plane * sizeof(float));
+    emit(tap, context, "latent", latent,
+         (size_t)ZIMAGE_VAE_LATENT_CHANNELS * plane);
+
     free(x); free(scratch); free(branch); free(spare);
     return 1;
 }

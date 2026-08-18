@@ -21,6 +21,7 @@ now: H3's encoder at 5120 wide, the TTS talker at 1024, this at 2560.
 | `zimage_dit.c`     | embedders, head, unpatchify; runs blocks on CPU or device |
 | `zimage_gpu.c`     | the thirty-four blocks on Metal |
 | `zimage_encoder.c` | Qwen3-4B, 35 of 36 layers (see below) |
+| `zimage_vae.c` | the autoencoder both ways: decode for every render, encode for img2img |
 | `zimage_vae.c`     | the decoder, CPU, f32 — the reference |
 | `zimage_vae_gpu.c` | the decoder on Metal |
 

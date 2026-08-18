@@ -26,4 +26,16 @@ typedef void (*zimage_vae_tap)(const char *stage, const float *values,
 int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
                       float *image, zimage_vae_tap tap, void *context);
 
+#define ZIMAGE_VAE_LATENT_CHANNELS 16
+/* The reverse. Note the side it is given is the *picture's*, where decode is
+ * given the latent's — each takes the side of the thing it is handed, and
+ * naming them apart is cheaper than a comment nobody reads at the call site.
+ *
+ * `image` is [3][image_side][image_side] roughly in [-1, 1]; `latent`
+ * receives [16][image_side/8][image_side/8], raw — the caller applies the
+ * scale and shift, exactly as it removes them before decoding.
+ * `image_side` must be a multiple of 8. Returns 0 on failure. */
+int zimage_vae_encode(qwen_weights *encoder, const float *image, int image_side,
+                      float *latent, zimage_vae_tap tap, void *context);
+
 #endif
