@@ -968,33 +968,35 @@ struct GenerationStudioView: View {
       }
 
       if kind != .audio {
+        // H3 draws on one canvas. This used to be a menu of short edges from
+        // 352 to 1088, none of which the model would honour and one of which
+        // (1920x1088) was nearly twice its ceiling. The aspect ratio decides
+        // the shape; the size is not ours to choose.
         labeled("RESOLUTION") {
-          Menu {
-            ForEach(GenerationCanvas.allCases) { canvas in
-              Button(canvasMenuLabel(canvas)) {
-                model.updateStudioKnobs { $0.canvas = canvas }
-              }
-            }
-          } label: {
-            HStack {
-              Text(knobs.canvas.label)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-              Spacer()
-              Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(H3Color.textSecondary)
-            }
-            .padding(.horizontal, 11)
-            .frame(height: 36)
-            .background(H3Color.chrome)
-            .overlay {
-              RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(H3Color.line, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          let size = H3Canvas.dimensions(
+            aspect: Double(model.studioAspect.fraction))
+          HStack {
+            Text("\(size.width) × \(size.height)")
+              .font(.system(size: 12, weight: .medium, design: .monospaced))
+            Spacer()
+            Text("fixed by the model")
+              .font(.system(size: 10))
+              .foregroundStyle(H3Color.textSecondary)
           }
-          .buttonStyle(.plain)
+          .padding(.horizontal, 11)
+          .frame(height: 36)
+          .background(H3Color.chrome)
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .stroke(H3Color.line, lineWidth: 1)
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
           .accessibilityIdentifier("generation-resolution")
+          Text("H3 renders a 768-pixel short edge, capped at 768×1344. The "
+            + "aspect ratio above chooses the shape.")
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
 
@@ -1320,13 +1322,6 @@ struct GenerationStudioView: View {
         .foregroundStyle(H3Color.textSecondary.opacity(0.75))
       content()
     }
-  }
-
-  /// Menu rows spell out what a tier becomes at the chosen aspect, so the
-  /// short-edge name stays honest rather than hiding the real pixels.
-  private func canvasMenuLabel(_ canvas: GenerationCanvas) -> String {
-    let size = canvas.dimensions(aspect: Double(model.studioAspect.fraction))
-    return "\(canvas.label)  ·  \(size.width)×\(size.height)"
   }
 
   private func aspectChip(_ ratio: ProgramAspectRatio) -> some View {

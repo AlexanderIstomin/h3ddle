@@ -200,12 +200,12 @@ struct EngineProtocolTests {
 
   @Test("Quality presets stay on validated h3.c combinations")
   func qualityPresetTable() {
-    #expect(EngineGenerationQuality.preview.canvasSize == 448)
+    #expect(EngineGenerationQuality.preview.canvasSize == 768)
     #expect(EngineGenerationQuality.preview.denoisingSteps == 4)
     #expect(EngineGenerationQuality.preview.activeDiTLayers == 50)
     #expect(EngineGenerationQuality.preview.denoiseReuse == 1)
 
-    #expect(EngineGenerationQuality.standard.canvasSize == 512)
+    #expect(EngineGenerationQuality.standard.canvasSize == 768)
     #expect(EngineGenerationQuality.standard.denoisingSteps == 20)
     #expect(EngineGenerationQuality.standard.activeDiTLayers == 45)
     #expect(EngineGenerationQuality.standard.denoiseReuse == 2)
@@ -218,6 +218,10 @@ struct EngineProtocolTests {
     for quality in EngineGenerationQuality.allCases {
       // H3 canvases must be multiples of 32; reuse above 1 must never pair
       // with the minimum step budget, where every pass has to run the model.
+      // A tier buys passes and blocks, never pixels: H3 renders one canvas,
+      // and a tier that shrinks it renders something the prompt did not ask
+      // for. This is the invariant the 448 and 512 defaults broke.
+      #expect(quality.canvasSize == H3NativeCanvas.shortEdge)
       #expect(quality.canvasSize.isMultiple(of: 32))
       #expect(quality.denoisingSteps >= 20 || quality.denoiseReuse == 1)
     }

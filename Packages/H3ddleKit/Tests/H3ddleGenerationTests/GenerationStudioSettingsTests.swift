@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+import H3ddleEngineProtocol
 @testable import H3ddleGeneration
 
 @Suite("Generation studio settings")
@@ -40,54 +41,39 @@ struct GenerationStudioSettingsTests {
     #expect(settings.preset == .preview)
   }
 
-  @Test("Native landscape flips for portrait")
+  @Test("Landscape flips for portrait")
   func nativeLandscapeFollowsOrientation() {
-    #expect(GenerationCanvas.p1088.dimensions(aspect: 16.0 / 9) == (1920, 1088))
-    #expect(GenerationCanvas.p1088.dimensions(aspect: 9.0 / 16) == (1088, 1920))
+    #expect(H3Canvas.dimensions(aspect: 16.0 / 9) == (1344, 768))
+    #expect(H3Canvas.dimensions(aspect: 9.0 / 16) == (768, 1344))
   }
 }
 
 @Suite("Canvas ladder")
 struct GenerationCanvasTests {
-  @Test("Tiers reproduce the published resolution table at 16:9")
-  func matchesReferenceTable() {
-    let wide = 16.0 / 9
-    // 352p is the one row that differs: the published table targets
-    // megapixels and lands on 608x352 (1.73:1), while fixing the short edge
-    // gives 640x352 (1.82:1), which is nearer true 16:9. Both are legal.
-    #expect(GenerationCanvas.p352.dimensions(aspect: wide) == (640, 352))
-    #expect(GenerationCanvas.p480.dimensions(aspect: wide) == (864, 480))
-    #expect(GenerationCanvas.p576.dimensions(aspect: wide) == (1024, 576))
-    #expect(GenerationCanvas.p768.dimensions(aspect: wide) == (1376, 768))
-    #expect(GenerationCanvas.p1088.dimensions(aspect: wide) == (1920, 1088))
-  }
-
-  @Test("The short edge is what the name promises, in every aspect")
-  func shortEdgeIsFixed() {
-    for canvas in GenerationCanvas.allCases {
-      for aspect in [16.0 / 9, 1.0, 9.0 / 16, 4.0 / 5, 3.0 / 2] {
-        let size = canvas.dimensions(aspect: aspect)
-        #expect(min(size.width, size.height) == canvas.shortEdge)
-      }
+  /// The ladder this suite used to check is gone. It asserted a "published
+  /// resolution table" — 864x480 through 1920x1088 — that H3 never offered:
+  /// the reference pins the short edge to 768 and caps the area at 768x1344,
+  /// and the hosted endpoints offer only that and an upscaled 2K. What is
+  /// worth testing is that nothing can ask for anything else.
+  @Test("Every canvas the app can ask for is inside H3's envelope")
+  func everyCanvasIsInsideTheEnvelope() {
+    for aspect in [16.0 / 9, 1.0, 9.0 / 16, 4.0 / 5, 3.0 / 2, 2.39, 0.4] {
+      let size = H3Canvas.dimensions(aspect: aspect)
+      #expect(min(size.width, size.height) <= H3Canvas.shortEdge)
+      #expect(size.width * size.height <= H3Canvas.maximumPixels)
+      #expect(size.width % 32 == 0)
+      #expect(size.height % 32 == 0)
     }
   }
 
-  @Test("Every dimension the engine receives is a legal multiple of 32")
-  func dimensionsAreLegal() {
+  /// The tier reaches the engine as a quality, and every quality has to land
+  /// on the one canvas H3 renders — this is the path a request takes when it
+  /// names no size of its own, which is how 448 and 512 used to ship.
+  @Test("No quality tier can fall below the trained canvas")
+  func noTierFallsBelowTheTrainedCanvas() {
     for canvas in GenerationCanvas.allCases {
-      for aspect in [16.0 / 9, 1.0, 9.0 / 16, 4.0 / 5, 3.0 / 2, 2.39] {
-        let size = canvas.dimensions(aspect: aspect)
-        #expect(size.width % 32 == 0)
-        #expect(size.height % 32 == 0)
-        #expect(size.width >= 32 && size.height >= 32)
-      }
+      #expect(canvas.engineQuality.canvasSize == H3NativeCanvas.shortEdge)
     }
-  }
-
-  @Test("Labels name the short edge, not the square case")
-  func labels() {
-    #expect(GenerationCanvas.p352.label == "352p")
-    #expect(GenerationCanvas.p1088.label == "1088p")
   }
 
   @Test("Settings saved under the old square names still load")
@@ -100,8 +86,8 @@ struct GenerationCanvasTests {
 
   @Test("A degenerate aspect falls back to square rather than crashing")
   func degenerateAspect() {
-    #expect(GenerationCanvas.p480.dimensions(aspect: 0) == (480, 480))
-    #expect(GenerationCanvas.p480.dimensions(aspect: .nan) == (480, 480))
+    #expect(H3Canvas.dimensions(aspect: 0) == (768, 768))
+    #expect(H3Canvas.dimensions(aspect: .nan) == (768, 768))
   }
 
   /// Transcribed from the released pipeline. These are the numbers the model

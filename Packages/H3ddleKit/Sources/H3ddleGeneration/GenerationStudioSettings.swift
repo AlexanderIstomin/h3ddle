@@ -1,17 +1,16 @@
 import Foundation
 import H3ddleEngineProtocol
 
-/// Output size, named by the short edge the way video resolutions normally
-/// are: a tier means the same vertical detail whatever the aspect, where
-/// "512x512" describes only the square case and misleads for 9:16.
+/// How much work a generation spends: passes, blocks, denoiser reuse.
 ///
-/// The ladder starts at 352p because that is the smallest canvas the
-/// reference workflows document (0.2 megapixels at 16:9) — below it H3 stops
-/// following prompts reliably, measured repeatedly at 256 square. Long edges
-/// are snapped to the multiples of 32 the engine requires, which reproduces
-/// the published resolution table from 480p up: 864x480, 1024x576, 1376x768,
-/// 1920x1088. Only 352p differs, because that table targets megapixels rather
-/// than a fixed short edge.
+/// It is not a size, despite the case names. It used to be a ladder of short
+/// edges claiming to reproduce a published resolution table, and the table
+/// was wrong in both directions — its floor rendered below what H3 was
+/// trained on, and its ceiling, 1920x1088, asked for nearly twice the pixels
+/// the model accepts. H3 has one canvas; `H3Canvas` shapes it, and
+/// `H3NativeCanvas` states it.
+///
+/// The cases keep their old names so settings saved under them still load.
 public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   case p352
   case p480
@@ -21,48 +20,12 @@ public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifia
 
   public var id: String { rawValue }
 
-  /// The fixed dimension: height in landscape, width in portrait.
-  public var shortEdge: Int {
-    switch self {
-    case .p352: 352
-    case .p480: 480
-    case .p576: 576
-    case .p768: 768
-    case .p1088: 1088
-    }
-  }
-
-  public var label: String { "\(shortEdge)p" }
-
   public var engineQuality: EngineGenerationQuality {
     switch self {
     case .p352, .p480: .preview
     case .p576: .standard
     case .p768, .p1088: .high
     }
-  }
-
-  /// Rounds to the nearest legal canvas step, never below one step.
-  private static func snapped(_ value: Double) -> Int {
-    max(32, Int((value / 32).rounded()) * 32)
-  }
-
-  /// `aspect` is width divided by height. The short edge is exact; the long
-  /// edge snaps, so extreme ratios drift slightly rather than being refused.
-  public func dimensions(aspect: Double) -> (width: Int, height: Int) {
-    guard aspect.isFinite, aspect > 0 else {
-      return (shortEdge, shortEdge)
-    }
-    if aspect >= 1 {
-      return (Self.snapped(Double(shortEdge) * aspect), shortEdge)
-    }
-    return (shortEdge, Self.snapped(Double(shortEdge) / aspect))
-  }
-
-  /// Megapixels at this aspect, for showing the cost of a tier.
-  public func megapixels(aspect: Double) -> Double {
-    let size = dimensions(aspect: aspect)
-    return Double(size.width * size.height) / 1_000_000
   }
 
   public init(from decoder: Decoder) throws {
@@ -153,10 +116,10 @@ public enum H3Canvas {
   /// The short edge is *always* this. A caller's width and height choose the
   /// ratio and nothing else — which is what the reference does, and why every
   /// tier below 768 was drawing off-canvas.
-  public static let shortEdge = 768
+  public static let shortEdge = H3NativeCanvas.shortEdge
   /// Area ceiling; the reference scales the whole canvas down to meet it
   /// rather than clamping one axis.
-  public static let maximumPixels = 768 * 1344
+  public static let maximumPixels = H3NativeCanvas.maximumPixels
 
   public static func dimensions(aspect: Double) -> (width: Int, height: Int) {
     guard aspect.isFinite, aspect > 0 else { return (shortEdge, shortEdge) }
@@ -168,7 +131,20 @@ public enum H3Canvas {
       width *= scale
       height *= scale
     }
-    return (Self.snapped(width), Self.snapped(height))
+    var snappedWidth = Self.snapped(width)
+    var snappedHeight = Self.snapped(height)
+    // Snapping rounds, and rounding up can put a scaled-down canvas back over
+    // the cap: 2.39:1 lands on 1568x672, 21k pixels above it. Step the long
+    // edge down until it fits. Ordinary ratios never enter this loop — 16:9
+    // snaps to 1344x768, which is the cap exactly.
+    while snappedWidth * snappedHeight > maximumPixels {
+      if snappedWidth >= snappedHeight {
+        snappedWidth -= 32
+      } else {
+        snappedHeight -= 32
+      }
+    }
+    return (max(32, snappedWidth), max(32, snappedHeight))
   }
 
   private static func snapped(_ value: Double) -> Int {

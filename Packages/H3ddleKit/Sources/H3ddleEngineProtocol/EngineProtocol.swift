@@ -271,6 +271,17 @@ public struct EngineModelReport: Hashable, Codable, Sendable {
 /// Validated speed/quality presets for H3 generation. Each tier maps to a
 /// combination the vendored h3.c documentation has validated end to end;
 /// arbitrary parameter mixes are deliberately not exposed here.
+/// H3's operating envelope, as the released pipeline defines it: `adapt_canvas`
+/// pins the short edge and caps the area, and everything that asks the engine
+/// for a size resolves through here so no caller can invent a ladder of its
+/// own again.
+public enum H3NativeCanvas: Sendable {
+  /// The fixed dimension: height in landscape, width in portrait.
+  public static let shortEdge = 768
+  /// The area ceiling, from the reference's 768x1344 bound.
+  public static let maximumPixels = 768 * 1344
+}
+
 public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   /// Fastest recognizable output: the engine's native preview canvas with its
   /// minimum validated denoising budget. Sized for M1/M2-class development.
@@ -282,18 +293,20 @@ public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   /// Sized for M5-class Macs; slow on anything earlier.
   case high
 
-  /// Output canvas edge. All presets use square canvases; H3 requires
-  /// multiples of 32. 448 square is 0.2 megapixels, the smallest canvas the
-  /// reference workflows validate — below it prompts stop steering the scene
-  /// and outputs become functions of the seed, measured 2026-08-14 across
-  /// prompts, formats, models, and step counts at 256 square.
-  public var canvasSize: Int {
-    switch self {
-    case .preview: 448
-    case .standard: 512
-    case .high: 768
-    }
-  }
+  /// Output canvas edge, used when a request names no size of its own.
+  ///
+  /// H3 renders one canvas. The reference pipeline pins the short edge to 768
+  /// and caps the area at 768x1344, and the hosted endpoints offer that and
+  /// an upscaled 2K, nothing between. This tier used to step 448/512/768, so
+  /// two of the three defaults sat below anything the model was trained on:
+  /// prompts stopped steering the scene and output became a function of the
+  /// seed. Measured repeatedly through 2026-08-14 — a clip prompted for a red
+  /// apple returned a man in a suit at 352, 448 and 640, on both checkpoints,
+  /// at four pass counts, and returned the apple at 768.
+  ///
+  /// A tier buys passes and blocks now, not pixels. Preview stays cheap by
+  /// rendering fewer frames, which costs nothing in adherence.
+  public var canvasSize: Int { H3NativeCanvas.shortEdge }
 
   /// Denoising passes. Four is the minimum validated budget; twenty is the
   /// engine default schedule.
