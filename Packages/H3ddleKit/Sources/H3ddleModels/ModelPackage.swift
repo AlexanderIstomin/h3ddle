@@ -490,10 +490,20 @@ public enum ModelCatalog {
   /// by `Scripts/convert-turbo-package.py`, hosted on Hugging Face. A local
   /// conversion output installs instantly when present; every shared file
   /// reuses the standard package's bytes.
-  /// Z-Image-Turbo, repackaged: one file per subsystem, the autoencoder's
-  /// encoder half dropped because text to image never runs it, and the int8
-  /// matrices stored input-major so the GPU reads them coalesced. No tensor
-  /// was retrained, merged, pruned, or quantized in the repackaging.
+  /// Z-Image-Turbo, repackaged: one file per subsystem and the int8 matrices
+  /// stored input-major so the GPU reads them coalesced. No tensor was
+  /// retrained, merged, pruned, or quantized in the repackaging.
+  ///
+  /// The autoencoder arrives in two pieces from two places. The decoder is
+  /// the repackaged half, and every render runs it. The encoder only runs
+  /// when a picture is being worked from, and it comes as the *whole*
+  /// released autoencoder straight from Tongyi-MAI: that file carries both
+  /// halves under `encoder.` and `decoder.` names, the engine reads the half
+  /// it wants by name, and the decoder half in it is byte-for-byte the one
+  /// packaged here — all 138 tensors. Taking it whole costs 99 MB of
+  /// duplicated decoder against splitting it, and buys provenance directly
+  /// from the release rather than another repackaged artifact to host and
+  /// keep honest.
   public static let zImageTurbo = ModelPackageManifest(
     id: "h3ddle-z-image-turbo-int8-v1",
     displayName: "Z-Image · Turbo",
@@ -539,6 +549,15 @@ public enum ModelCatalog {
         sourceRepository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
         sourceRevision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
         sourcePath: "vae_decoder.safetensors"
+      ),
+      ModelPackageFile(
+        role: .imageVAE,
+        path: "vae_encoder.safetensors",
+        byteCount: 167_666_902,
+        sha256: "f5b59a26851551b67ae1fe58d32e76486e1e812def4696a4bea97f16604d40a3",
+        sourceRepository: "Tongyi-MAI/Z-Image-Turbo",
+        sourceRevision: "f332072aa78be7aecdf3ee76d5c247082da564a6",
+        sourcePath: "vae/diffusion_pytorch_model.safetensors"
       ),
       ModelPackageFile(
         role: .runtimeMetadata,
