@@ -254,14 +254,98 @@ once in Python. H3 shares a single pair across every activation and this
 checkpoint could have differed; loading one and verifying 109 costs nothing and
 turns an inherited assumption into a checked one.
 
+### Five seconds broke the test, and the break was worth having
+
+0.29 s turned out to be short enough to hide the interesting question. At
+5.01 s (501 mel frames -- the count has to be `4k - 3`, the audio VAE's causal
+rule) **nine of seventeen stages failed**, the worst 9x over its bound.
+
+Nothing was wrong with the port. The diagnosis, in order:
+
+- **it is deterministic** -- two runs bit-identical, so not a race, which was
+  worth ruling out first given [[h3-gqa-barrier-bug]];
+- **the error is not spread, it is a burst.** `voc_res1`'s worst points are
+  contiguous in time and confined to 28 of 384 channels, where `voc_res0` a
+  stage earlier is uniform;
+- **fed the same input, the stage is fine.** Running LTX's own stage-1
+  resblocks on the *engine's* `voc_up1` and comparing to the engine's
+  `voc_res1` gives **1.8e-06** of peak. The reported 1.07e-04 is that stage
+  multiplying a 7.8e-06 difference in its input by **13.6**.
+
+Held that way -- every stage from the anchor's own input -- the error is
+**flat at 2e-07 to 2.2e-06 from the first stage to the last**, at both
+lengths. That is the statement worth making, and the composed comparison was
+never able to make it.
+
+### Why a composed floor cannot bound a composed engine
+
+The trap is subtler than "the stack amplifies", and it is the reason the
+per-stage table this document recommended a day ago was the wrong instrument.
+
+`voc_res1` amplifies **F32-vs-F64 rounding by 2.9x** and an **independent
+implementation's equally-sized disagreement by 13.6x**. Same stage, same input,
+perturbations of the same magnitude -- four times the amplification. The map is
+ill-conditioned, so what gets multiplied is the *direction* of the perturbation
+and not just its size, and F32-vs-F64 error has a particular structure that
+MPS-vs-torch error does not share.
+
+So a composed F32-vs-F64 floor is not an upper bound on a correct
+implementation's composed drift. Used as one it would have condemned this port;
+used the other way round -- had the amplification favoured F64 -- it would have
+excused a real defect. **Measure the floor per stage, gate per stage, and let
+the composed number be a report rather than a gate.**
+
+A related contamination, caught only because `voc_input`'s floor stopped being
+zero: building the mel per-precision let the *audio VAE's* own F32-vs-F64
+divergence into the input, and the vocoder amplified a difference the engine
+never sees. That inflated the 501-frame floor by an order of magnitude --
+enough to make every failure disappear for the wrong reason. Both runs now get
+the same F32 mel.
+
+### What the runner does now
+
+- **the geometry is read off the anchor's `mel`**, so one binary checks any
+  length; nothing in the vocoder cares, but only running a second length
+  demonstrates that rather than asserting it;
+- **the floor travels in the fixture** as `floor.<stage>`, measured per stage
+  from a common input. A table of constants in the source is right for exactly
+  one fixture and silently wrong for the next -- which is what happened here;
+- **every stage runs twice**: once carrying the engine's own output forward,
+  once from the anchor's tensor. Only the second can fail. The first is printed
+  with its amplification factor, which is how `voc_res1 x13.6` became visible
+  at a glance, and fails only if the chain runs away rather than drifts.
+
 ### And it makes the right sound
 
 The fixture mel comes from `structured_audio` -- 220 Hz and 440 Hz on the left,
 330 Hz and a sweep on the right. After a mel encode, a VAE round trip and six
-upsamples, the waveform peaks at 220 and 448 Hz on the left and 328--331 Hz on
-the right, with the left channel the louder one, as its source is. Tensor
-agreement says the arithmetic is right; this says the pipeline is pointed the
-right way, which is the failure the video half actually had.
+upsamples, the left channel comes back with 99.8% of its energy in 200--500 Hz
+and the right spread from 300 Hz to 2.1 kHz, following the sweep, with the left
+the louder one as its source is. Tensor agreement says the arithmetic is right;
+this says the pipeline is pointed the right way, which is the failure the video
+half actually had.
+
+`check_vocoder_audio.py` puts the waveform back through the same log-mel and
+holds it against the mel that went in. The number only means something next to
+a control, so it runs the same metric on **LTX's own** waveform:
+
+```
+fixture  -> LTX's own      1.1314     how well the vocoder inverts at all
+fixture  -> engine         1.1314     the same question of this port
+LTX's own -> engine        0.0001     what the port costs over the reference
+```
+
+and 0.0000 over the audible bins. The 1.13 is the vocoder's own inversion loss
+-- mel discards phase -- and is identical for both. Without the control that
+figure reads like a defect.
+
+### The clamp, measured rather than assumed
+
+The expected survivor now has a better reason than "this sample is quiet".
+Driving the source waveform over a **256x** range moves the output peak from
+0.230 to 0.491 and never past 0.5: the vocoder normalizes, so the clamp is
+unreachable for in-distribution content. It is a guard, it is implemented from
+the config, and no fixture built this way can exercise it.
 
 ### Not done
 
