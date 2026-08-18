@@ -70,6 +70,7 @@ let package = Package(
         // alias-free snakebeta the vocoder is built on.
         "Sources/LTX/ltx_audio.c",
         "Sources/LTX/ltx_video.c",
+        "Sources/LTX/ltx_connector.c",
         "Sources/H3Native/H3NativeAudio.m",
       ],
       publicHeadersPath: "Sources/H3Native/include",
