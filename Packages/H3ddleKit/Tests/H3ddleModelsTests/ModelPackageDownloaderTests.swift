@@ -333,6 +333,80 @@ struct ModelPackageDownloaderTests {
     #expect(turboData == localPayload)
   }
 
+  /// The weights these packages install are very often already on the machine,
+  /// pulled by `hf` or `transformers`. The Hub names every cached LFS file
+  /// `blobs/<oid>`, and that oid is the SHA-256 the manifest declares — so a
+  /// cached copy is a direct lookup away.
+  ///
+  /// Proved by refusing every download: if the package installs at all, it
+  /// came out of the cache.
+  @Test("A file already in the Hugging Face cache installs without downloading")
+  func reusesHuggingFaceCache() async throws {
+    let payload = Data("weights already pulled by the hub client".utf8)
+    let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // A cache laid out the way the Hub client lays one out.
+    let hub = root.appendingPathComponent("hub", isDirectory: true)
+    let blobs = hub
+      .appendingPathComponent("models--vendor--fixture", isDirectory: true)
+      .appendingPathComponent("blobs", isDirectory: true)
+    try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+    try payload.write(to: blobs.appendingPathComponent(digest, isDirectory: false))
+    setenv("HF_HUB_CACHE", hub.path, 1)
+    defer { unsetenv("HF_HUB_CACHE") }
+
+    let manifest = makeManifest(payload: payload)
+    let downloader = ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root.appendingPathComponent("install")),
+      transport: RefusingTransport(),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    )
+    // What the app quotes before the download has to agree with what the
+    // download turns out to be.
+    #expect(await downloader.pendingByteCount(for: manifest) == 0)
+
+    let installedURL = try await downloader.download(manifest)
+    let installed = try Data(
+      contentsOf: installedURL.appendingPathComponent("weights/model.safetensors")
+    )
+    #expect(installed == payload)
+  }
+
+  /// A cached file whose bytes do not match the declared hash is not trusted
+  /// on the strength of its name — it is verified and rejected, and the
+  /// download proceeds as if it had never been there.
+  @Test("A cache entry that fails verification does not get installed")
+  func rejectsMismatchedCacheEntry() async throws {
+    let payload = Data("the bytes the manifest describes".utf8)
+    let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let hub = root.appendingPathComponent("hub", isDirectory: true)
+    let blobs = hub
+      .appendingPathComponent("models--vendor--fixture", isDirectory: true)
+      .appendingPathComponent("blobs", isDirectory: true)
+    try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+    // Right name and right length, wrong bytes.
+    try Data("the bytes the manifest describe!".utf8)
+      .write(to: blobs.appendingPathComponent(digest, isDirectory: false))
+    setenv("HF_HUB_CACHE", hub.path, 1)
+    defer { unsetenv("HF_HUB_CACHE") }
+
+    let manifest = makeManifest(payload: payload)
+    let installedURL = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root.appendingPathComponent("install")),
+      transport: FixtureTransport(payload: payload),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(manifest)
+    let installed = try Data(
+      contentsOf: installedURL.appendingPathComponent("weights/model.safetensors")
+    )
+    #expect(installed == payload)
+  }
+
   @Test("A changed manifest updates in place and keeps unchanged bytes")
   func updatesInstalledPackage() async throws {
     let shared = Data("weights that do not change".utf8)

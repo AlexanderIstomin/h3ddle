@@ -375,6 +375,10 @@ public actor ModelPackageDownloader {
       } ?? false
     return hasLocalCandidate
       || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
+      // Counted here as well as used above, so the size the app quotes before
+      // the download is the size the download actually is. Quoting 38.69 GB and
+      // then fetching none of it is its own kind of wrong.
+      || !huggingFaceCacheCandidates(sha256: file.sha256).isEmpty
   }
 
   /// Deletes an installed package's files. Weights shared with another
@@ -443,6 +447,7 @@ public actor ModelPackageDownloader {
     candidates.append(
       contentsOf: installedCandidates(sha256: file.sha256, excludingPackage: manifest.id)
     )
+    candidates.append(contentsOf: huggingFaceCacheCandidates(sha256: file.sha256))
 
     for candidate in candidates {
       try Task.checkCancellation()
@@ -484,6 +489,59 @@ public actor ModelPackageDownloader {
   }
 
   /// Files with a matching checksum inside other installed packages.
+  /// Files the Hugging Face cache already holds, found by content hash.
+  ///
+  /// The cache stores every LFS file under `blobs/<oid>`, and that oid *is*
+  /// the SHA-256 this manifest declares — so this is a direct lookup costing
+  /// one `stat` per cached repository, not a scan of forty gigabytes.
+  ///
+  /// This is worth more than it looks. The weights these packages install are
+  /// very often already on the machine, pulled by `hf`, `transformers`, ComfyUI
+  /// or a previous experiment, and re-fetching 38 GB that is sitting in
+  /// `~/.cache/huggingface` is the kind of thing people rightly complain about.
+  /// A hardlink means the reused copy costs no disk either, and survives the
+  /// cache being pruned later.
+  ///
+  /// Nothing is trusted on the strength of a filename: every candidate is
+  /// verified against the declared hash before it is installed, exactly as a
+  /// downloaded file is.
+  private func huggingFaceCacheCandidates(sha256: String) -> [URL] {
+    let fileManager = FileManager.default
+    let environment = ProcessInfo.processInfo.environment
+    var hubs: [URL] = []
+    if let explicit = environment["HF_HUB_CACHE"] {
+      hubs.append(URL(fileURLWithPath: explicit))
+    }
+    if let home = environment["HF_HOME"] {
+      hubs.append(URL(fileURLWithPath: home).appendingPathComponent("hub"))
+    }
+    hubs.append(
+      fileManager.homeDirectoryForCurrentUser
+        .appendingPathComponent(".cache/huggingface/hub")
+    )
+    var candidates: [URL] = []
+    var seen = Set<String>()
+    for hub in hubs {
+      guard
+        let repositories = try? fileManager.contentsOfDirectory(
+          at: hub,
+          includingPropertiesForKeys: nil,
+          options: [.skipsHiddenFiles]
+        )
+      else { continue }
+      for repository in repositories {
+        let blob = repository
+          .appendingPathComponent("blobs", isDirectory: true)
+          .appendingPathComponent(sha256, isDirectory: false)
+        guard fileManager.fileExists(atPath: blob.path),
+          seen.insert(blob.path).inserted
+        else { continue }
+        candidates.append(blob)
+      }
+    }
+    return candidates
+  }
+
   private func installedCandidates(sha256: String, excludingPackage: String) -> [URL] {
     let fileManager = FileManager.default
     guard
