@@ -169,12 +169,52 @@ directly with no per-block size negotiation.
 
 ## Cost at two sizes, measured
 
-| | tokens | per step | 8 steps |
-|---|---|---|---|
-| 256×256, 9 frames | 128 | ~33 s | 265 s |
-| 512×512, 17 frames | 768 | ~160 s | ~21 min |
+| | tokens | first steps | steady state | 8 steps |
+|---|---|---|---|---|
+| 256×256, 9 frames | 128 | ~33 s | ~31 s | 265 s |
+| 512×512, 17 frames | 768 | 158 s | **52 s** | 827 s |
 
-Six times the tokens for about five times the time — close to linear, which
-says attention is not yet dominating at this size. The sampler's shift is
-token-dependent, so the two runs get genuinely different schedules; that is the
-scheduler working, not a discrepancy.
+**The first steps of a run cost three times the steady state**, and it is not
+the file reads — `load_seconds` is only 73 s of the 827. It is warmup: MPS
+graph construction and kernel caches on first use at each shape. A benchmark
+that times step one and extrapolates is wrong by 3x.
+
+At steady state, six times the tokens costs 1.7x the time. That is strongly
+sublinear, which says fixed per-step overhead dominates at the small size and
+the 256x256 figure is nearly all overhead. It also means prefetching weights is
+worth less than the 20-28% estimated above once warmup is separated out.
+
+The sampler's shift is token-dependent, so the two runs get genuinely different
+schedules; that is the scheduler working, not a discrepancy.
+
+## The 512 result, and a temporal artifact worth chasing
+
+At 512×512 with 17 frames the output is properly good: a red sports car on a
+coastal road, sun low over the ocean, guardrail, rocks, a road surface with
+markings. It is recognisably the prompt rather than merely suggestive of it,
+which the 256×256 run was.
+
+But the clip has a clear defect. **Frame 0 is clean, frames 1 to about 12 are
+ghosted — several cars overlaid — and frames 13 to 16 are clean again.**
+
+The temporal structure is the first place to look, because it is not uniform.
+Three latent frames decode to 17 pixel frames as 1 + 8 + 8: a causal encoder
+makes the first latent frame cover a single pixel frame and the rest cover
+eight. So the rope midpoints are 0.5, 5 and 13 — deliberately unevenly spaced
+— and the corrupted span is roughly the second latent frame's eight.
+
+Candidates, cheapest first:
+
+- **step count.** Eight steps on a distilled model is meant to be enough, but
+  ghosting is what too few steps looks like. A 16-step run settles it and costs
+  half an hour;
+- **audio duration alignment.** The audio token count is still chosen rather
+  than derived, so the cross-modal attention may be relating video frames to
+  audio at the wrong rate — and the cross-modal path is exactly what would
+  smear content along time;
+- **the keyframe marker.** It is applied to the first latent frame's tokens,
+  which is what makes frame 0 special — and frame 0 is the one that came out
+  clean.
+
+Recording it rather than guessing further: the pipeline is proven, and this is
+a quality question with three testable causes.
