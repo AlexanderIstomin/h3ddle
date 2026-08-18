@@ -65,6 +65,10 @@ let package = Package(
         "Sources/ZImage/zimage_encoder.c",
         "Sources/ZImage/zimage_vae.c",
         "Sources/ZImage/zimage_vae_gpu.c",
+        // LTX-2.5, on the same footing again. It borrows h3.c's GPU layer
+        // outright: every kernel it needs already existed, including the
+        // alias-free snakebeta the vocoder is built on.
+        "Sources/LTX/ltx_audio.c",
         "Sources/H3Native/H3NativeAudio.m",
       ],
       publicHeadersPath: "Sources/H3Native/include",
@@ -74,6 +78,7 @@ let package = Package(
         .headerSearchPath("Sources/SA3"),
         .headerSearchPath("Sources/Qwen3TTS"),
         .headerSearchPath("Sources/ZImage"),
+        .headerSearchPath("Sources/LTX"),
         // h3_ffmpeg.c uses SSIZE_MAX, whose SDK expansion requires LONG_MAX.
         .unsafeFlags(["-include", "limits.h"]),
       ],
