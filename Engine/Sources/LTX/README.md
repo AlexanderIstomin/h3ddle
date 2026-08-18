@@ -85,6 +85,23 @@ left-pads to 256; the connector's 128 learnable registers *replace padded
 positions* rather than setting a length. Reading 128 as the span silently
 halves the context.
 
+**The connector's registers go on the tail, and the prompt goes at the
+front.** `_replace_padded_with_learnable_registers` compacts the unmasked rows
+forward and then *flips the mask* before choosing between them and the
+registers — that flip is the whole trick. Hand it a left-padded span instead
+and the branch never runs at all: the prompt sits at rope positions `pad..255`
+and the tower's output for pad tokens fills the slots the registers belong in.
+It conditions plausibly either way, which is why it survived a day of being
+looked at.
+
+**The tower must not be run over its own padding.** The reference passes the
+attention mask into the HF model; this engine has no masked GQA kernel, so a
+padded run lets every real token attend to ~238 pads. Running the bare prompt
+is *equivalent*, not approximate — Gemma's positions enter only through RoPE,
+RoPE is relative, and translating every position by the pad length leaves every
+attention logit unchanged. If a masked GQA kernel ever appears, this stops
+being a workaround and starts being a choice.
+
 **The audio latent normalizes through the patchifier.** The statistics are 128
 wide while the latent is 8 channels, because normalization lives in the
 patchified space the DiT works in: `[8, T, 16]` reads as `[T, 128]` with
