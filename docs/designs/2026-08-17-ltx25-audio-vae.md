@@ -161,3 +161,72 @@ The input mel is built in the generator rather than taken from the checkpoint,
 because the VAE's own front end (n_fft 1024, hop 160) is preprocessing and only
 the *extender's* bases ship. Pinning the exact causal-STFT convention is a
 vocoder-stage question and is deliberately deferred.
+
+## The vocoder, resolved and anchored
+
+`gen_ltx_vocoder.py` runs it on the released weights and saves every stage.
+Feeding it the mel the audio VAE decoder produces gives a 0.29 s stereo
+waveform at 16 kHz, and the staged walk equals the vocoder's own `forward`
+exactly.
+
+```
+mel [2, 29, 64] -> fold stereo -> [128, 29]
+conv_pre  128 -> 1536
+stage 0   x5  1536 -> 768   @  145      stage 3   x2  192 -> 96  @ 1160
+stage 1   x2   768 -> 384   @  290      stage 4   x2   96 -> 48  @ 2320
+stage 2   x2   384 -> 192   @  580      stage 5   x2   48 -> 24  @ 4640
+act_post, conv_post 24 -> 2             29 mel frames x hop 160 = 4640
+```
+
+### Three things the reference settles that shapes do not
+
+- **the 128 input channels are stereo × 64 mel bins**, not a latent width.
+  `forward` transposes `(b, c, t, mel)` to `(b, c, mel, t)` and folds stereo
+  into channels, so `conv_pre` sees 2 × 64. Stereo stays folded all the way
+  down and only reappears at `conv_post`'s two outputs;
+- **the three resblocks in a stage are averaged, not summed.** Each sees the
+  same input; the stage output is their mean;
+- **AMP1 applies no activation before the upsample.** The `leaky_relu` in the
+  generic BigVGAN path is guarded by `is_amp`, which is true here.
+
+### Every kernel it needs already exists
+
+`h3_gpu_conv_transpose1d_f32` for the upsamples, `h3_gpu_conv1d_f32` for the
+dilated pairs, `h3_gpu_alias_free_snake_f32` for the activations. Nothing new
+in the shared Metal files.
+
+H3's own output-length formula reproduces the anchor exactly at every stage:
+
+```
+padding = (kernel - stride) / 2
+length  = (length - 1) * stride + kernel - 2 * padding
+```
+
+29 → 145 → 290 → 580 → 1160 → 2320 → 4640, which is ×160, the hop.
+
+### Two differences from `h3_audio_vae.c` worth knowing before starting
+
+**Weight norm is already folded.** H3 loads `weight_g`/`weight_v` pairs and
+calls `h3_gpu_weight_norm_f32`; this checkpoint has neither, so that whole step
+disappears.
+
+**The 109 resampling filter pairs are identical** — every activation in the
+vocoder, every one in the bandwidth extender, and upsample equals downsample.
+Checked rather than assumed, because H3 shares a single pair and a port that
+inherited that assumption without testing it would be right by luck. Load one.
+
+Otherwise it is the same driver with different constants: six stages from 1536
+rather than seven from 1024, rates `[5,2,2,2,2,2]` against `[5,5,2,2,2,2,2]`,
+kernels `[11,4,4,4,4,4]` against `[9,9,4,4,4,4,4]`. Resblock kernels `[3,7,11]`
+and dilations `[1,3,5]` are the same, and channels halve per stage in both.
+
+Names: `vocoder.vocoder.{conv_pre,ups.N,act_post,conv_post}` and
+`resblocks.G.{convs1,convs2}.P` with `G = stage * 3 + block`, plus
+`resblocks.G.{acts1,acts2}.P.act.{alpha,beta}`. `conv_post` has **no bias**.
+
+### Not done
+
+The C runner, and the bandwidth extender — a second BigVGAN taking the 16 kHz
+waveform back through an STFT and mel (the stored `mel_stft`, n_fft 512, hop
+80) and out at 48 kHz. The main vocoder is what makes sound; the extender is
+quality on top.
