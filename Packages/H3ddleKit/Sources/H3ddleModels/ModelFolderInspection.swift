@@ -89,6 +89,33 @@ extension ModelFolderInspection {
     "vae_decoder.safetensors", "tokenizer.json",
   ]
 
+  /// Files that identify an LTX-2.5 package, on the same terms: these are
+  /// what `ltx_generate` opens, under the three directories the published
+  /// snapshot uses. Nothing else here is laid out this way, so one marker
+  /// would do — but the DiT alone is 21.5 GB of a 38 GB package, and a
+  /// half-finished download that passed the check would fail minutes into a
+  /// generation instead of before one.
+  public static let ltxNames = [
+    "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot"
+      + ".safetensors",
+    "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+    "vae/ltx-2.5-video-vae-conv-bf16.safetensors",
+    "vae/ltx-2.5-audio-vae-bf16.safetensors",
+  ]
+
+  /// Whether a folder holds LTX-2.5 rather than H3.
+  ///
+  /// Same reasoning as the speech split: this one *is* answerable from the
+  /// files, so a hand-added folder does not have to be filed by hand. Both
+  /// render video with a soundtrack, so nothing downstream can tell them
+  /// apart by what they produce — only by what they are.
+  public static func holdsLTX(at directory: URL) -> Bool {
+    let manager = FileManager.default
+    return ltxNames.allSatisfy {
+      manager.fileExists(atPath: directory.appendingPathComponent($0).path)
+    }
+  }
+
   /// Whether a folder holds a speech package rather than a Stable Audio one.
   ///
   /// Unlike the video/audio split this much *is* answerable from the files —
@@ -125,7 +152,7 @@ extension ModelFolderInspection {
     case .audio:
       return soundEffectNames.allSatisfy(exists) || speechNames.allSatisfy(exists)
     case .video:
-      return videoMarkers.contains(where: exists)
+      return videoMarkers.contains(where: exists) || Self.holdsLTX(at: directory)
     case .image:
       return imageNames.allSatisfy(exists)
     }

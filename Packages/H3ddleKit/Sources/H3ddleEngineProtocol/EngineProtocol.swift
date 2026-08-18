@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 14
+  public static let currentVersion = 15
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -132,6 +132,60 @@ public struct EngineImageOptions: Hashable, Codable, Sendable {
   }
 }
 
+/// Which model renders a clip.
+///
+/// Both write video with a synchronized soundtrack — that is not what
+/// separates them. H3 is the resident engine the app is built around, with
+/// reference inputs, keyframes, previews and the whole quality ladder.
+/// LTX-2.5 is a 22B distilled model that renders markedly better motion in
+/// eight steps, and carries none of that machinery: no references, no
+/// keyframes, no previews, its own 38 GB package, and a fixed 24 fps.
+public enum EngineVideoModel: String, Codable, Sendable {
+  case h3
+  case ltx
+}
+
+/// Settings that apply to a clip and to nothing else. Absent means H3, which
+/// is what `.video` meant before this existed.
+public struct EngineVideoOptions: Hashable, Codable, Sendable {
+  /// LTX-2.5 is step-distilled and released at eight.
+  public static let stepsRange = 1...32
+  /// The rate the clip is played at. Not a display preference: it sets the
+  /// scale of the rope's time axis and, through that, the audio length, so
+  /// the two streams stay in step only if the engine and the container agree.
+  public static let fps = 24
+  /// The video VAE expands 32x in space and cannot express anything else.
+  public static let pixelMultiple = 32
+  /// It compresses 8x in time and cannot produce the seven leading frames,
+  /// so a clip is 8k+1 frames: 17, 33, 65, 97.
+  public static let frameStep = 8
+
+  public var model: EngineVideoModel
+  /// Overrides the model's released schedule when set. Ignored by H3, which
+  /// takes its budget from `denoisingSteps`.
+  public var steps: Int?
+
+  public init(model: EngineVideoModel = .h3, steps: Int? = nil) {
+    self.model = model
+    self.steps = steps.map { Self.stepsRange.clamping($0) }
+  }
+
+  /// The frame count LTX will actually render for `seconds`, which is the
+  /// nearest 8k+1 at 24 fps and never zero. Rounding here rather than in the
+  /// engine keeps the duration the app displays equal to the one it gets.
+  public static func frames(forSeconds seconds: TimeInterval) -> Int {
+    let wanted = Int((seconds * Double(fps)).rounded())
+    let steps = max(1, Int(((Double(wanted) - 1) / Double(frameStep)).rounded()))
+    return steps * frameStep + 1
+  }
+
+  /// Whether this canvas is renderable, so the app can refuse before loading
+  /// thirty-eight gigabytes.
+  public static func supports(canvas pixels: Int) -> Bool {
+    pixels >= pixelMultiple && pixels % pixelMultiple == 0
+  }
+}
+
 public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case modelInspection
   case videoGeneration
@@ -141,6 +195,11 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   /// `imageGeneration` because an engine can have one package and not the
   /// other, and the app must not offer a model the engine cannot load.
   case zImageGeneration
+  /// LTX-2.5: a second video model, with a soundtrack the DiT denoises beside
+  /// the picture rather than a second pass. Separate from `videoGeneration`
+  /// because an engine can have H3's package and not this one, and the app
+  /// must not offer a model the engine cannot load.
+  case ltxGeneration
   case standaloneAudioGeneration
   case soundEffectGeneration
   case speechGeneration
@@ -394,6 +453,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public var speech: EngineSpeechOptions?
   /// Which model renders a still, and its own settings. Absent keeps H3.
   public var image: EngineImageOptions?
+  /// Which model renders a clip, and its own settings. Absent keeps H3.
+  public var video: EngineVideoOptions?
   public var modelDirectory: URL?
   public var outputURL: URL
 
@@ -417,6 +478,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     referenceImageURLs: [URL] = [],
     speech: EngineSpeechOptions? = nil,
     image: EngineImageOptions? = nil,
+    video: EngineVideoOptions? = nil,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -439,6 +501,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.referenceImageURLs = Array(referenceImageURLs.prefix(Self.referenceImageLimit))
     self.speech = speech
     self.image = image
+    self.video = video
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -463,6 +526,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case referenceImageURLs
     case speech
     case image
+    case video
     case modelDirectory
     case outputURL
   }
@@ -494,6 +558,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
       try container.decodeIfPresent([URL].self, forKey: .referenceImageURLs) ?? []
     speech = try container.decodeIfPresent(EngineSpeechOptions.self, forKey: .speech)
     image = try container.decodeIfPresent(EngineImageOptions.self, forKey: .image)
+    video = try container.decodeIfPresent(EngineVideoOptions.self, forKey: .video)
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -521,6 +586,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     }
     try container.encodeIfPresent(speech, forKey: .speech)
     try container.encodeIfPresent(image, forKey: .image)
+    try container.encodeIfPresent(video, forKey: .video)
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

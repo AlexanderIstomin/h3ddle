@@ -114,7 +114,7 @@ private let engineCapabilities = EngineCapabilities(
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
       .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
-      .zImageGeneration,
+      .zImageGeneration, .ltxGeneration,
     ]
   }()
 )
@@ -549,6 +549,31 @@ private func zimageStepCallback(
     ? 1 : 0
 }
 
+/// LTX reports the same way Z-Image does, with one difference that matters:
+/// its tick is asked *between blocks* so a cancel lands inside one rather than
+/// at the end of a step, and a step is well over half a minute. So the same
+/// step number arrives forty-eight times, and reporting it as a fraction would
+/// make the bar stutter backwards. The step counter goes in the phase name and
+/// the fraction stays whole, exactly as above.
+private func ltxStepCallback(
+  _ phase: UnsafePointer<CChar>?,
+  _ completed: Int32,
+  _ total: Int32,
+  _ opaque: UnsafeMutableRawPointer?
+) -> Int32 {
+  guard let opaque else { return 1 }
+  let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
+    .takeUnretainedValue()
+  let name = phase.map { String(cString: $0) } ?? "denoise"
+  guard name == "denoise" else {
+    return context.progress(phase: name, completed: completed, total: total) == 0
+      ? 1 : 0
+  }
+  return context.progress(
+    phase: "denoise step \(completed)/\(total)", completed: 1, total: 1) == 0
+    ? 1 : 0
+}
+
 private func soundEffectStepCallback(
   _ completed: Int32,
   _ total: Int32,
@@ -638,9 +663,46 @@ private final class EngineRuntime: @unchecked Sendable {
         return
       }
     case .video:
-      guard engineCapabilities.supports(.videoGeneration) else {
-        EngineOutput.fail(command, message: "FFmpeg is required for H3 video output")
-        return
+      /* Two models render a clip and they are gated separately: an engine may
+       * have one package and not the other. */
+      if request.video?.model == .ltx {
+        guard engineCapabilities.supports(.ltxGeneration) else {
+          EngineOutput.fail(command, message: "This engine cannot run LTX-2.5")
+          return
+        }
+        let pixels = request.canvasWidth ?? 0
+        guard pixels == (request.canvasHeight ?? pixels) else {
+          EngineOutput.fail(command, message: "LTX renders square clips only")
+          return
+        }
+        let frames = EngineVideoOptions.frames(forSeconds: request.duration)
+        var seconds = 0.0
+        var reason = [CChar](repeating: 0, count: 512)
+        guard
+          h3ddle_ltx_plan(
+            Int32(pixels), Int32(frames), Int32(EngineVideoOptions.fps),
+            &seconds, &reason, reason.count) != 0
+        else {
+          EngineOutput.fail(command, message: String(cString: reason))
+          return
+        }
+        /* Refused rather than dropped, for the reason Z-Image's are: a clip
+         * that silently ignored the keyframes it was handed looks like a bad
+         * model rather than a rejected request. */
+        guard request.firstFrameURL == nil, request.lastFrameURL == nil,
+          request.referenceImageURLs.isEmpty
+        else {
+          EngineOutput.fail(
+            command,
+            message: "LTX renders from the prompt alone; it cannot take "
+              + "start or end frames or reference images")
+          return
+        }
+      } else {
+        guard engineCapabilities.supports(.videoGeneration) else {
+          EngineOutput.fail(command, message: "FFmpeg is required for H3 video output")
+          return
+        }
       }
     case .image:
       /* Two models can render a still and they are gated separately: an
@@ -801,6 +863,78 @@ private final class EngineRuntime: @unchecked Sendable {
         outputDuration: request.duration
       )
     )
+  }
+
+  /// LTX-2.5: a prompt in, an MP4 with its own soundtrack out.
+  ///
+  /// Nothing of H3's applies — no shared model cache, no preview decoder, no
+  /// reference conditioning — and unlike every other engine here it writes its
+  /// own container. A clip is 200 MB of float pixels at 512 square, and there
+  /// is nothing this side would do with them but hand them back to the muxer,
+  /// so the packing and the write happen in C and `outputURL` receives a
+  /// finished file.
+  ///
+  /// The package is loaded a stage at a time and released as the call returns.
+  /// It is not a caching decision: the Gemma tower and the DiT are 37 GB
+  /// together and never both resident.
+  private func runLTX(
+    _ request: EngineGenerationRequest,
+    options: EngineVideoOptions,
+    command: EngineCommand,
+    packageDirectory: URL,
+    callbackContext: GenerationCallbackContext
+  ) {
+    let pixels = request.canvasWidth ?? 512
+    /* Rounded to the nearest renderable length here as well as in the app, so
+     * a request that arrived from somewhere else still gets a clip rather than
+     * a refusal. */
+    let frames = EngineVideoOptions.frames(forSeconds: request.duration)
+    var error = [CChar](repeating: 0, count: 512)
+    let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    let wrote = packageDirectory.path.withCString { packagePath in
+      request.prompt.withCString { prompt in
+        "h3_shaders.metal".withCString { shaders in
+          request.outputURL.path.withCString { output in
+            h3ddle_ltx_generate(
+              packagePath,
+              shaders,
+              prompt,
+              Int32(pixels),
+              Int32(frames),
+              Int32(EngineVideoOptions.fps),
+              Int32(options.steps ?? 0),
+              request.seed ?? 42,
+              output,
+              ltxStepCallback,
+              opaque,
+              &error,
+              error.count
+            )
+          }
+        }
+      }
+    }
+    guard wrote != 0 else {
+      let message = String(cString: error)
+      if message.isEmpty {
+        /* An empty message with a zero return is the sampler honouring a
+         * cancel, not a failure. */
+        EngineOutput.emit(
+          EngineEvent(
+            requestID: command.requestID, jobID: command.jobID, kind: .cancelled))
+      } else {
+        EngineOutput.fail(command, message: message)
+      }
+      return
+    }
+    EngineOutput.emit(
+      EngineEvent(
+        requestID: command.requestID,
+        jobID: command.jobID,
+        kind: .completed,
+        outputURL: request.outputURL,
+        outputDuration: Double(frames) / Double(EngineVideoOptions.fps)
+      ))
   }
 
   /// Z-Image-Turbo, like Stable Audio 3, keeps none of H3's machinery: no
@@ -976,6 +1110,17 @@ private final class EngineRuntime: @unchecked Sendable {
     if request.kind == .soundEffect {
       runSoundEffect(
         request,
+        command: command,
+        packageDirectory: modelDirectory,
+        callbackContext: callbackContext
+      )
+      return
+    }
+
+    if request.kind == .video, request.video?.model == .ltx {
+      runLTX(
+        request,
+        options: request.video ?? EngineVideoOptions(model: .ltx),
         command: command,
         packageDirectory: modelDirectory,
         callbackContext: callbackContext

@@ -60,6 +60,36 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
  * multiple of 32, so 1440 is out where 1024 and 1536 are in. */
 int h3ddle_zimage_supports_canvas(int pixels);
 
+/* LTX-2.5: a prompt in, a clip **with its own soundtrack** out.
+ *
+ * Unlike every other engine here this one writes its own container. The clip
+ * is 200 MB of float pixels at 512 square over 65 frames and there is nothing
+ * Swift would do with them but hand them straight back to the muxer, so the
+ * frames are packed and written on this side and `output_path` receives a
+ * finished MP4 with an audio track.
+ *
+ * The package is loaded and released per call, one stage at a time: the Gemma
+ * tower and the DiT do not fit in memory together -- about 37 GB -- so holding
+ * anything resident is not on offer.
+ *
+ * `pixels` must be a multiple of 32 and `frames` must be 8k+1; both are what
+ * the video VAE can express rather than preferences. `h3ddle_ltx_plan` answers
+ * that question, and the clip's duration in seconds, without loading a byte.
+ *
+ * `on_step` names the stage -- "text encoder", "connector", "denoise",
+ * "video VAE", "vocoder" -- because the sampler is only part of the wait.
+ * Returning zero abandons the run, which is how cancellation reaches it; a
+ * cancelled call returns zero with an empty `error`. */
+typedef int (*h3ddle_ltx_step)(const char *phase, int completed, int total,
+                               void *opaque);
+int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
+                    char *error, size_t error_size);
+int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
+                        const char *prompt, int pixels, int frames, int fps,
+                        int steps, unsigned long long seed,
+                        const char *output_path, h3ddle_ltx_step on_step,
+                        void *opaque, char *error, size_t error_size);
+
 /* Decodes any audio file AVFoundation reads into mono float at
  * `sample_rate`, which for a Qwen3-TTS reference clip must be 24 kHz — its
  * mel filterbank is defined at that rate. The caller owns *pcm and frees it. */

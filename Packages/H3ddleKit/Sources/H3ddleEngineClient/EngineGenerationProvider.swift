@@ -111,6 +111,9 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           image: request.kind == .image && request.imageEngine == .zImage
             ? EngineImageOptions(model: .zImage, steps: request.denoisingSteps)
             : nil,
+          video: request.kind == .video && request.videoEngine == .ltx
+            ? EngineVideoOptions(model: .ltx, steps: request.denoisingSteps)
+            : nil,
           modelDirectory: modelDirectory,
           outputURL: outputURL
         )

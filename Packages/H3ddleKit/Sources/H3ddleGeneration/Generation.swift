@@ -44,12 +44,34 @@ public enum ImageGenerationEngine: String, Codable, Sendable {
   public var usesOwnPackage: Bool { self != .h3 }
 }
 
+/// Which engine renders a clip.
+///
+/// Both write video with a soundtrack, so nothing about the *output* tells
+/// them apart — only the package does. H3 is the resident engine with the
+/// reference inputs, keyframes, previews and quality ladder built around it;
+/// LTX-2.5 renders markedly better motion in eight steps and supports none of
+/// that.
+public enum VideoGenerationEngine: String, Codable, Sendable {
+  case h3
+  case ltx
+
+  /// Whether this engine loads a package of its own rather than the H3 tree.
+  public var usesOwnPackage: Bool { self != .h3 }
+
+  /// Whether a clip from this engine can be conditioned on pictures. LTX takes
+  /// the prompt alone, and the engine refuses a request carrying references
+  /// rather than dropping them silently.
+  public var acceptsReferenceInputs: Bool { self == .h3 }
+}
+
 public struct GenerationRequest: Hashable, Codable, Sendable {
   public var kind: GenerationKind
   /// Audio only; ignored by the other kinds.
   public var audioEngine: AudioGenerationEngine = .h3
   /// Image only; ignored by the other kinds.
   public var imageEngine: ImageGenerationEngine = .h3
+  /// Video only; ignored by the other kinds.
+  public var videoEngine: VideoGenerationEngine = .h3
   /// Required when `audioEngine` is `.speech`, ignored otherwise: the line to
   /// speak travels in `prompt`, and everything else about the voice here.
   public var speech: EngineSpeechOptions?

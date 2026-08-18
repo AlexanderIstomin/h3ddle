@@ -33,6 +33,65 @@ struct EngineProtocolTests {
     #expect(decoded == request)
   }
 
+  @Test("Video settings survive a round trip")
+  func videoOptionsRoundTrip() throws {
+    let request = EngineGenerationRequest(
+      kind: .video,
+      prompt: "a sailboat",
+      duration: 2.708,
+      canvasWidth: 512,
+      canvasHeight: 512,
+      video: EngineVideoOptions(model: .ltx, steps: 8),
+      outputURL: URL(fileURLWithPath: "/tmp/clip.mp4")
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+    #expect(decoded.video?.model == .ltx)
+    #expect(decoded.video?.steps == 8)
+    #expect(decoded == request)
+  }
+
+  /// Absent settings mean H3, which is what `.video` meant before a second
+  /// model existed — the same promise `.image` makes.
+  @Test("A clip with no video settings still means H3")
+  func absentVideoSettingsMeanH3() throws {
+    let request = EngineGenerationRequest(
+      kind: .video, prompt: "x", duration: 1,
+      outputURL: URL(fileURLWithPath: "/tmp/x.mp4"))
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+    #expect(decoded.video == nil)
+  }
+
+  /// The video VAE compresses 8x in time and cannot make the seven leading
+  /// frames, so a clip is 8k+1 frames and nothing else. Rounding here rather
+  /// than in the engine is what keeps the duration the app shows equal to the
+  /// one it gets back.
+  @Test("A duration rounds to a length the VAE can actually express")
+  func videoFrameRounding() {
+    #expect(EngineVideoOptions.frames(forSeconds: 0.708) == 17)
+    #expect(EngineVideoOptions.frames(forSeconds: 2.708) == 65)
+    #expect(EngineVideoOptions.frames(forSeconds: 4.042) == 97)
+    // Never zero, and never a length the decoder would refuse.
+    #expect(EngineVideoOptions.frames(forSeconds: 0) == 9)
+    for seconds in stride(from: 0.1, through: 8.0, by: 0.1) {
+      let frames = EngineVideoOptions.frames(forSeconds: seconds)
+      #expect(frames >= 9)
+      #expect((frames - 1) % EngineVideoOptions.frameStep == 0)
+    }
+  }
+
+  /// The canvas has to be a multiple of the VAE's spatial factor. 512 and 384
+  /// are in; 500 is not, and the app refuses it rather than the engine failing
+  /// after loading thirty-eight gigabytes.
+  @Test("Only canvases the video VAE can express are offered")
+  func videoCanvasSupport() {
+    #expect(EngineVideoOptions.supports(canvas: 512))
+    #expect(EngineVideoOptions.supports(canvas: 384))
+    #expect(!EngineVideoOptions.supports(canvas: 500))
+    #expect(!EngineVideoOptions.supports(canvas: 0))
+  }
+
   /// Absent settings mean H3, which is what `.image` meant before a second
   /// model existed. A client that has never heard of v14 keeps working.
   @Test("A still with no image settings still means H3")
