@@ -42,9 +42,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* `LTXVGemmaTokenizer(max_length=256)`, left-padded, and Gemma's `<pad>` is 0
- * -- not `H3_PAD_TOKEN_ID`, which is Qwen's. */
-enum { SPAN = 256, PAD_ID = 0, TEMPORAL = 8, SPATIAL = LTX_VIDEO_SPATIAL };
+/* `LTXVGemmaTokenizer(max_length=256)`. The span is what the DiT
+ * cross-attends to; the prompt itself is whatever it tokenized to, and the
+ * connector's registers make up the difference. */
+enum { SPAN = 256, TEMPORAL = 8, SPATIAL = LTX_VIDEO_SPATIAL };
 
 /* The snapshot's own layout. The three directories are what `ltx_request.
  * package` names; the filenames are the published ones. */
@@ -134,7 +135,10 @@ static int announce(const relay *r, const char *phase) {
  * memory. It is also *not* the stock Gemma tokenizer: the post-processor in
  * this copy is a no-op, so no <bos> is prepended, and h3.c's SentencePiece
  * path reproduces its ids exactly -- checked against the reference
- * `tokenizers` library in `h3_gemma_tokenizer_test`. */
+ * `tokenizers` library in `h3_gemma_tokenizer_test`.
+ *
+ * The ids come back **bare**, not padded to the span, which is deliberate and
+ * is the subtlest decision in this file. See `ltx_generate` below. */
 static int tokenize(const h3_weight_store *encoder, const char *prompt,
                     int32_t *ids, uint32_t *tokens,
                     char *error, size_t error_size) {
@@ -171,16 +175,37 @@ static int tokenize(const h3_weight_store *encoder, const char *prompt,
     }
     /* Truncate as the reference does, keeping the front. */
     if (count > SPAN) count = SPAN;
-    /* Left padding, which is what makes the mask unnecessary downstream: the
-     * pads come first, and the connector replaces exactly those slots. */
-    const size_t pad = SPAN - count;
-    for (size_t index = 0; index < pad; index++) ids[index] = PAD_ID;
     for (size_t index = 0; index < count; index++)
-        ids[pad + index] = (int32_t)encoded[index];
+        ids[index] = (int32_t)encoded[index];
     h3_tokenizer_ids_free(encoded);
-    *tokens = SPAN;
+    *tokens = (uint32_t)count;
     return 1;
 }
+
+/* Why the tower is run on the bare prompt rather than the padded span.
+ *
+ * `LTXVGemmaTokenizer` left-pads to 256 and hands the tower an attention mask
+ * beside the ids; `base_encoder.py` passes that mask straight into the HF
+ * model, so the pads are excluded from attention. This engine has no masked
+ * GQA kernel -- `h3_gpu_gqa_causal_bf16` is causal and nothing else -- so
+ * feeding it the padded span would let every real token attend to two hundred
+ * and thirty-odd pad tokens the reference never shows it.
+ *
+ * Running the bare tokens instead is *equivalent*, not merely close, and the
+ * reason is that Gemma's positions enter only through RoPE. RoPE is relative:
+ * a query at i and a key at j interact through i - j alone, so translating
+ * every position by the pad length leaves every attention logit unchanged.
+ * Gemma carries no learned absolute position embedding to break that. The
+ * sliding layers' window is far wider than any prompt at this length, so the
+ * same keys are in range either way.
+ *
+ * Two consequences fall out. The aggregation zeroes padded rows before the
+ * connector sees them (`norm_and_concat_per_token_rms` is per token, so no
+ * statistic crosses tokens and nothing else is affected), and those rows are
+ * then discarded anyway -- so not producing them costs nothing. And the tower
+ * runs on a few dozen rows instead of 256, which is most of a minute back.
+ *
+ * The span still exists; it is just the connector's job. See below. */
 
 /* ------------------------------------------------------------------- entry */
 
@@ -253,8 +278,24 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
         ok = dit != NULL;
         if (ok) ok = announce(&report, "connector");
         if (ok)
+            /* The prompt's own tokens, then the connector's learnable
+             * registers out to the span the DiT cross-attends to. This is
+             * `_replace_padded_with_learnable_registers` read literally: it
+             * compacts the unmasked rows to the front and then **flips the
+             * mask** before choosing between them and the registers, so the
+             * registers land on the tail rather than back on the left pads.
+             *
+             *     adjusted = pad(hidden[mask], (0, 0, 0, pad_length))
+             *     flipped  = flip(mask, dims=[1])
+             *     hidden   = flipped * adjusted + (1 - flipped) * registers
+             *
+             * Handing it a left-padded span instead -- which every path here
+             * did until now -- puts the prompt at rope positions pad..255
+             * instead of 0..N-1 and feeds the tower's output for pad tokens
+             * where the registers belong. It conditions plausibly either way,
+             * which is exactly why it survived being looked at. */
             ok = ltx_connector_run(gpu, dit, video_features, audio_features,
-                                   tokens, tokens, video_context, audio_context,
+                                   tokens, SPAN, video_context, audio_context,
                                    error, error_size);
         if (ok) {
             ltx_dit_request denoise = {0};
@@ -266,7 +307,7 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
             denoise.steps = steps;
             denoise.seed = request->seed;
             ok = ltx_dit_sample(gpu, dit, &denoise, video_context,
-                                audio_context, tokens, video_latent,
+                                audio_context, SPAN, video_latent,
                                 audio_latent, denoise_tick, &report, error,
                                 error_size);
         }
