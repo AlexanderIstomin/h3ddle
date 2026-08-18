@@ -55,6 +55,11 @@ uint32_t ltx_video_pixel_frames(uint32_t latent_frames) {
 
 /* ---------------------------------------------------------------- the run */
 
+/* How many frees can pile up inside one open command buffer. Two per
+ * convolution and a handful of convolutions between a begin and a submit, so
+ * this is an order of magnitude of slack rather than a tuned bound. */
+enum { RETIRE_MAX = 32 };
+
 typedef struct {
     h3_gpu *gpu;
     const h3_weight_store *store;
@@ -62,6 +67,9 @@ typedef struct {
     char *error;
     size_t error_size;
     int failed;
+    /* Tensors the open command buffer still reads. See `retire`. */
+    h3_gpu_tensor *retired[RETIRE_MAX];
+    int retired_count;
 } run;
 
 static void oops(run *r, const char *format, ...) {
@@ -90,6 +98,33 @@ static size_t positions(shape of) {
 }
 
 /* ----------------------------------------------------------------- loading */
+
+/* Freeing a tensor marks its Metal buffer purgeable **immediately**, so a
+ * tensor the open command buffer still reads cannot be freed until that buffer
+ * is submitted -- the commit fails validation with "volatile or empty
+ * purgeable state at commit".
+ *
+ * That is invisible without the validation layer, which the command-line
+ * harnesses run without and the app turns on. It is why this file's header
+ * says to submit before freeing anything encoded work still reads, and why
+ * saying it was not enough: `run_conv` frees its padded input one line after
+ * encoding the convolution that reads it. Deferring is the fix that does not
+ * depend on remembering. */
+static void retire(run *r, h3_gpu_tensor *tensor) {
+    if (!tensor) return;
+    if (r->retired_count < RETIRE_MAX) {
+        r->retired[r->retired_count++] = tensor;
+        return;
+    }
+    /* Not expected to happen; freeing early beats leaking. */
+    h3_gpu_tensor_free(tensor);
+}
+
+static void drain(run *r) {
+    for (int index = 0; index < r->retired_count; index++)
+        h3_gpu_tensor_free(r->retired[index]);
+    r->retired_count = 0;
+}
 
 static float from_bf16(uint16_t value) {
     uint32_t bits = (uint32_t)value << 16;
@@ -230,7 +265,7 @@ static h3_gpu_tensor *run_conv(run *r, const conv3d *kernel,
                                          of.height, of.width, of.channels,
                                          out_channels, KERNEL, KERNEL, KERNEL,
                                          1, 1, 1), "video VAE convolution");
-    h3_gpu_tensor_free(padded);
+    retire(r, padded);
     return out;
 }
 
@@ -350,6 +385,7 @@ static void resnet(run *r, int block, int layer, h3_gpu_tensor *x, shape of) {
     GPU_OP(r, h3_gpu_add_scaled_f32(r->gpu, x, x, second_out, 1.0f, 1.0f,
                                     (uint32_t)volume(of)), "resnet residual");
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit resnet");
+    drain(r);
     h3_gpu_tensor_free(hidden);
     h3_gpu_tensor_free(second_out);
     h3_gpu_tensor_free(scratch);
@@ -372,6 +408,7 @@ static h3_gpu_tensor *upsample(run *r, int block, const vae_block *plan,
     GPU_OP(r, h3_gpu_begin(r->gpu), "begin upsample");
     h3_gpu_tensor *convolved = run_conv(r, &kernel, x, *of, wide);
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit upsample");
+    drain(r);
     free_conv(&kernel);
     h3_gpu_tensor_free(x);
 
@@ -462,6 +499,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin conv_in");
         h3_gpu_tensor *out = run_conv(&r, &kernel, x, at, WIDEST_CHANNELS);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit conv_in");
+        drain(&r);
         free_conv(&kernel);
         h3_gpu_tensor_free(x);
         x = out;
@@ -482,6 +520,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin tail");
         pixel_norm(&r, normed, x, at);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit norm");
+        drain(&r);
         h3_gpu_tensor_free(x);
         x = normed;
     }
@@ -493,6 +532,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
                "output activation");
         h3_gpu_tensor *out = run_conv(&r, &tail, x, at, PACKED_CHANNELS);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit head");
+        drain(&r);
         free_conv(&tail);
         h3_gpu_tensor_free(x);
         x = out;

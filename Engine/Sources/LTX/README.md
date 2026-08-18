@@ -125,6 +125,28 @@ flat at 2e-07 to 2.2e-06 from the first stage to the last, at every length
 tried. The composed drift is worth printing beside it, with its amplification
 factor, but not worth failing on.
 
+## Run the harness with Metal validation
+
+Two bugs shipped from here to the app because the harness runs without Metal's
+validation layer and an app launched from Xcode runs with it. Both produced
+correct output and crashed the app on the first launch:
+
+- `h3_head_gate_bf16` declared `constant uint3 &shape`, which is **16 bytes in
+  Metal, not 12**, against a host struct of three uint32s. Nothing read the
+  fourth component; only validation objected.
+- `run_conv` freed its padded input one line after encoding the convolution
+  that reads it. Freeing marks the buffer purgeable *immediately*, so the
+  commit fails with "volatile or empty purgeable state at commit". Both
+  decoders did this, and both now defer such frees to a queue drained after
+  every submit.
+
+So run every check this way at least once:
+
+    MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 ./ltx_clip_check ...
+
+It costs roughly twice the wall clock and it is the difference between finding
+these here and finding them in the app.
+
 ## Harness
 
 `harness/` holds the checks. They are not in the build — each has its own

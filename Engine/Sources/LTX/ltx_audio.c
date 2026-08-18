@@ -57,6 +57,11 @@ uint32_t ltx_audio_frames_for(uint32_t rows) {
 
 /* ---------------------------------------------------------------- the run */
 
+/* How many frees can pile up inside one open command buffer. Two per
+ * convolution and a handful of convolutions between a begin and a submit, so
+ * this is an order of magnitude of slack rather than a tuned bound. */
+enum { RETIRE_MAX = 32 };
+
 typedef struct {
     h3_gpu *gpu;
     const h3_weight_store *store;
@@ -65,6 +70,9 @@ typedef struct {
     char *error;
     size_t error_size;
     int failed;
+    /* Tensors the open command buffer still reads. See `retire`. */
+    h3_gpu_tensor *retired[RETIRE_MAX];
+    int retired_count;
 } run;
 
 static void oops(run *r, const char *format, ...) {
@@ -95,6 +103,33 @@ static size_t extent(span of) {
 }
 
 /* ----------------------------------------------------------------- loading */
+
+/* Freeing a tensor marks its Metal buffer purgeable **immediately**, so a
+ * tensor the open command buffer still reads cannot be freed until that buffer
+ * is submitted -- the commit fails validation with "volatile or empty
+ * purgeable state at commit".
+ *
+ * That is invisible without the validation layer, which the command-line
+ * harnesses run without and the app turns on. It is why this file's header
+ * says to submit before freeing anything encoded work still reads, and why
+ * saying it was not enough: `run_conv` frees its padded input one line after
+ * encoding the convolution that reads it. Deferring is the fix that does not
+ * depend on remembering. */
+static void retire(run *r, h3_gpu_tensor *tensor) {
+    if (!tensor) return;
+    if (r->retired_count < RETIRE_MAX) {
+        r->retired[r->retired_count++] = tensor;
+        return;
+    }
+    /* Not expected to happen; freeing early beats leaking. */
+    h3_gpu_tensor_free(tensor);
+}
+
+static void drain(run *r) {
+    for (int index = 0; index < r->retired_count; index++)
+        h3_gpu_tensor_free(r->retired[index]);
+    r->retired_count = 0;
+}
 
 static float from_bf16(uint16_t value) {
     uint32_t bits = (uint32_t)value << 16;
@@ -226,7 +261,7 @@ static h3_gpu_tensor *run_vae_conv(run *r, const conv2d *kernel,
                                          of.mels, of.channels, out_channels,
                                          kernel->kernel, 1, kernel->kernel,
                                          1, 1, 1), "audio VAE convolution");
-    h3_gpu_tensor_free(padded);
+    retire(r, padded);
     return out;
 }
 
@@ -273,6 +308,7 @@ static h3_gpu_tensor *resnet(run *r, const char *prefix, h3_gpu_tensor *x,
                                     1.0f, (uint32_t)volume(wide)),
            "resnet residual");
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit resnet");
+    drain(r);
 
     if (residual != x) h3_gpu_tensor_free(residual);
     h3_gpu_tensor_free(hidden);
@@ -301,6 +337,7 @@ static h3_gpu_tensor *upsample(run *r, int level, h3_gpu_tensor *x, shape *of) {
     h3_gpu_tensor *convolved = run_vae_conv(r, &kernel, big, doubled,
                                             of->channels);
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit upsample");
+    drain(r);
     free_vae_conv(&kernel);
     h3_gpu_tensor_free(big);
     h3_gpu_tensor_free(x);
@@ -312,6 +349,7 @@ static h3_gpu_tensor *upsample(run *r, int level, h3_gpu_tensor *x, shape *of) {
                               (size_t)doubled.mels * doubled.channels,
                               volume(kept)), "drop the first frame");
     GPU_OP(r, h3_gpu_submit(r->gpu), "submit trim");
+    drain(r);
     h3_gpu_tensor_free(convolved);
     *of = kept;
     return out;
@@ -569,6 +607,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin conv_in");
         h3_gpu_tensor *out = run_vae_conv(&r, &kernel, x, at, WIDEST_CHANNELS);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit conv_in");
+        drain(&r);
         free_vae_conv(&kernel);
         h3_gpu_tensor_free(x);
         x = out;
@@ -597,6 +636,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin tail");
         pixel_norm(&r, normed, x, at);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit norm");
+        drain(&r);
         h3_gpu_tensor_free(x);
         x = normed;
     }
@@ -608,6 +648,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
                "output activation");
         h3_gpu_tensor *out = run_vae_conv(&r, &tail, x, at, STEREO);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit head");
+        drain(&r);
         free_vae_conv(&tail);
         h3_gpu_tensor_free(x);
         x = out;
@@ -657,6 +698,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin conv_pre");
         run_voc_conv(&r, out, x, &pre, voice.length);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit conv_pre");
+        drain(&r);
         free_voc_conv(&pre);
         h3_gpu_tensor_free(x);
         x = out;
@@ -682,6 +724,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         encode_blocks(&r, accumulated, upsampled, &weights, wider, work,
                       activated, branch);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit vocoder stage");
+        drain(&r);
 
         h3_gpu_tensor_free(x);
         x = accumulated;
@@ -700,6 +743,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin act_post");
         run_activation(&r, out, x, &post, voice);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit act_post");
+        drain(&r);
         free_activation(&post);
         h3_gpu_tensor_free(x);
         x = out;
@@ -713,6 +757,7 @@ int ltx_audio_decode(h3_gpu *gpu, const h3_weight_store *store,
         GPU_OP(&r, h3_gpu_begin(gpu), "begin conv_post");
         run_voc_conv(&r, out, x, &post, voice.length);
         GPU_OP(&r, h3_gpu_submit(gpu), "submit conv_post");
+        drain(&r);
         free_voc_conv(&post);
         h3_gpu_tensor_free(x);
         x = out;

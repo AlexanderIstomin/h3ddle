@@ -71,13 +71,14 @@ public struct SupportedLength: Equatable, Sendable {
   /// eight minutes and make the two-second clips this port was validated on
   /// unrequestable.
   ///
-  /// The ceiling is this app's, not the model's. Cost is linear in tokens and
-  /// tokens are linear in length, so 193 frames at 512 square is already about
-  /// thirteen minutes of denoising on an M1 Pro. Longer works and is simply not
-  /// worth offering by default.
+  /// The range is Lightricks' documented 2 to 20 seconds, snapped to the grid:
+  /// 49 frames to 481. An earlier ceiling of 193 frames was this app's own
+  /// invention, picked because longer clips are slow — which is a reason to
+  /// *show the cost*, not to refuse a length the model was trained to produce.
+  /// The studio quotes minutes beside every canvas for exactly that.
   public static let ltxVideo = SupportedLength(
-    minimumSeconds: 17.0 / 24.0,
-    maximumSeconds: 193.0 / 24.0,
+    minimumSeconds: 49.0 / 24.0,
+    maximumSeconds: 481.0 / 24.0,
     stepSeconds: 8.0 / 24.0
   )
 

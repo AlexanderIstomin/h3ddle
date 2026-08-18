@@ -15,13 +15,15 @@ struct SupportedLengthTests {
   @Test("LTX offers only lengths its decoder can produce")
   func ltxVideoGrid() {
     let length = SupportedLength.ltxVideo
-    #expect(abs(length.minimumSeconds - 17.0 / 24.0) < 1e-9)
-    #expect(abs(length.maximumSeconds - 193.0 / 24.0) < 1e-9)
+    // Lightricks documents 2 to 20 seconds; these are those, snapped to the
+    // only grid the decoder has.
+    #expect(abs(length.minimumSeconds - 49.0 / 24.0) < 1e-9)
+    #expect(abs(length.maximumSeconds - 481.0 / 24.0) < 1e-9)
     for seconds in length.options {
       let frames = Int((seconds * 24).rounded())
       #expect((frames - 1) % 8 == 0)
-      #expect(frames >= 17)
-      #expect(frames <= 193)
+      #expect(frames >= 49)
+      #expect(frames <= 481)
     }
     // And the engine's own rounding agrees with every offered length, so what
     // the studio shows is what the decoder makes.
