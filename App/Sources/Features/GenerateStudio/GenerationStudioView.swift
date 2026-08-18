@@ -557,6 +557,13 @@ struct GenerationStudioView: View {
   /// than quietly dropping them, so this gates what the studio offers as well
   /// as what it sends — a control that collects conditioning the engine will
   /// reject is worse than one that is not there.
+  /// LTX on the video lane. Almost nothing in H3's settings column applies to
+  /// it: no retained DiT blocks, no core reuse, no block cache, no denoising
+  /// preview, no beta schedule, and a canvas it chooses rather than inherits.
+  /// Showing those controls is not merely untidy — every one of them is a
+  /// promise the engine will not keep.
+  private var isLTX: Bool { kind == .video && model.videoEngine == .ltx }
+
   private var promptOnlyModel: Bool {
     (kind == .image && model.imageEngine == .zImage)
       || (kind == .video && model.videoEngine == .ltx)
@@ -783,6 +790,71 @@ struct GenerationStudioView: View {
   /// with an aspect ratio and this model renders a square. Each tier carries
   /// what it costs: the top of this list is a quarter of an hour, which is
   /// worth knowing before choosing it rather than after.
+  /// LTX chooses its own square, and that choice is the biggest lever on what a
+  /// clip costs: the DiT is linear in tokens, and tokens are the latent cells
+  /// times the latent frames. So each rung carries its estimate, the way the
+  /// still tiers do — the price of a choice belongs beside it, not ten minutes
+  /// later.
+  private var ltxResolutionControls: some View {
+    labeled("RESOLUTION") {
+      Menu {
+        ForEach(LTXCanvas.allCases) { canvas in
+          Button("\(canvas.label)  ·  ~\(minutesLabel(ltxMinutes(canvas)))") {
+            model.updateStudioKnobs { $0.ltxCanvas = canvas }
+          }
+        }
+      } label: {
+        HStack {
+          Text(knobs.ltxCanvas.label)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+          Spacer()
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 36)
+        .background(H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      }
+      .menuStyle(.borderlessButton)
+      .accessibilityIdentifier("generation-ltx-resolution")
+      Text("\(ltxFrames) frames at 24 fps · about "
+        + "\(minutesLabel(ltxMinutes(knobs.ltxCanvas))) for this length")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// The frame count this duration actually renders: 8k+1 and nothing between.
+  private var ltxFrames: Int {
+    EngineVideoOptions.frames(forSeconds: requestedDuration)
+  }
+
+  /// Roughly what a clip costs on an M1 Pro. Fitted to three measured runs
+  /// rather than guessed — 65 frames at 512², 97 at 384², 17 at 384² — and it
+  /// lands within 0.2% of all three.
+  ///
+  /// Two terms, because only two are separable from that data: a fixed cost
+  /// (the Gemma tower, the connector, both decoders) and a cost linear in
+  /// token-steps. The DiT is linear in rows with no intercept, which is what
+  /// makes the second term a straight line rather than a curve.
+  ///
+  /// A per-pixel decode term was tried and dropped: fitting three unknowns to
+  /// three points reproduced them exactly and handed back a *negative* cost per
+  /// pixel, which is the fit absorbing noise rather than measuring anything.
+  /// Two parameters over three points is the honest version.
+  private func ltxMinutes(_ canvas: LTXCanvas) -> Double {
+    let latentFrames = (ltxFrames - 1) / 8 + 1
+    let tokenSteps = Double(latentFrames * canvas.cellsPerFrame * knobs.denoisingSteps)
+    return (40.3 + 0.0195 * tokenSteps) / 60
+  }
+
   private var imageResolutionControls: some View {
     labeled("RESOLUTION") {
       Menu {
@@ -978,7 +1050,9 @@ struct GenerationStudioView: View {
         .accessibilityIdentifier("generation-presets")
       }
 
-      if kind != .audio {
+      if isLTX {
+        ltxResolutionControls
+      } else if kind != .audio {
         // H3 draws on one canvas. This used to be a menu of short edges from
         // 352 to 1088, none of which the model would honour and one of which
         // (1920x1088) was nearly twice its ceiling. The aspect ratio decides
@@ -1011,6 +1085,34 @@ struct GenerationStudioView: View {
         }
       }
 
+      if isLTX {
+        labeled("STEPS") {
+          HStack {
+            Slider(
+              value: Binding(
+                get: { Double(knobs.denoisingSteps) },
+                set: { steps in
+                  model.updateStudioKnobs { $0.denoisingSteps = Int(steps) }
+                }
+              ),
+              in: 1...16,
+              step: 1
+            )
+            .tint(H3Color.accent)
+            .accessibilityIdentifier("generation-ltx-steps")
+            Text("\(knobs.denoisingSteps)")
+              .font(.system(size: 11, weight: .medium, design: .monospaced))
+              .foregroundStyle(H3Color.textSecondary)
+              .frame(width: 28, alignment: .trailing)
+          }
+          Text("This checkpoint is step-distilled and was released at eight. "
+            + "Fewer trades detail for time; more buys very little.")
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        seedControls
+      } else {
       labeled("DENOISING PASSES") {
         HStack {
           Slider(
@@ -1106,6 +1208,7 @@ struct GenerationStudioView: View {
       }
 
       seedControls
+      }
     }
   }
 
@@ -1278,10 +1381,15 @@ struct GenerationStudioView: View {
     // down to 352, which is off-canvas for this model and is where it stops
     // following the prompt. Passes and blocks still vary by tier; the canvas
     // does not.
+    // Each prompt-only model has its own square; they are not the same knob,
+    // and using the still tier for a clip is how 768 got picked for a picture
+    // and silently charged to every video.
     let size: (width: Int, height: Int) =
-      promptOnlyModel
-      ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
-      : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction))
+      isLTX
+      ? (knobs.ltxCanvas.side, knobs.ltxCanvas.side)
+      : (promptOnlyModel
+        ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
+        : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction)))
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
@@ -1411,7 +1519,10 @@ struct GenerationStudioView: View {
   /// has never been trained to produce.
   private var supportedLength: SupportedLength {
     switch kind {
-    case .video: .h3Video
+    // Which model is chosen decides this, not which tab: LTX's grid is 8k+1
+    // frames from 17, where H3's is 17k+5 from 124. Offering one model the
+    // other's range is offering lengths it cannot draw.
+    case .video: model.videoEngine == .ltx ? .ltxVideo : .h3Video
     case .image: .still
     case .audio:
       switch model.audioMode {
@@ -1430,7 +1541,7 @@ struct GenerationStudioView: View {
   }
 
   private var usesAlignedH3Duration: Bool {
-    kind == .video && model.nativeVideoGenerationIsReady
+    kind == .video && model.videoEngine == .h3 && model.nativeVideoGenerationIsReady
   }
 
   private var requestedDuration: Double {

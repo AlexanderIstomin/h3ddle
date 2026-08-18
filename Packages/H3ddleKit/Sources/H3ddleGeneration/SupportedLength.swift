@@ -62,6 +62,25 @@ public struct SupportedLength: Equatable, Sendable {
     stepSeconds: Double(H3Duration.chunk) / H3Duration.fps
   )
 
+  /// LTX-2.5's clip lengths. Nothing like H3's, in either direction.
+  ///
+  /// The video VAE compresses 8x in time and cannot produce the seven leading
+  /// frames, so a clip is 8k+1 frames and nothing between — a third of a second
+  /// apart at 24 fps. The floor is 17 frames because that is the shortest thing
+  /// the decoder makes; H3's floor of 124 would put the cheapest LTX clip at
+  /// eight minutes and make the two-second clips this port was validated on
+  /// unrequestable.
+  ///
+  /// The ceiling is this app's, not the model's. Cost is linear in tokens and
+  /// tokens are linear in length, so 193 frames at 512 square is already about
+  /// thirteen minutes of denoising on an M1 Pro. Longer works and is simply not
+  /// worth offering by default.
+  public static let ltxVideo = SupportedLength(
+    minimumSeconds: 17.0 / 24.0,
+    maximumSeconds: 193.0 / 24.0,
+    stepSeconds: 8.0 / 24.0
+  )
+
   /// Both small Stable Audio 3 checkpoints, music and sound effects, take one
   /// second to a hundred and twenty in whole seconds. That is the range the
   /// model ships with rather than one this app chose: the released pipeline

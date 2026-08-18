@@ -1,11 +1,37 @@
 import Testing
 
+import H3ddleEngineProtocol
+
 @testable import H3ddleGeneration
 
 @Suite("Supported length")
 struct SupportedLengthTests {
   /// The numbers the released pipeline documents as trained, expressed as
   /// seconds so a control can offer them directly.
+  /// LTX's grid is 8k+1 frames, a third of a second apart at 24 fps, from 17
+  /// frames up. H3's floor of 124 would have made the two-second clips this
+  /// port was validated on unrequestable, and its 17k+5 grid offers lengths
+  /// LTX's decoder cannot produce at all.
+  @Test("LTX offers only lengths its decoder can produce")
+  func ltxVideoGrid() {
+    let length = SupportedLength.ltxVideo
+    #expect(abs(length.minimumSeconds - 17.0 / 24.0) < 1e-9)
+    #expect(abs(length.maximumSeconds - 193.0 / 24.0) < 1e-9)
+    for seconds in length.options {
+      let frames = Int((seconds * 24).rounded())
+      #expect((frames - 1) % 8 == 0)
+      #expect(frames >= 17)
+      #expect(frames <= 193)
+    }
+    // And the engine's own rounding agrees with every offered length, so what
+    // the studio shows is what the decoder makes.
+    for seconds in length.options {
+      #expect(
+        EngineVideoOptions.frames(forSeconds: seconds)
+          == Int((seconds * 24).rounded()))
+    }
+  }
+
   @Test("H3's video lane offers exactly the lengths on its frame grid")
   func h3VideoGrid() {
     let length = SupportedLength.h3Video

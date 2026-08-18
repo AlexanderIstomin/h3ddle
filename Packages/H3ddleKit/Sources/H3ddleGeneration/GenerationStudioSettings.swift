@@ -197,6 +197,10 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   /// are different shapes, and switching model should not forget which
   /// resolution the other one was set to.
   public var imageCanvas: ImageCanvas
+  /// Which square LTX renders. Separate from `imageCanvas` because a lane
+  /// keeps its own choice: picking 768 for a still should not quietly make
+  /// every clip four times more expensive.
+  public var ltxCanvas: LTXCanvas
   public var denoisingSteps: Int
   public var activeDiTLayers: Int
   public var coreReuse: Int
@@ -211,6 +215,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   public init(
     canvas: GenerationCanvas,
     imageCanvas: ImageCanvas = .s1024,
+    ltxCanvas: LTXCanvas = .s512,
     denoisingSteps: Int,
     activeDiTLayers: Int,
     coreReuse: Int,
@@ -219,6 +224,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   ) {
     self.canvas = canvas
     self.imageCanvas = imageCanvas
+    self.ltxCanvas = ltxCanvas
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
@@ -229,6 +235,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case canvas
     case imageCanvas
+    case ltxCanvas
     case denoisingSteps
     case activeDiTLayers
     case coreReuse
@@ -243,6 +250,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     // the tier its own card quotes a time for.
     imageCanvas =
       try container.decodeIfPresent(ImageCanvas.self, forKey: .imageCanvas) ?? .s1024
+    ltxCanvas = try container.decodeIfPresent(LTXCanvas.self, forKey: .ltxCanvas) ?? .s512
     denoisingSteps = try container.decode(Int.self, forKey: .denoisingSteps)
     activeDiTLayers = try container.decode(Int.self, forKey: .activeDiTLayers)
     coreReuse = try container.decode(Int.self, forKey: .coreReuse)
@@ -268,6 +276,41 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     case .custom:
       .preset(.preview)
     }
+  }
+}
+
+/// LTX-2.5's square canvases.
+///
+/// Unlike H3, whose canvas is fixed by the model, this one renders any
+/// multiple of 32 — the video VAE's spatial factor. These are the useful
+/// rungs of that ladder rather than the whole of it: below 384 the picture
+/// stops holding together, and above 768 a clip costs more than anyone will
+/// wait on an M-series laptop.
+public enum LTXCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
+  case s384
+  case s512
+  case s640
+  case s768
+
+  public var id: String { rawValue }
+
+  public var side: Int {
+    switch self {
+    case .s384: 384
+    case .s512: 512
+    case .s640: 640
+    case .s768: 768
+    }
+  }
+
+  public var label: String { "\(side) × \(side)" }
+
+  /// Latent cells in one frame. The DiT's cost is linear in the token count
+  /// and the token count is this times the latent frames — measured, not
+  /// assumed: 29 s a step at 1872 tokens against 36 s at 2304.
+  public var cellsPerFrame: Int {
+    let cells = side / 32
+    return cells * cells
   }
 }
 
