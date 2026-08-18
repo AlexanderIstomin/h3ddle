@@ -4,7 +4,11 @@ import Testing
 
 @testable import H3ddleModels
 
-@Suite("Managed model packages")
+/// Serialized because two of these set `HF_HUB_CACHE`, which is process-global,
+/// and Swift Testing runs tests in parallel by default. One test's `unsetenv`
+/// clearing another's cache mid-run is exactly how this suite first failed —
+/// intermittently, and only once both cache tests existed.
+@Suite("Managed model packages", .serialized)
 struct ModelPackageDownloaderTests {
   @Test("The curated INT8 package is immutable and selective")
   func curatedManifest() throws {
