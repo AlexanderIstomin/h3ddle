@@ -248,7 +248,7 @@ struct GenerationStudioView: View {
       // prompt and nothing else — and the engine *refuses* a request carrying
       // pictures rather than dropping them, so offering these would collect
       // conditioning that turns the generation into an error.
-      if kind != .audio, !promptOnlyModel {
+      if acceptsConditioning {
         frameAnchorSection
         referenceSection
         if let note = conditioningNote {
@@ -580,6 +580,16 @@ struct GenerationStudioView: View {
   private var promptOnlyModel: Bool {
     (kind == .image && model.imageEngine == .zImage)
       || (kind == .video && model.videoEngine == .ltx)
+  }
+
+  /// Whether this lane can be given pictures to condition on. Separate from
+  /// `promptOnlyModel`, which is about the canvas and the aspect ratio: LTX
+  /// renders a square it chooses *and* takes start and end frames, so the two
+  /// questions have different answers and conflating them is what hid this.
+  private var acceptsConditioning: Bool {
+    if kind == .audio { return false }
+    if kind == .image { return model.imageEngine == .h3 }
+    return model.videoEngine.acceptsReferenceInputs
   }
 
   private var conditioningNote: String? {

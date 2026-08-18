@@ -58,10 +58,15 @@ public enum VideoGenerationEngine: String, Codable, Sendable {
   /// Whether this engine loads a package of its own rather than the H3 tree.
   public var usesOwnPackage: Bool { self != .h3 }
 
-  /// Whether a clip from this engine can be conditioned on pictures. LTX takes
-  /// the prompt alone, and the engine refuses a request carrying references
-  /// rather than dropping them silently.
-  public var acceptsReferenceInputs: Bool { self == .h3 }
+  /// Whether a clip from this engine can be conditioned on pictures. Both can
+  /// now, by different means: H3 reads them as keyframes and Ref2VA stills,
+  /// LTX encodes them and appends their tokens to the DiT's own sequence.
+  public var acceptsReferenceInputs: Bool { true }
+
+  /// How many pictures this engine takes in total. LTX's ceiling is a cost
+  /// rather than a capability: each one is a full VAE encode and a permanent
+  /// addition to the sequence every block of every step reads.
+  public var conditioningLimit: Int { self == .ltx ? 4 : 9 }
 }
 
 public struct GenerationRequest: Hashable, Codable, Sendable {

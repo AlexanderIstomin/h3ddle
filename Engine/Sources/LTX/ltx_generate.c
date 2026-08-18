@@ -32,6 +32,8 @@
 #include "ltx_text.h"
 #include "ltx_video.h"
 
+#include "h3_avreader.h"
+#include "h3_ffmpeg.h"
 #include "h3_gpu.h"
 #include "h3_safetensors.h"
 #include "h3_tokenizer.h"
@@ -207,6 +209,52 @@ static int tokenize(const h3_weight_store *encoder, const char *prompt,
  *
  * The span still exists; it is just the connector's job. See below. */
 
+/* Read each conditioning picture and encode it into the DiT's latent space.
+ *
+ * The video VAE is opened for this and released again before the tower loads,
+ * which keeps the 37 GB rule intact: at no point are the encoder, the tower and
+ * the DiT all resident. It costs a second open of a 1.4 GB file, against
+ * holding it across the whole run.
+ *
+ * `h3_avreader_read_image_f32` hands back [0, 1] and the VAE works in [-1, 1],
+ * which is the same halve-centre convention the decoder inverts on the way
+ * out. */
+static int encode_conditioning(const ltx_request *request, h3_gpu *gpu,
+                               uint32_t side, float *latents,
+                               ltx_dit_condition *items,
+                               char *error, size_t error_size) {
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/" VIDEO_VAE_PATH, request->package);
+    h3_weight_store *vae = h3_weight_store_open(path, error, error_size);
+    if (!vae) return 0;
+    const uint32_t pixels = side * SPATIAL;
+    const size_t cells = (size_t)side * side;
+    int ok = 1;
+    size_t at = 0;
+    for (int index = 0; index < request->conditioning_count && ok; index++) {
+        const ltx_conditioning *item = &request->conditioning[index];
+        float *rgb = NULL;
+        ok = h3_avreader_read_image_f32(item->path, (int)pixels, (int)pixels,
+                                        H3_IMAGE_FIT_COVER, &rgb, error,
+                                        error_size);
+        if (!ok) break;
+        const size_t count = (size_t)LTX_VIDEO_CHANNELS * pixels * pixels;
+        for (size_t value = 0; value < count; value++)
+            rgb[value] = rgb[value] * 2.0f - 1.0f;
+        ok = ltx_video_encode(gpu, vae, rgb, 1, pixels, pixels,
+                              latents + at * LTX_DIT_LATENT, error, error_size);
+        free(rgb);
+        if (!ok) break;
+        items[index].latent = latents + at * LTX_DIT_LATENT;
+        items[index].frames = 1;
+        items[index].frame_index = item->frame_index;
+        items[index].strength = item->strength > 0.0f ? item->strength : 1.0f;
+        at += cells;
+    }
+    h3_weight_store_free(vae);
+    return ok;
+}
+
 /* ------------------------------------------------------------------- entry */
 
 int ltx_generate(const ltx_request *request, float *video, float *audio,
@@ -254,6 +302,27 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
 
     /* The tower's store is opened once and used for both: the tokenizer rides
      * inside it. */
+    /* Before the tower, so the encoder's 1.4 GB is gone by the time 15 GB of
+     * Gemma arrives. */
+    float *conditioning_latents = NULL;
+    ltx_dit_condition conditions[LTX_MAX_CONDITIONING];
+    memset(conditions, 0, sizeof(conditions));
+    const int conditioning_count =
+        request->conditioning_count < LTX_MAX_CONDITIONING
+            ? request->conditioning_count : LTX_MAX_CONDITIONING;
+    if (ok && conditioning_count > 0) {
+        conditioning_latents =
+            malloc((size_t)conditioning_count * side * side * LTX_DIT_LATENT *
+                   sizeof(*conditioning_latents));
+        if (!conditioning_latents)
+            ok = fail(error, error_size, "cannot allocate the conditioning "
+                                         "latents");
+        if (ok) ok = announce(&report, "reference frames");
+        if (ok)
+            ok = encode_conditioning(request, gpu, side, conditioning_latents,
+                                     conditions, error, error_size);
+    }
+
     uint32_t tokens = 0;
     if (ok) {
         snprintf(path, sizeof(path), "%s/" ENCODER_PATH, request->package);
@@ -306,6 +375,8 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
             denoise.fps = fps;
             denoise.steps = steps;
             denoise.seed = request->seed;
+            denoise.conditions = conditioning_count ? conditions : NULL;
+            denoise.condition_count = (uint32_t)conditioning_count;
             ok = ltx_dit_sample(gpu, dit, &denoise, video_context,
                                 audio_context, SPAN, video_latent,
                                 audio_latent, denoise_tick, &report, error,
@@ -340,6 +411,7 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
     }
 
     free(video_latent); free(audio_latent);
+    free(conditioning_latents);
     h3_gpu_free(gpu);
     return ok;
 }

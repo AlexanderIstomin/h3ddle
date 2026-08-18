@@ -23,6 +23,7 @@
  *       -licucore -lm
  *
  * usage: ltx_clip_check PACKAGE "a prompt" OUT [PIXELS] [FRAMES] [STEPS] [SEED]
+ *                      [FIRST.png] [LAST.png]
  *
  * writes OUT.frames.bin and OUT.wav. */
 #include "ltx_generate.h"
@@ -109,9 +110,10 @@ static int write_wav(const char *path, const float *samples, uint32_t frames) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 4 || argc > 8) {
+    if (argc < 4 || argc > 10) {
         fprintf(stderr, "usage: %s PACKAGE \"a prompt\" OUT "
-                        "[PIXELS] [FRAMES] [STEPS] [SEED]\n", argv[0]);
+                        "[PIXELS] [FRAMES] [STEPS] [SEED] [FIRST] [LAST]\n",
+                argv[0]);
         return 2;
     }
     ltx_request request = {0};
@@ -122,6 +124,26 @@ int main(int argc, char **argv) {
     request.frames = argc > 5 ? atoi(argv[5]) : 65;
     request.steps = argc > 6 ? atoi(argv[6]) : 0;
     request.seed = argc > 7 ? strtoull(argv[7], NULL, 10) : 16;
+
+    /* Start and end frames, which is the pair the studio offers. The end one
+     * is pinned to the last pixel frame rather than to the clip's duration,
+     * because the two differ whenever a duration rounds. */
+    ltx_conditioning conditioning[2];
+    int conditioning_count = 0;
+    if (argc > 8) {
+        conditioning[conditioning_count].path = argv[8];
+        conditioning[conditioning_count].frame_index = 0;
+        conditioning[conditioning_count].strength = 1.0f;
+        conditioning_count++;
+    }
+    if (argc > 9) {
+        conditioning[conditioning_count].path = argv[9];
+        conditioning[conditioning_count].frame_index = request.frames - 1;
+        conditioning[conditioning_count].strength = 1.0f;
+        conditioning_count++;
+    }
+    request.conditioning = conditioning_count ? conditioning : NULL;
+    request.conditioning_count = conditioning_count;
 
     char error[512];
     ltx_shape shape;

@@ -84,9 +84,17 @@ typedef int (*h3ddle_ltx_step)(const char *phase, int completed, int total,
                                void *opaque);
 int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
                     char *error, size_t error_size);
+/* `first_frame` and `last_frame` may be NULL; `references` is an array of
+ * `reference_count` paths placed evenly through the clip. Each is encoded by
+ * the video VAE and joins the DiT's sequence, so the rendered frame resembles
+ * the picture rather than being it — which is what carries motion through it.
+ * At most `H3DDLE_LTX_MAX_CONDITIONING` in total. */
+#define H3DDLE_LTX_MAX_CONDITIONING 4
 int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
                         const char *prompt, int pixels, int frames, int fps,
                         int steps, unsigned long long seed,
+                        const char *first_frame, const char *last_frame,
+                        const char *const *references, int reference_count,
                         const char *output_path, h3ddle_ltx_step on_step,
                         void *opaque, char *error, size_t error_size);
 

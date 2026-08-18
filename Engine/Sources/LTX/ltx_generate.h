@@ -20,6 +20,26 @@
  * video rope's time axis and, through that, the audio length. */
 #define LTX_DEFAULT_FPS 24
 
+/* A picture the clip is conditioned on.
+ *
+ * The frame index is in **pixel** frames: 0 opens the clip, `frames - 1` ends
+ * it, and anything between pins a moment in the middle. Strength 1 holds the
+ * picture exactly.
+ *
+ * These are appended to the DiT's sequence rather than pasted into the output,
+ * so the rendered frame at that index resembles the picture rather than being
+ * it — which is what lets the model carry motion through it. */
+typedef struct {
+    const char *path;       /* any image ImageIO reads */
+    int frame_index;
+    float strength;         /* 0 takes 1.0 */
+} ltx_conditioning;
+
+/* Conditioning pictures are square like the clip, and there are not many:
+ * every one is a full VAE encode and a permanent addition to the sequence
+ * every block of every step reads. */
+#define LTX_MAX_CONDITIONING 4
+
 typedef struct {
     /* The model snapshot: diffusion_models/, text_encoders/, vae/. */
     const char *package;
@@ -35,6 +55,9 @@ typedef struct {
     int fps;                /* 0 takes LTX_DEFAULT_FPS */
     int steps;              /* 0 takes LTX_DEFAULT_STEPS */
     uint64_t seed;
+    /* Optional; up to LTX_MAX_CONDITIONING. */
+    const ltx_conditioning *conditioning;
+    int conditioning_count;
 } ltx_request;
 
 /* What a request will produce, so a caller can allocate — and refuse — before

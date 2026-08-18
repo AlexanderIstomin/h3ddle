@@ -555,6 +555,27 @@ private func zimageStepCallback(
 /// step number arrives forty-eight times, and reporting it as a fraction would
 /// make the bar stutter backwards. The step counter goes in the phase name and
 /// the fraction stays whole, exactly as above.
+/// Borrow an array of Swift strings as a C array of C strings for the duration
+/// of a call. `withCString` nests one at a time and the engine wants them all
+/// at once, so this walks the list recursively rather than nesting by hand.
+private func withCStrings<Result>(
+  _ strings: [String],
+  _ body: (UnsafeBufferPointer<UnsafePointer<CChar>?>) -> Result
+) -> Result {
+  var pointers: [UnsafePointer<CChar>?] = []
+  pointers.reserveCapacity(strings.count)
+  func step(_ index: Int) -> Result {
+    if index == strings.count {
+      return pointers.withUnsafeBufferPointer(body)
+    }
+    return strings[index].withCString { pointer in
+      pointers.append(pointer)
+      return step(index + 1)
+    }
+  }
+  return step(0)
+}
+
 private func ltxStepCallback(
   _ phase: UnsafePointer<CChar>?,
   _ completed: Int32,
@@ -686,16 +707,19 @@ private final class EngineRuntime: @unchecked Sendable {
           EngineOutput.fail(command, message: String(cString: reason))
           return
         }
-        /* Refused rather than dropped, for the reason Z-Image's are: a clip
-         * that silently ignored the keyframes it was handed looks like a bad
-         * model rather than a rejected request. */
-        guard request.firstFrameURL == nil, request.lastFrameURL == nil,
-          request.referenceImageURLs.isEmpty
-        else {
+        /* Conditioning pictures are now encoded and appended to the DiT's
+         * sequence, so they are accepted — but there is a ceiling, because
+         * every one is a permanent addition every block of every step reads. */
+        let conditioning =
+          (request.firstFrameURL == nil ? 0 : 1)
+          + (request.lastFrameURL == nil ? 0 : 1)
+          + request.referenceImageURLs.count
+        guard conditioning <= Int(H3DDLE_LTX_MAX_CONDITIONING) else {
           EngineOutput.fail(
             command,
-            message: "LTX renders from the prompt alone; it cannot take "
-              + "start or end frames or reference images")
+            message: "LTX takes at most \(H3DDLE_LTX_MAX_CONDITIONING) "
+              + "conditioning pictures, including start and end frames; "
+              + "\(conditioning) were given")
           return
         }
       } else {
@@ -891,25 +915,42 @@ private final class EngineRuntime: @unchecked Sendable {
     let frames = EngineVideoOptions.frames(forSeconds: request.duration)
     var error = [CChar](repeating: 0, count: 512)
     let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    /* The conditioning pictures, as C strings that outlive the call. Anchors
+     * are named separately from references because they mean different things
+     * to the model: an anchor pins an end of the clip, a reference is spread
+     * through the middle. */
+    let firstPath = request.firstFrameURL?.path ?? ""
+    let lastPath = request.lastFrameURL?.path ?? ""
+    let referencePaths = request.referenceImageURLs.map(\.path)
     let wrote = packageDirectory.path.withCString { packagePath in
       request.prompt.withCString { prompt in
         "h3_shaders.metal".withCString { shaders in
           request.outputURL.path.withCString { output in
-            h3ddle_ltx_generate(
-              packagePath,
-              shaders,
-              prompt,
-              Int32(pixels),
-              Int32(frames),
-              Int32(EngineVideoOptions.fps),
-              Int32(options.steps ?? 0),
-              request.seed ?? 42,
-              output,
-              ltxStepCallback,
-              opaque,
-              &error,
-              error.count
-            )
+            firstPath.withCString { first in
+              lastPath.withCString { last in
+                withCStrings(referencePaths) { references in
+                  h3ddle_ltx_generate(
+                    packagePath,
+                    shaders,
+                    prompt,
+                    Int32(pixels),
+                    Int32(frames),
+                    Int32(EngineVideoOptions.fps),
+                    Int32(options.steps ?? 0),
+                    request.seed ?? 42,
+                    firstPath.isEmpty ? nil : first,
+                    lastPath.isEmpty ? nil : last,
+                    references.baseAddress,
+                    Int32(referencePaths.count),
+                    output,
+                    ltxStepCallback,
+                    opaque,
+                    &error,
+                    error.count
+                  )
+                }
+              }
+            }
           }
         }
       }

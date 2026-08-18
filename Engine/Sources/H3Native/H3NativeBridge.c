@@ -587,11 +587,39 @@ int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
 int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
                         const char *prompt, int pixels, int frames, int fps,
                         int steps, unsigned long long seed,
+                        const char *first_frame, const char *last_frame,
+                        const char *const *references, int reference_count,
                         const char *output_path, h3ddle_ltx_step on_step,
                         void *opaque, char *error, size_t error_size) {
     if (!output_path) {
         snprintf(error, error_size, "somewhere to put the clip is required");
         return 0;
+    }
+    /* Anchors first and at the ends, then references spread through what is
+     * left. The last frame is pinned to `frames - 1` rather than to a
+     * duration, because a rounded duration and the rendered length differ. */
+    ltx_conditioning conditioning[LTX_MAX_CONDITIONING];
+    int conditioning_count = 0;
+    if (first_frame && *first_frame) {
+        conditioning[conditioning_count].path = first_frame;
+        conditioning[conditioning_count].frame_index = 0;
+        conditioning[conditioning_count].strength = 1.0f;
+        conditioning_count++;
+    }
+    if (last_frame && *last_frame && conditioning_count < LTX_MAX_CONDITIONING) {
+        conditioning[conditioning_count].path = last_frame;
+        conditioning[conditioning_count].frame_index = frames - 1;
+        conditioning[conditioning_count].strength = 1.0f;
+        conditioning_count++;
+    }
+    for (int index = 0; index < reference_count &&
+                        conditioning_count < LTX_MAX_CONDITIONING; index++) {
+        if (!references || !references[index] || !*references[index]) continue;
+        conditioning[conditioning_count].path = references[index];
+        conditioning[conditioning_count].frame_index =
+            (int)((long)(index + 1) * frames / (reference_count + 1));
+        conditioning[conditioning_count].strength = 1.0f;
+        conditioning_count++;
     }
     ltx_request request = {0};
     request.package = package_directory;
@@ -602,6 +630,8 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
     request.fps = fps;
     request.steps = steps;
     request.seed = seed;
+    request.conditioning = conditioning_count ? conditioning : NULL;
+    request.conditioning_count = conditioning_count;
     ltx_shape shape;
     if (!ltx_plan(&request, &shape, error, error_size)) return 0;
 

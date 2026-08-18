@@ -38,9 +38,13 @@ enum DockAttention {
     let tile = NSApp.dockTile
     if tile.contentView != nil {
       tile.contentView = nil
-      tile.display()
     }
     tile.badgeLabel = "\(percent)%"
+    // `badgeLabel` changes the tile's state, but the Dock is not required to
+    // repaint that state until asked. Redraw after both the custom view and
+    // label have reached their final values so the percentage appears on the
+    // first update as well as after a finished-marker view.
+    tile.display()
     hasWritten = true
     log.notice("Dock badge -> \(percent, privacy: .public)%")
   }
@@ -85,8 +89,8 @@ enum DockAttention {
       // back to the application icon on its own.
       if tile.contentView != nil {
         tile.contentView = nil
-        tile.display()
       }
+      tile.display()
       log.notice("Dock tile released back to the system")
       return
     }
