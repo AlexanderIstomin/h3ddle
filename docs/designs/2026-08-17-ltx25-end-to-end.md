@@ -110,3 +110,71 @@ arbitrary caption, and producing one would need the 12B model at F32.
 The two-phase split between the tower and the connector is not scaffolding: the
 connector's weights live in the DiT file while the tower's live in the text
 encoder, and holding both open at once costs 37 GB.
+
+## The per-step reload, and what H3 already does about it
+
+The 54–76 s of per-step weight loading is not a new problem and should not get
+a new solution. `h3_dit.c` already answers it twice for H3, and the LTX driver
+built here does neither.
+
+**Residency** — load all 48 blocks once and keep them. `h3_video_vae.c` shows
+the shape the engine settled on: measure what residency would cost from the
+checkpoint, compare against `hw.memsize` with a headroom allowance, take it
+only if there is room left over, and let an env var force either way.
+
+**That one does not apply to LTX on this machine.** The DiT is 21.5 GB at int8
+against 32 GiB of RAM. Under the same 8 GiB headroom rule it fits only on
+paper; in practice the activations, the OS and the rest of the engine would put
+it into paging, which costs more than the reread it saves.
+
+**SSD streaming with double-buffered prefetch** — which is exactly why H3 has
+it. Two preallocated slots, and before block *N* runs, a `pthread` fills slot
+`N+1`:
+
+```c
+stream_job = (h3_dit_stream_job){ .dit = dit, .layer = future,
+                                  .slot = dit->stream_ready_slot ^ 1u };
+pthread_create(&stream_thread, NULL, read_stream_layer_thread, &stream_job);
+run_block(...);                     /* GPU works while the CPU reads      */
+h3_gpu_submit(dit->gpu);
+pthread_join(stream_thread, NULL);  /* and the wait is what gets measured */
+```
+
+Three details worth copying rather than rediscovering:
+
+- **the slots are preallocated**, so the worker only fills tensors and never
+  allocates. On unified memory that fill is a memcpy into a buffer the GPU can
+  already see;
+- **it wraps around**: `future = first_active_block(dit)` at the end of the
+  stack, so the *next step's* first block loads during the current step's last.
+  The per-step boundary is not a stall;
+- **the sources are sorted by path then file offset**, so a block's reads walk
+  the checkpoint forwards instead of seeking.
+
+It also accounts for itself — `stream_wait_seconds` separates time actually
+lost from time successfully hidden, which is the number that says whether
+prefetch is working.
+
+### What that is worth here
+
+At 128 video tokens the driver spends 198 s in blocks and 54 s loading, so
+perfect overlap saves at most 20–28%. At 768 tokens a step is 160 s while the
+load stays fixed, so the same absolute saving is a smaller share. **Prefetch
+matters most at small resolutions and short clips**, which is the opposite of
+where the total time is worst — worth having, but not the thing that decides
+whether the lane ships.
+
+The LTX blocks are all identically shaped, so the two-slot scheme applies
+directly with no per-block size negotiation.
+
+## Cost at two sizes, measured
+
+| | tokens | per step | 8 steps |
+|---|---|---|---|
+| 256×256, 9 frames | 128 | ~33 s | 265 s |
+| 512×512, 17 frames | 768 | ~160 s | ~21 min |
+
+Six times the tokens for about five times the time — close to linear, which
+says attention is not yet dominating at this size. The sampler's shift is
+token-dependent, so the two runs get genuinely different schedules; that is the
+scheduler working, not a discrepancy.
