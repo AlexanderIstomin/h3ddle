@@ -43,7 +43,13 @@ typedef struct {
     uint64_t seed;
 } ltx_dit_request;
 
-/* Returning zero abandons the run. `step` counts denoise steps. */
+/* Returning zero abandons the run. `step` counts *completed* denoise steps, so
+ * it runs 0..steps and never goes backwards.
+ *
+ * Asked between blocks rather than between steps: a step is 48 blocks and the
+ * better part of a minute at 512 square, and a cancel that takes that long to
+ * land reads as a hang. A caller that only wants to draw a bar should ignore
+ * the repeats. */
 typedef int (*ltx_dit_tick)(int step, int steps, void *context);
 
 /* `video_context` is `[span][4096]` and `audio_context` `[span][2048]`, as
