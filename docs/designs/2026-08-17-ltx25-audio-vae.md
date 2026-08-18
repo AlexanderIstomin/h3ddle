@@ -224,9 +224,48 @@ Names: `vocoder.vocoder.{conv_pre,ups.N,act_post,conv_post}` and
 `resblocks.G.{convs1,convs2}.P` with `G = stage * 3 + block`, plus
 `resblocks.G.{acts1,acts2}.P.act.{alpha,beta}`. `conv_post` has **no bias**.
 
+### It runs
+
+`tests/test_real_ltx_vocoder.c`: seventeen stages inside the measured floor,
+16 of 16 mutations caught, 2.3 s for 0.29 s of audio. It needed no new kernel
+and no new Metal.
+
+Two things about the checking are worth carrying to the extender.
+
+**The tolerance is per stage, because the floor is not flat.** The audio VAE's
+F32-vs-F64 spread sits at 1e-06 the whole way down and one bound covers it.
+This one climbs by a factor of thirty -- 1.2e-06 at `conv_pre` to 3.8e-05 at
+`voc_up5` -- because six upsamples turn 29 frames into 4640 samples and the
+arithmetic per output grows with them. A flat bound would have been too loose
+early or too tight late. The engine does not merely sit under the ceiling; it
+tracks the floor stage for stage, 1.05e-06 against 1.17e-06 at the top and
+2.36e-05 against 2.61e-05 at the bottom.
+
+**The clamp is asserted, not measured.** `use_tanh_at_final` is false and
+`apply_final_activation` is left at its default, so `forward` ends in
+`clamp(-1, 1)`; only the extender sets it False. This sample peaks at 0.23, so
+the clamp never bites and the fixture agrees with a port that omits it
+entirely. The generator prints the headroom, the runner prints how many samples
+it clipped, and the mutation that removes it is listed as an **expected
+survivor with its reason** rather than quietly left out.
+
+A third, smaller: the 109 resampling filter pairs are checked in C, not just
+once in Python. H3 shares a single pair across every activation and this
+checkpoint could have differed; loading one and verifying 109 costs nothing and
+turns an inherited assumption into a checked one.
+
+### And it makes the right sound
+
+The fixture mel comes from `structured_audio` -- 220 Hz and 440 Hz on the left,
+330 Hz and a sweep on the right. After a mel encode, a VAE round trip and six
+upsamples, the waveform peaks at 220 and 448 Hz on the left and 328--331 Hz on
+the right, with the left channel the louder one, as its source is. Tensor
+agreement says the arithmetic is right; this says the pipeline is pointed the
+right way, which is the failure the video half actually had.
+
 ### Not done
 
-The C runner, and the bandwidth extender — a second BigVGAN taking the 16 kHz
+The bandwidth extender — a second BigVGAN taking the 16 kHz
 waveform back through an STFT and mel (the stored `mel_stft`, n_fft 512, hop
 80) and out at 48 kHz. The main vocoder is what makes sound; the extender is
 quality on top.
