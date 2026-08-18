@@ -23,29 +23,46 @@ new Metal**, which is most of why it was worth porting.
 | `ltx_video.c` | video VAE decoder: latent → frames, 8× in time and 32× in space |
 | `ltx_connector.c` | the tower's features → DiT context, 8 blocks per stream |
 | `ltx_text.c` | Gemma 4 12B int8, 48 layers, and the feature aggregation |
+| `ltx_dit.c` | the dual-stream DiT and its sampler, 48 blocks, both latents |
+| `ltx_generate.c` | prompt to clip: the five stages, in the order memory allows |
 
-One stage left: the **DiT sampler**, still a standalone driver at
-`Vendor/h3.c/tests/ltx_generate.c`. It is also where `ltx_generate()` will
-live, since the load-run-free sequencing the memory constraint forces is its
-problem to own.
+All five stages are here. `Vendor/h3.c/tests/ltx_generate.c` remains as the
+driver — it keeps the reference comparisons, and it is where a disagreement is
+reproduced.
+
+The DiT was the one stage that is not a pure lift. The driver takes its
+geometry from `-D` flags, because they sized the block helpers and one stack
+array, and the service cannot ship a binary per clip length. So the shape
+moved into a `run` struct and is threaded. That turned up a latent bug on the
+way: the driver sizes its attention scratch from the *video* row count alone,
+which overflows whenever a clip has fewer video tokens than the prompt has
+context rows — 2x8x8 is 128 against a span of 256. No geometry it ever ran hit
+it. The module sizes from the larger of the two.
 
 The video VAE's **encoder** is deliberately not carried over. It exists to
 condition on an existing clip, which nothing calls yet, and leaving it in the
 driver keeps the module to what the service needs.
 
-## The order of operations, and why it is not one process yet
+## The order of operations
 
-`Vendor/h3.c/tests/ltx_clip.sh` runs the whole path and is the specification
-this module is being written against:
+`Vendor/h3.c/tests/ltx_clip.sh` runs the whole path as separate processes and
+was the specification this module was written against. `ltx_generate()` now
+does the same in one:
 
 ```
 tokenize → Gemma tower → connector → denoise → video VAE + audio VAE/vocoder → mux
 ```
 
 **The tower and the DiT do not fit in memory together** — 37 GB — so the tower
-runs, writes its context, and exits before the DiT opens. That is a real
-constraint on the eventual `ltx_generate()`, not scaffolding: it has to load,
-run and free in sequence rather than holding both.
+runs, hands back its features and is freed before the DiT store opens. That is
+a real constraint rather than scaffolding, and it is the shape of
+`ltx_generate.c`: load, run, free, in sequence, never holding both.
+
+The tokenizer rides inside the text encoder checkpoint as a `tokenizer_json`
+tensor rather than sitting beside it as a file, and this copy of it has a
+**no-op post-processor** — no `<bos>` is prepended, unlike stock Gemma. h3.c's
+SentencePiece path reproduces its ids exactly; `h3_gemma_tokenizer_test`
+against the reference `tokenizers` library is what says so.
 
 ## Things that are true and not obvious
 
@@ -108,15 +125,35 @@ directly:
 
 Each check runs a real input through the module and writes the driver's own
 output format, to be compared **byte for byte** with what the driver writes for
-the same file. All three are identical today. The
+the same file. All five are identical today.
+
+`ltx_dit_check` is the one that needs care: the geometry is an argument, so it
+only means anything held against a driver built with the *same* `-D` flags and
+run with the same seed and context. Its own header gives the pair of commands. The
 arithmetic did not change in the move, so anything but identical bytes is the
 lift's fault — which is the failure mode worth guarding, since an error latch
 that short-circuits one branch early yields a plausible waveform from a
 half-finished decode.
 
+## Speed
+
+512 square, 65 pixel frames, 8 steps, with nothing else on the GPU: **36 s a
+denoise step**, 297 s for the sampler, and the eight steps within 1.8 s of each
+other. The prefetch worker has already taken weight loading down to under a
+second of that.
+
+An earlier figure of 65 s a step was measured while another generation had the
+GPU. It is not this engine's number, and it is the second time a timing taken
+on a shared machine has had to be withdrawn here — see the prefetch A/B in
+`ltx_dit.c`.
+
 ## Not done
 
-Nothing is wired to the engine protocol or the app yet — this is the port, not
-the feature. The DiT sampler, the video VAE and the Gemma tower still live as
-standalone drivers under `Vendor/h3.c/tests/`, and `ltx_generate()` is a
-contract in `ltx_generate.h` with no implementation behind it.
+Nothing is wired to the engine protocol, the manifest or the app yet — this is
+the port, not the feature. `ltx_generate()` also hardcodes the published
+filenames inside the snapshot's three directories, which is what an app-side
+package will have to match or what will have to become a parameter.
+
+Nothing longer than 2.7 s has ever been generated, and nothing but 512 square.
+The resolution ladder, the guidance path and the 16→48 kHz bandwidth extender
+are all unported.

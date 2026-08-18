@@ -1,0 +1,304 @@
+/* Prompt in, clip out: the LTX-2.5 pipeline behind one call.
+ *
+ * The stages are separately gated against the released weights and separately
+ * usable. What this adds is the sequencing, and the sequencing is the part
+ * with a constraint in it: **the Gemma tower and the DiT do not fit in memory
+ * together** -- about 37 GB -- so the tower runs, hands back its features and
+ * is freed before the DiT store is opened. That ordering is a requirement,
+ * not scaffolding, and it is why this file exists rather than a caller simply
+ * calling the five stages itself.
+ *
+ * `Vendor/h3.c/tests/ltx_clip.sh` is the specification: it chains the same
+ * five stages as separate processes, which is how the two-phase split was
+ * discovered in the first place.
+ *
+ * The joins are decisions this file owns rather than its caller's:
+ *
+ *   - the tokenizer left-pads to 256 and the pads are **not** stripped -- the
+ *     connector's registers replace them, and the span the DiT cross-attends
+ *     to is that padded length rather than the register count;
+ *
+ *   - the audio length follows the video's duration in seconds, through
+ *     `ltx_audio_rows_for`, and is not a free parameter; and
+ *
+ *   - fps reaches the DiT explicitly, because the rope's time axis is measured
+ *     in seconds and the two streams attend to each other through it.
+ */
+#include "ltx_generate.h"
+
+#include "ltx_audio.h"
+#include "ltx_connector.h"
+#include "ltx_dit.h"
+#include "ltx_text.h"
+#include "ltx_video.h"
+
+#include "h3_gpu.h"
+#include "h3_safetensors.h"
+#include "h3_tokenizer.h"
+#include "h3_weights.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* `LTXVGemmaTokenizer(max_length=256)`, left-padded, and Gemma's `<pad>` is 0
+ * -- not `H3_PAD_TOKEN_ID`, which is Qwen's. */
+enum { SPAN = 256, PAD_ID = 0, TEMPORAL = 8, SPATIAL = LTX_VIDEO_SPATIAL };
+
+/* The snapshot's own layout. The three directories are what `ltx_request.
+ * package` names; the filenames are the published ones. */
+#define DIT_PATH "diffusion_models/" \
+    "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+#define ENCODER_PATH "text_encoders/" \
+    "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+#define VIDEO_VAE_PATH "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+#define AUDIO_VAE_PATH "vae/ltx-2.5-audio-vae-bf16.safetensors"
+
+static int fail(char *error, size_t error_size, const char *format, ...) {
+    if (error && error_size) {
+        va_list arguments;
+        va_start(arguments, format);
+        vsnprintf(error, error_size, format, arguments);
+        va_end(arguments);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------- plan */
+
+int ltx_plan(const ltx_request *request, ltx_shape *shape,
+             char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!request || !shape)
+        return fail(error, error_size, "ltx_plan wants a request and "
+                                       "somewhere to put the shape");
+    const int fps = request->fps > 0 ? request->fps : LTX_DEFAULT_FPS;
+    if (request->pixels < SPATIAL || request->pixels % SPATIAL)
+        return fail(error, error_size, "%d pixels square is not a frame this "
+                                       "engine renders; the video VAE expands "
+                                       "%dx in space, so a multiple of %d is",
+                    request->pixels, SPATIAL, SPATIAL);
+    /* A causal encoder builds the first latent frame from a single pixel
+     * frame, so n latent frames decode to 8(n-1)+1 and nothing else. */
+    if (request->frames < 1 || (request->frames - 1) % TEMPORAL)
+        return fail(error, error_size, "%d frames is not renderable; the video "
+                                       "VAE compresses %dx in time and cannot "
+                                       "produce the seven leading frames, so "
+                                       "8k+1 -- 17, 33, 65, 97 -- is what it "
+                                       "makes", request->frames, TEMPORAL);
+    memset(shape, 0, sizeof(*shape));
+    shape->frames = request->frames;
+    shape->pixels = request->pixels;
+    shape->audio_frames =
+        ltx_audio_frames_for(ltx_audio_rows_for(request->frames, fps));
+    shape->video_floats = (size_t)LTX_VIDEO_CHANNELS * (size_t)request->frames *
+                          (size_t)request->pixels * (size_t)request->pixels;
+    shape->audio_floats = 2u * (size_t)shape->audio_frames;
+    return 1;
+}
+
+/* -------------------------------------------------------------- the relays */
+
+/* Each stage reports within itself, so the phase name is what tells a caller
+ * which of the five it is waiting on. Without it the tower alone is minutes
+ * of silence before the first denoise step, which reads as a hang. */
+typedef struct {
+    ltx_progress progress;
+    void *context;
+} relay;
+
+static int text_tick(int layer, int layers, void *context) {
+    relay *r = context;
+    if (!r->progress) return 1;
+    return r->progress("text encoder", layer, layers, r->context);
+}
+
+static int denoise_tick(int step, int steps, void *context) {
+    relay *r = context;
+    if (!r->progress) return 1;
+    return r->progress("denoise", step, steps, r->context);
+}
+
+/* A phase with nothing to report inside it still says it started. Returning
+ * zero here cancels, the same as anywhere else. */
+static int announce(const relay *r, const char *phase) {
+    if (!r->progress) return 1;
+    return r->progress(phase, 0, 1, r->context);
+}
+
+/* ---------------------------------------------------------- the tokenizer */
+
+/* Gemma's tokenizer rides in the text encoder checkpoint as a `tokenizer_json`
+ * tensor rather than beside it as a file, so it is read out and parsed from
+ * memory. It is also *not* the stock Gemma tokenizer: the post-processor in
+ * this copy is a no-op, so no <bos> is prepended, and h3.c's SentencePiece
+ * path reproduces its ids exactly -- checked against the reference
+ * `tokenizers` library in `h3_gemma_tokenizer_test`. */
+static int tokenize(const h3_weight_store *encoder, const char *prompt,
+                    int32_t *ids, uint32_t *tokens,
+                    char *error, size_t error_size) {
+    const h3_st_header *header = NULL;
+    const h3_st_tensor *tensor =
+        h3_weight_find(encoder, "tokenizer_json", &header);
+    if (!tensor)
+        return fail(error, error_size, "the text encoder carries no "
+                                       "tokenizer_json tensor");
+    if (tensor->dtype != H3_DTYPE_U8)
+        return fail(error, error_size, "tokenizer_json is %s, expected bytes",
+                    h3_dtype_name(tensor->dtype));
+    const size_t bytes = (size_t)(tensor->data_end - tensor->data_begin);
+    char *json = malloc(bytes);
+    if (!json)
+        return fail(error, error_size, "cannot allocate the tokenizer");
+    if (!h3_st_read_data(header, tensor, json, bytes, error, error_size)) {
+        free(json);
+        return 0;
+    }
+    h3_tokenizer *tokenizer = h3_tokenizer_load_json(json, bytes, error,
+                                                     error_size);
+    if (!tokenizer) { free(json); return 0; }
+    uint32_t *encoded = NULL;
+    size_t count = 0;
+    const int ok = h3_tokenizer_encode(tokenizer, prompt, 0, &encoded, &count,
+                                       error, error_size);
+    h3_tokenizer_free(tokenizer);
+    free(json);
+    if (!ok) return 0;
+    if (!count) {
+        h3_tokenizer_ids_free(encoded);
+        return fail(error, error_size, "the prompt tokenized to nothing");
+    }
+    /* Truncate as the reference does, keeping the front. */
+    if (count > SPAN) count = SPAN;
+    /* Left padding, which is what makes the mask unnecessary downstream: the
+     * pads come first, and the connector replaces exactly those slots. */
+    const size_t pad = SPAN - count;
+    for (size_t index = 0; index < pad; index++) ids[index] = PAD_ID;
+    for (size_t index = 0; index < count; index++)
+        ids[pad + index] = (int32_t)encoded[index];
+    h3_tokenizer_ids_free(encoded);
+    *tokens = SPAN;
+    return 1;
+}
+
+/* ------------------------------------------------------------------- entry */
+
+int ltx_generate(const ltx_request *request, float *video, float *audio,
+                 ltx_progress progress, void *context,
+                 char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!request || !request->package || !request->prompt || !video || !audio)
+        return fail(error, error_size, "a package, a prompt and somewhere to "
+                                       "put both streams are all required");
+    ltx_shape shape;
+    if (!ltx_plan(request, &shape, error, error_size)) return 0;
+
+    const int fps = request->fps > 0 ? request->fps : LTX_DEFAULT_FPS;
+    const int steps = request->steps > 0 ? request->steps : LTX_DEFAULT_STEPS;
+    const uint32_t latent_frames =
+        (uint32_t)((request->frames - 1) / TEMPORAL) + 1;
+    const uint32_t side = (uint32_t)(request->pixels / SPATIAL);
+    const uint32_t audio_rows = ltx_audio_rows_for(request->frames, fps);
+    relay report = { .progress = progress, .context = context };
+    char path[1200];
+
+    h3_gpu *gpu = h3_gpu_create(request->shaders ? request->shaders
+                                                 : "h3_shaders.metal",
+                                error, error_size);
+    if (!gpu) return 0;
+
+    int32_t *ids = malloc(SPAN * sizeof(*ids));
+    float *video_features = malloc((size_t)SPAN * LTX_TEXT_VIDEO_DIM *
+                                   sizeof(float));
+    float *audio_features = malloc((size_t)SPAN * LTX_TEXT_AUDIO_DIM *
+                                   sizeof(float));
+    float *video_context = malloc((size_t)SPAN * LTX_DIT_VIDEO_DIM *
+                                  sizeof(float));
+    float *audio_context = malloc((size_t)SPAN * LTX_DIT_AUDIO_DIM *
+                                  sizeof(float));
+    const size_t video_cells = (size_t)latent_frames * side * side;
+    float *video_latent = malloc(video_cells * LTX_DIT_LATENT * sizeof(float));
+    float *audio_latent = malloc((size_t)audio_rows * LTX_DIT_LATENT *
+                                 sizeof(float));
+    int ok = ids && video_features && audio_features && video_context &&
+             audio_context && video_latent && audio_latent;
+    if (!ok) fail(error, error_size, "cannot allocate the pipeline buffers");
+
+    /* ---- tokenize and encode ----------------------------------------- */
+
+    /* The tower's store is opened once and used for both: the tokenizer rides
+     * inside it. */
+    uint32_t tokens = 0;
+    if (ok) {
+        snprintf(path, sizeof(path), "%s/" ENCODER_PATH, request->package);
+        h3_weight_store *encoder = h3_weight_store_open(path, error, error_size);
+        ok = encoder != NULL;
+        if (ok) ok = tokenize(encoder, request->prompt, ids, &tokens, error,
+                              error_size);
+        if (ok) ok = announce(&report, "text encoder");
+        if (ok)
+            ok = ltx_text_encode(gpu, encoder, ids, tokens, video_features,
+                                 audio_features, text_tick, &report, error,
+                                 error_size);
+        /* Freed before the DiT opens, which is the whole shape of this file. */
+        h3_weight_store_free(encoder);
+    }
+
+    /* ---- connect and denoise ----------------------------------------- */
+
+    if (ok) {
+        snprintf(path, sizeof(path), "%s/" DIT_PATH, request->package);
+        h3_weight_store *dit = h3_weight_store_open(path, error, error_size);
+        ok = dit != NULL;
+        if (ok) ok = announce(&report, "connector");
+        if (ok)
+            ok = ltx_connector_run(gpu, dit, video_features, audio_features,
+                                   tokens, tokens, video_context, audio_context,
+                                   error, error_size);
+        if (ok) {
+            ltx_dit_request denoise = {0};
+            denoise.frames = latent_frames;
+            denoise.height = side;
+            denoise.width = side;
+            denoise.audio_rows = audio_rows;
+            denoise.fps = fps;
+            denoise.steps = steps;
+            denoise.seed = request->seed;
+            ok = ltx_dit_sample(gpu, dit, &denoise, video_context,
+                                audio_context, tokens, video_latent,
+                                audio_latent, denoise_tick, &report, error,
+                                error_size);
+        }
+        h3_weight_store_free(dit);
+    }
+    free(ids); free(video_features); free(audio_features);
+    free(video_context); free(audio_context);
+
+    /* ---- decode both streams ----------------------------------------- */
+
+    if (ok) {
+        snprintf(path, sizeof(path), "%s/" VIDEO_VAE_PATH, request->package);
+        h3_weight_store *vae = h3_weight_store_open(path, error, error_size);
+        ok = vae != NULL;
+        if (ok) ok = announce(&report, "video VAE");
+        if (ok)
+            ok = ltx_video_decode(gpu, vae, video_latent, latent_frames, side,
+                                  side, video, error, error_size);
+        h3_weight_store_free(vae);
+    }
+    if (ok) {
+        snprintf(path, sizeof(path), "%s/" AUDIO_VAE_PATH, request->package);
+        h3_weight_store *vae = h3_weight_store_open(path, error, error_size);
+        ok = vae != NULL;
+        if (ok) ok = announce(&report, "vocoder");
+        if (ok)
+            ok = ltx_audio_decode(gpu, vae, audio_latent, audio_rows, audio,
+                                  error, error_size);
+        h3_weight_store_free(vae);
+    }
+
+    free(video_latent); free(audio_latent);
+    h3_gpu_free(gpu);
+    return ok;
+}
