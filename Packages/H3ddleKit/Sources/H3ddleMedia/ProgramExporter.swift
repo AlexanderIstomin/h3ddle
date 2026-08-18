@@ -228,6 +228,10 @@ private enum ExportSessionWriter {
     )
     let timescale = CMTimeScale(max(1, settings.framesPerSecond.rounded()))
     let frameDuration = CMTime(value: 1, timescale: timescale)
+    let batchSize = 12
+    var writer: AVAssetWriter?
+    var videoInput: AVAssetWriterInput?
+    var appendedSampleCount = 0
     var lastPreview = ContinuousClock.now - .seconds(1)
     for index in 0..<frameCount {
       try Task.checkCancellation()
@@ -241,21 +245,50 @@ private enum ExportSessionWriter {
         at: CMTime(value: CMTimeValue(index), timescale: timescale),
         duration: frameDuration
       )
+      if (index + 1).isMultiple(of: batchSize) || index == frameCount - 1 {
+        let samples = try encoder.completeFrames(
+          through: CMTime(value: CMTimeValue(index), timescale: timescale)
+        )
+        if videoInput == nil, let first = samples.first {
+          (writer, videoInput) = try makePassthroughVideoWriter(
+            firstSample: first,
+            settings: settings,
+            destination: destination
+          )
+        }
+        if let videoInput {
+          try await append(samples, to: videoInput)
+          appendedSampleCount += samples.count
+        }
+      }
       emit(.progress(phase: "Encoding video", fraction: Double(index + 1) / Double(frameCount) * 0.72))
     }
-    let samples = try encoder.finish()
-    try await writePassthroughVideo(samples, settings: settings, destination: destination)
+    let remaining = try encoder.finish()
+    if videoInput == nil, let first = remaining.first {
+      (writer, videoInput) = try makePassthroughVideoWriter(
+        firstSample: first,
+        settings: settings,
+        destination: destination
+      )
+    }
+    if let videoInput {
+      try await append(remaining, to: videoInput)
+      appendedSampleCount += remaining.count
+    }
+    guard let writer, let videoInput, appendedSampleCount > 0 else {
+      throw MediaExportError.failed("Software encoder produced no video frames.")
+    }
+    videoInput.markAsFinished()
+    try await finish(writer)
     emit(.progress(phase: "Finalizing file", fraction: 0.82))
   }
 
-  private static func writePassthroughVideo(
-    _ samples: [CMSampleBuffer],
+  private static func makePassthroughVideoWriter(
+    firstSample: CMSampleBuffer,
     settings: ProgramExportSettings,
     destination: URL
-  ) async throws {
-    guard let first = samples.first,
-      let hint = CMSampleBufferGetFormatDescription(first)
-    else {
+  ) throws -> (AVAssetWriter, AVAssetWriterInput) {
+    guard let hint = CMSampleBufferGetFormatDescription(firstSample) else {
       throw MediaExportError.failed("Software encoder produced an unreadable frame.")
     }
     let writer = try AVAssetWriter(outputURL: destination, fileType: settings.format.fileType)
@@ -273,14 +306,19 @@ private enum ExportSessionWriter {
       throw MediaExportError.failed(writer.error?.localizedDescription ?? "Could not start the writer.")
     }
     writer.startSession(atSourceTime: .zero)
+    return (writer, videoInput)
+  }
+
+  private static func append(
+    _ samples: [CMSampleBuffer],
+    to videoInput: AVAssetWriterInput
+  ) async throws {
     for sample in samples {
       try await waitUntilReady(videoInput)
       if !videoInput.append(sample) {
         throw MediaExportError.failed("Could not write a software-encoded frame.")
       }
     }
-    videoInput.markAsFinished()
-    try await finish(writer)
   }
 
   private static func mux(
@@ -520,9 +558,10 @@ private enum ExportAudioBuilder {
 
     let mix: AVMutableAudioMix
     if normalize {
-      let samples = try await readSamples(plan: plan, settings: pcmSettings, mix: plan.mix())
-      let measured = Loudness.integratedLUFS(
-        samples: samples,
+      let measured = try await measureLoudness(
+        plan: plan,
+        settings: pcmSettings,
+        mix: plan.mix(),
         sampleRate: sampleRate,
         channels: channels
       )
@@ -530,10 +569,7 @@ private enum ExportAudioBuilder {
     } else {
       mix = plan.mix()
     }
-    try await copySamples(
-      try await readSampleBuffers(plan: plan, settings: pcmSettings, mix: mix),
-      to: input
-    )
+    try await copySamples(plan: plan, settings: pcmSettings, mix: mix, to: input)
   }
 
   private static func append(
@@ -576,23 +612,31 @@ private enum ExportAudioBuilder {
     trackVolumes.append((destination, max(0, volume)))
   }
 
-  private static func readSamples(
+  private static func measureLoudness(
     plan: ExportAudioPlan,
     settings: [String: Any],
-    mix: AVAudioMix
-  ) async throws -> [Float] {
-    var samples: [Float] = []
-    for buffer in try await readSampleBuffers(plan: plan, settings: settings, mix: mix) {
-      appendFloats(from: buffer, into: &samples)
+    mix: AVAudioMix,
+    sampleRate: Double,
+    channels: Int
+  ) async throws -> Double {
+    let (reader, output) = try await makeReader(plan: plan, settings: settings, mix: mix)
+    defer { reader.cancelReading() }
+    var meter = Loudness.Meter(sampleRate: sampleRate, channels: channels)
+    var scratch: [Float] = []
+    while reader.status == .reading {
+      try Task.checkCancellation()
+      guard let buffer = output.copyNextSampleBuffer() else { break }
+      appendFloats(from: buffer, scratch: &scratch, into: &meter)
     }
-    return samples
+    try check(reader)
+    return meter.integratedLUFS
   }
 
-  private static func readSampleBuffers(
+  private static func makeReader(
     plan: ExportAudioPlan,
     settings: [String: Any],
     mix: AVAudioMix
-  ) async throws -> [CMSampleBuffer] {
+  ) async throws -> (AVAssetReader, AVAssetReaderAudioMixOutput) {
     let reader = try AVAssetReader(asset: plan.composition)
     let tracks = try await plan.composition.loadTracks(withMediaType: .audio)
     let output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: settings)
@@ -606,55 +650,69 @@ private enum ExportAudioBuilder {
         reader.error?.localizedDescription ?? "Could not read mixed audio."
       )
     }
+    return (reader, output)
+  }
 
-    var buffers: [CMSampleBuffer] = []
-    while reader.status == .reading {
-      try Task.checkCancellation()
-      if let buffer = output.copyNextSampleBuffer() {
-        buffers.append(buffer)
-      } else {
-        break
-      }
-    }
+  private static func check(_ reader: AVAssetReader) throws {
     if reader.status == .failed {
       throw MediaExportError.failed(
         reader.error?.localizedDescription ?? "Audio mix reading failed."
       )
     }
-    return buffers
+    if reader.status == .cancelled {
+      throw MediaExportError.cancelled
+    }
   }
 
   private static func copySamples(
-    _ buffers: [CMSampleBuffer],
+    plan: ExportAudioPlan,
+    settings: [String: Any],
+    mix: AVAudioMix,
     to input: AVAssetWriterInput
   ) async throws {
-    for buffer in buffers {
+    let (reader, output) = try await makeReader(plan: plan, settings: settings, mix: mix)
+    defer { reader.cancelReading() }
+    while reader.status == .reading {
       try Task.checkCancellation()
+      guard let buffer = output.copyNextSampleBuffer() else { break }
+      let deadline = ContinuousClock.now + .seconds(20)
       while !input.isReadyForMoreMediaData {
         try Task.checkCancellation()
+        if ContinuousClock.now > deadline {
+          throw MediaExportError.failed("The audio encoder stopped accepting media.")
+        }
         try await Task.sleep(for: .milliseconds(4))
       }
       if !input.append(buffer) {
         throw MediaExportError.failed("Could not append mixed audio.")
       }
     }
+    try check(reader)
   }
 
-  private static func appendFloats(from buffer: CMSampleBuffer, into samples: inout [Float]) {
+  private static func appendFloats(
+    from buffer: CMSampleBuffer,
+    scratch: inout [Float],
+    into meter: inout Loudness.Meter
+  ) {
     guard let block = CMSampleBufferGetDataBuffer(buffer) else { return }
-    var length = 0
-    var dataPointer: UnsafeMutablePointer<Int8>?
-    CMBlockBufferGetDataPointer(
-      block,
-      atOffset: 0,
-      lengthAtOffsetOut: nil,
-      totalLengthOut: &length,
-      dataPointerOut: &dataPointer
-    )
-    guard let dataPointer else { return }
+    let length = CMBlockBufferGetDataLength(block)
     let count = length / MemoryLayout<Float>.size
-    dataPointer.withMemoryRebound(to: Float.self, capacity: count) { pointer in
-      samples.append(contentsOf: UnsafeBufferPointer(start: pointer, count: count))
+    guard count > 0 else { return }
+    if scratch.count < count {
+      scratch.append(contentsOf: repeatElement(0, count: count - scratch.count))
+    }
+    let status = scratch.withUnsafeMutableBytes { bytes in
+      CMBlockBufferCopyDataBytes(
+        block,
+        atOffset: 0,
+        dataLength: length,
+        destination: bytes.baseAddress!
+      )
+    }
+    guard status == kCMBlockBufferNoErr else { return }
+    scratch.withUnsafeBufferPointer { pointer in
+      meter.append(UnsafeBufferPointer(start: pointer.baseAddress, count: count))
     }
   }
 }
@@ -720,4 +778,3 @@ extension ProgramExportProfile {
     }
   }
 }
-

@@ -15,6 +15,7 @@ final class ProgramPlaybackController {
   private var currentVisualURL: URL?
   private var currentAudioURL: URL?
   private var lastVideoLocalTime: TimeInterval = 0
+  private var lastAudioLocalTime: TimeInterval = 0
   private var videoOutput: AVPlayerItemVideoOutput?
 
   var isPlaying: Bool { clock.isPlaying }
@@ -74,11 +75,13 @@ final class ProgramPlaybackController {
     }
   }
 
+  @discardableResult
   func sync(
     project: H3ddleProject,
     visualMuted: Bool,
-    audioMuted: Bool
-  ) {
+    audioMuted: Bool,
+    transformOverrides: [UUID: CanvasObjectTransform] = [:]
+  ) -> ProgramPreviewFrame {
     let duration = max(project.timeline.visualDuration, project.timeline.audioTrackEnd)
     clock.framesPerSecond = project.settings.framesPerSecond
     clock.setTime(clock.currentTime, duration: duration)
@@ -87,10 +90,12 @@ final class ProgramPlaybackController {
       at: clock.currentTime,
       project: project,
       visualMuted: visualMuted,
-      audioMuted: audioMuted
+      audioMuted: audioMuted,
+      transformOverrides: transformOverrides
     )
     applyVisual(frame)
     applyAudio(frame)
+    return frame
   }
 
   func shutdown() {
@@ -100,13 +105,26 @@ final class ProgramPlaybackController {
     videoOutput = nil
     currentVisualURL = nil
     currentAudioURL = nil
+    lastVideoLocalTime = 0
+    lastAudioLocalTime = 0
   }
 
   /// Live picture from the playing item, if it is still on `localTime`.
   func copyVisualVideoImage(matching localTime: TimeInterval) -> CGImage? {
-    guard let videoOutput else { return nil }
     let itemTime = visualPlayer.currentTime()
     guard itemTime.isNumeric, abs(itemTime.seconds - localTime) < 0.08 else { return nil }
+    return copyVisualVideoImage(at: itemTime)
+  }
+
+  /// Latest picture from the player clock, used while playback is running.
+  func copyCurrentVisualVideoImage() -> CGImage? {
+    let itemTime = visualPlayer.currentTime()
+    guard itemTime.isNumeric else { return nil }
+    return copyVisualVideoImage(at: itemTime)
+  }
+
+  private func copyVisualVideoImage(at itemTime: CMTime) -> CGImage? {
+    guard let videoOutput else { return nil }
     guard
       let buffer = videoOutput.copyPixelBuffer(
         forItemTime: itemTime,
@@ -147,9 +165,10 @@ final class ProgramPlaybackController {
     case .video(let asset, let localTime, let includesNativeAudio):
       visualPlayer.isMuted = !includesNativeAudio
       let replaced = replaceVisualItemIfNeeded(url: asset.url)
+      let localTimeChanged = abs(localTime - lastVideoLocalTime) > 1.0 / 600.0
       let loopedBack = localTime + 0.2 < lastVideoLocalTime
       lastVideoLocalTime = localTime
-      if replaced || !clock.isPlaying || loopedBack {
+      if replaced || loopedBack || (!clock.isPlaying && localTimeChanged) {
         seek(player: visualPlayer, to: localTime)
       }
       if clock.isPlaying, visualPlayer.rate == 0 {
@@ -170,6 +189,7 @@ final class ProgramPlaybackController {
     guard let presentation = frame.audio.first,
       FileManager.default.fileExists(atPath: presentation.asset.url.path)
     else {
+      lastAudioLocalTime = 0
       audioPlayer.pause()
       if currentAudioURL != nil {
         currentAudioURL = nil
@@ -179,11 +199,14 @@ final class ProgramPlaybackController {
     }
 
     let replaced = currentAudioURL != presentation.asset.url
+    let localTimeChanged = abs(presentation.localTime - lastAudioLocalTime) > 1.0 / 600.0
+    let loopedBack = presentation.localTime + 0.2 < lastAudioLocalTime
+    lastAudioLocalTime = presentation.localTime
     if replaced {
       currentAudioURL = presentation.asset.url
       audioPlayer.replaceCurrentItem(with: AVPlayerItem(url: presentation.asset.url))
     }
-    if replaced || !clock.isPlaying {
+    if replaced || loopedBack || (!clock.isPlaying && localTimeChanged) {
       let shouldResume = clock.isPlaying
       seek(player: audioPlayer, to: presentation.localTime, resumeIfPlaying: shouldResume)
       return

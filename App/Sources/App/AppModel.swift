@@ -808,7 +808,11 @@ final class AppModel {
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
             )
           case .preview(let url):
-            if let image = Self.loadPreviewImage(from: url) {
+            let image = await Task.detached(priority: .utility) {
+              Self.loadPreviewImage(from: url)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let image {
               generationPreviewImage = image
             }
           case .completed(let asset):
@@ -2227,14 +2231,18 @@ final class AppModel {
     isAccessingModelDirectory = false
   }
 
-  private static func loadPreviewImage(from url: URL) -> CGImage? {
-    // The engine overwrites one preview file per job; caching would pin the
-    // first frame forever.
-    let options = [kCGImageSourceShouldCache: false] as CFDictionary
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else {
-      return nil
+  nonisolated private static func loadPreviewImage(from url: URL) -> CGImage? {
+    autoreleasepool {
+      // The engine overwrites one preview file per job; source caching would
+      // pin the first frame forever. Eager image caching performs the actual
+      // bitmap decode on this background task instead of during SwiftUI draw.
+      let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+        return nil
+      }
+      let imageOptions = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+      return CGImageSourceCreateImageAtIndex(source, 0, imageOptions)
     }
-    return CGImageSourceCreateImageAtIndex(source, 0, nil)
   }
 
   private static func seconds(in duration: Duration) -> TimeInterval {

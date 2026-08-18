@@ -43,7 +43,7 @@ struct ExportModalView: View {
         Divider().overlay(H3Color.line)
         footer
       }
-      .frame(maxWidth: 1_280, maxHeight: 860)
+      .frame(maxWidth: 1_360, maxHeight: 900)
       .background(Color(red: 13 / 255, green: 15 / 255, blue: 19 / 255))
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
       .overlay {
@@ -189,7 +189,7 @@ struct ExportModalView: View {
         )
         .padding(.trailing, 4)
       }
-      .frame(maxWidth: 520, alignment: .top)
+      .frame(maxWidth: .infinity, alignment: .top)
     }
     .padding(.horizontal, 24)
     .padding(.vertical, 16)
@@ -197,17 +197,13 @@ struct ExportModalView: View {
 
   private var leftColumn: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("PREVIEW")
-        .font(.system(size: 10, weight: .bold))
-        .tracking(1.0)
-        .foregroundStyle(H3Color.textSecondary)
-
       ZStack {
         Color.black
         previewSurface
       }
       .aspectRatio(max(project.settings.aspectFraction, 0.3), contentMode: .fit)
-      .frame(maxWidth: .infinity, maxHeight: 420)
+      .frame(maxWidth: .infinity, maxHeight: 520)
+      .layoutPriority(1)
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -231,7 +227,6 @@ struct ExportModalView: View {
         .accessibilityIdentifier("export-trailing-audio")
       }
 
-      estimateCard
       progressPanel
     }
   }
@@ -250,82 +245,6 @@ struct ExportModalView: View {
         time: settings.range.resolved(in: programDuration).inSec
       )
     }
-  }
-
-  private var estimateCard: some View {
-    VStack(alignment: .leading, spacing: 15) {
-      if case .done(_, let sizeLabel) = render {
-        HStack(alignment: .top) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("FILE SIZE")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(H3Color.textSecondary)
-            Text(sizeLabel)
-              .font(.system(size: 32, weight: .bold))
-          }
-          Spacer()
-          VStack(alignment: .trailing, spacing: 5) {
-            Text("EXPORT")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(H3Color.textSecondary)
-            Text("Complete")
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(H3Color.accent)
-          }
-        }
-      } else {
-        HStack(alignment: .top) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("ESTIMATED SIZE")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(H3Color.textSecondary)
-            Text(sizeLabel)
-              .font(.system(size: 32, weight: .bold))
-          }
-          Spacer()
-          VStack(alignment: .trailing, spacing: 5) {
-            Text("EST. RENDER")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(H3Color.textSecondary)
-            Text(timeLabel)
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(H3Color.accent)
-          }
-        }
-      }
-
-      HStack(spacing: 7) {
-        specChip(settings.format.label)
-        specChip(settings.resolution.shortLabel)
-        specChip("\(Int(settings.framesPerSecond)) fps")
-        specChip("\(settings.profile.label) profile")
-      }
-    }
-    .padding(18)
-    .background(
-      LinearGradient(
-        colors: [
-          Color(red: 24 / 255, green: 28 / 255, blue: 35 / 255),
-          Color(red: 20 / 255, green: 23 / 255, blue: 29 / 255),
-        ],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
-    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .stroke(H3Color.line, lineWidth: 1)
-    }
-  }
-
-  private func specChip(_ text: String) -> some View {
-    Text(text)
-      .font(.system(size: 11, weight: .medium))
-      .padding(.horizontal, 8)
-      .frame(height: 24)
-      .background(H3Color.controlFill)
-      .clipShape(Capsule())
   }
 
   private var progressPanel: some View {
@@ -475,9 +394,6 @@ struct ExportModalView: View {
         .foregroundStyle(H3Color.textSecondary)
         + Text(specLine)
         .fontWeight(.semibold)
-        + Text(" · \(sizeLabel)")
-        .font(.system(size: 12.5, design: .monospaced))
-        .foregroundColor(H3Color.textSecondary)
       Spacer()
       Button("Cancel") { close() }
         .buttonStyle(H3QuietButtonStyle())
@@ -502,23 +418,6 @@ struct ExportModalView: View {
 
   private var specLine: String {
     "\(settings.format.label) · \(settings.resolution.shortLabel) · \(Int(settings.framesPerSecond)) fps"
-  }
-
-  private var sizeLabel: String {
-    let megabytes = settings.estimatedSizeMegabytes(
-      programDuration: programDuration,
-      project: project.settings
-    )
-    if megabytes >= 1024 {
-      return String(format: "%.2f GB", megabytes / 1024)
-    }
-    return "\(Int(megabytes.rounded())) MB"
-  }
-
-  private var timeLabel: String {
-    let seconds = Int(settings.estimatedRenderSeconds(programDuration: programDuration).rounded())
-    if seconds < 60 { return "~\(seconds)s" }
-    return "~\(seconds / 60)m \(seconds % 60)s"
   }
 
   private var progressTitle: String {

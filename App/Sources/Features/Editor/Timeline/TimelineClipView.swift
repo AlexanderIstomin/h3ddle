@@ -203,27 +203,30 @@ struct TimelineClipView: View {
   }
 
   private var waveform: some View {
-    HStack(spacing: 1) {
-      ForEach(Array(bars.enumerated()), id: \.offset) { _, height in
-        Capsule()
-          .fill(H3Color.clipAudio.opacity(0.85))
-          .frame(width: 2, height: max(4, 28 * height))
+    Canvas { context, size in
+      let barWidth: CGFloat = 2
+      let count = max(2, Int(size.width / 4))
+      let step = (size.width - barWidth) / CGFloat(count - 1)
+      var seed = title.unicodeScalars.reduce(into: UInt64(2_166_136_261)) { partial, scalar in
+        partial = partial &* 16_777_619 &+ UInt64(scalar.value)
+      }
+      for index in 0..<count {
+        seed = seed &* 1_664_525 &+ 1_013_904_223
+        let value = CGFloat(Double((seed >> 16) & 255) / 255)
+        let barHeight = max(4, 28 * (0.18 + value * 0.82))
+        let rect = CGRect(
+          x: CGFloat(index) * step,
+          y: (size.height - barHeight) / 2,
+          width: barWidth,
+          height: barHeight
+        )
+        context.fill(
+          Path(roundedRect: rect, cornerRadius: barWidth / 2),
+          with: .color(H3Color.clipAudio.opacity(0.85))
+        )
       }
     }
-    .padding(.horizontal, 6)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-
-  private var bars: [CGFloat] {
-    let count = max(8, Int(metrics.x(for: duration) / 4))
-    var seed = title.unicodeScalars.reduce(into: UInt64(2_166_136_261)) { partial, scalar in
-      partial = partial &* 16_777_619 &+ UInt64(scalar.value)
-    }
-    return (0..<count).map { _ in
-      seed = seed &* 1_664_525 &+ 1_013_904_223
-      let value = Double((seed >> 16) & 255) / 255
-      return CGFloat(0.18 + value * 0.82)
-    }
   }
 
   private var accent: Color {
@@ -263,7 +266,7 @@ private struct TimelineTrimHandle: View {
   var body: some View {
     ZStack {
       Color.clear
-        .frame(width: 12, height: .infinity)
+        .frame(width: 12)
       Capsule()
         .fill(H3Color.accent.opacity(0.92))
         .frame(width: 2, height: 18)

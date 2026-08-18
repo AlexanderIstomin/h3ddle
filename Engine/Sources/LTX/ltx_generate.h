@@ -47,8 +47,11 @@ typedef struct {
      * int8 and a CPU fallback would be days, not minutes. */
     const char *shaders;
     const char *prompt;
-    /* Frame side in pixels; a multiple of 32, the video VAE's spatial factor. */
-    int pixels;
+    /* Both a multiple of 32, the video VAE's spatial factor, and otherwise
+     * free. Square is allowed but is not what this model is demonstrated at:
+     * the released example renders 960x544 and doubles it in a second stage
+     * this engine does not run. */
+    int width, height;
     /* Pixel frames. The VAE compresses 8x in time and cannot produce the seven
      * leading frames, so this must be 8k + 1: 17, 33, 65, 97. */
     int frames;
@@ -64,12 +67,12 @@ typedef struct {
  * loading thirty-eight gigabytes. */
 typedef struct {
     int frames;             /* pixel frames, echoing the request */
-    int pixels;
+    int width, height;
     /* 16 kHz stereo, interleaved. Derived from the video duration rather than
      * chosen: round(frames / fps * 25) latent rows, each 4 mel frames less the
      * 3 the causal stack cannot make, each 160 samples. */
     uint32_t audio_frames;
-    size_t video_floats;    /* 3 * frames * pixels * pixels */
+    size_t video_floats;    /* 3 * frames * width * height */
     size_t audio_floats;    /* 2 * audio_frames */
 } ltx_shape;
 

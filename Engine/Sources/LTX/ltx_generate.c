@@ -77,11 +77,13 @@ int ltx_plan(const ltx_request *request, ltx_shape *shape,
         return fail(error, error_size, "ltx_plan wants a request and "
                                        "somewhere to put the shape");
     const int fps = request->fps > 0 ? request->fps : LTX_DEFAULT_FPS;
-    if (request->pixels < SPATIAL || request->pixels % SPATIAL)
-        return fail(error, error_size, "%d pixels square is not a frame this "
-                                       "engine renders; the video VAE expands "
-                                       "%dx in space, so a multiple of %d is",
-                    request->pixels, SPATIAL, SPATIAL);
+    if (request->width < SPATIAL || request->width % SPATIAL ||
+        request->height < SPATIAL || request->height % SPATIAL)
+        return fail(error, error_size, "%dx%d is not a frame this engine "
+                                       "renders; the video VAE expands %dx in "
+                                       "space, so both sides must be multiples "
+                                       "of %d", request->width,
+                    request->height, SPATIAL, SPATIAL);
     /* A causal encoder builds the first latent frame from a single pixel
      * frame, so n latent frames decode to 8(n-1)+1 and nothing else. */
     if (request->frames < 1 || (request->frames - 1) % TEMPORAL)
@@ -92,11 +94,12 @@ int ltx_plan(const ltx_request *request, ltx_shape *shape,
                                        "makes", request->frames, TEMPORAL);
     memset(shape, 0, sizeof(*shape));
     shape->frames = request->frames;
-    shape->pixels = request->pixels;
+    shape->width = request->width;
+    shape->height = request->height;
     shape->audio_frames =
         ltx_audio_frames_for(ltx_audio_rows_for(request->frames, fps));
     shape->video_floats = (size_t)LTX_VIDEO_CHANNELS * (size_t)request->frames *
-                          (size_t)request->pixels * (size_t)request->pixels;
+                          (size_t)request->width * (size_t)request->height;
     shape->audio_floats = 2u * (size_t)shape->audio_frames;
     return 1;
 }
@@ -220,28 +223,32 @@ static int tokenize(const h3_weight_store *encoder, const char *prompt,
  * which is the same halve-centre convention the decoder inverts on the way
  * out. */
 static int encode_conditioning(const ltx_request *request, h3_gpu *gpu,
-                               uint32_t side, float *latents,
-                               ltx_dit_condition *items,
+                               uint32_t cells_wide, uint32_t cells_high,
+                               float *latents, ltx_dit_condition *items,
                                char *error, size_t error_size) {
     char path[1200];
     snprintf(path, sizeof(path), "%s/" VIDEO_VAE_PATH, request->package);
     h3_weight_store *vae = h3_weight_store_open(path, error, error_size);
     if (!vae) return 0;
-    const uint32_t pixels = side * SPATIAL;
-    const size_t cells = (size_t)side * side;
+    const uint32_t pixel_width = cells_wide * SPATIAL;
+    const uint32_t pixel_height = cells_high * SPATIAL;
+    const size_t cells = (size_t)cells_wide * cells_high;
     int ok = 1;
     size_t at = 0;
     for (int index = 0; index < request->conditioning_count && ok; index++) {
         const ltx_conditioning *item = &request->conditioning[index];
         float *rgb = NULL;
-        ok = h3_avreader_read_image_f32(item->path, (int)pixels, (int)pixels,
-                                        H3_IMAGE_FIT_COVER, &rgb, error,
-                                        error_size);
+        /* Cover rather than stretch: a reference of a different shape is
+         * cropped to the clip's, not squashed into it. */
+        ok = h3_avreader_read_image_f32(item->path, (int)pixel_width,
+                                        (int)pixel_height, H3_IMAGE_FIT_COVER,
+                                        &rgb, error, error_size);
         if (!ok) break;
-        const size_t count = (size_t)LTX_VIDEO_CHANNELS * pixels * pixels;
+        const size_t count =
+            (size_t)LTX_VIDEO_CHANNELS * pixel_width * pixel_height;
         for (size_t value = 0; value < count; value++)
             rgb[value] = rgb[value] * 2.0f - 1.0f;
-        ok = ltx_video_encode(gpu, vae, rgb, 1, pixels, pixels,
+        ok = ltx_video_encode(gpu, vae, rgb, 1, pixel_height, pixel_width,
                               latents + at * LTX_DIT_LATENT, error, error_size);
         free(rgb);
         if (!ok) break;
@@ -271,7 +278,8 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
     const int steps = request->steps > 0 ? request->steps : LTX_DEFAULT_STEPS;
     const uint32_t latent_frames =
         (uint32_t)((request->frames - 1) / TEMPORAL) + 1;
-    const uint32_t side = (uint32_t)(request->pixels / SPATIAL);
+    const uint32_t cells_wide = (uint32_t)(request->width / SPATIAL);
+    const uint32_t cells_high = (uint32_t)(request->height / SPATIAL);
     const uint32_t audio_rows = ltx_audio_rows_for(request->frames, fps);
     relay report = { .progress = progress, .context = context };
     char path[1200];
@@ -290,7 +298,7 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
                                   sizeof(float));
     float *audio_context = malloc((size_t)SPAN * LTX_DIT_AUDIO_DIM *
                                   sizeof(float));
-    const size_t video_cells = (size_t)latent_frames * side * side;
+    const size_t video_cells = (size_t)latent_frames * cells_wide * cells_high;
     float *video_latent = malloc(video_cells * LTX_DIT_LATENT * sizeof(float));
     float *audio_latent = malloc((size_t)audio_rows * LTX_DIT_LATENT *
                                  sizeof(float));
@@ -312,15 +320,16 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
             ? request->conditioning_count : LTX_MAX_CONDITIONING;
     if (ok && conditioning_count > 0) {
         conditioning_latents =
-            malloc((size_t)conditioning_count * side * side * LTX_DIT_LATENT *
-                   sizeof(*conditioning_latents));
+            malloc((size_t)conditioning_count * cells_wide * cells_high *
+                   LTX_DIT_LATENT * sizeof(*conditioning_latents));
         if (!conditioning_latents)
             ok = fail(error, error_size, "cannot allocate the conditioning "
                                          "latents");
         if (ok) ok = announce(&report, "reference frames");
         if (ok)
-            ok = encode_conditioning(request, gpu, side, conditioning_latents,
-                                     conditions, error, error_size);
+            ok = encode_conditioning(request, gpu, cells_wide, cells_high,
+                                     conditioning_latents, conditions, error,
+                                     error_size);
     }
 
     uint32_t tokens = 0;
@@ -369,8 +378,8 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
         if (ok) {
             ltx_dit_request denoise = {0};
             denoise.frames = latent_frames;
-            denoise.height = side;
-            denoise.width = side;
+            denoise.height = cells_high;
+            denoise.width = cells_wide;
             denoise.audio_rows = audio_rows;
             denoise.fps = fps;
             denoise.steps = steps;
@@ -395,8 +404,9 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
         ok = vae != NULL;
         if (ok) ok = announce(&report, "video VAE");
         if (ok)
-            ok = ltx_video_decode(gpu, vae, video_latent, latent_frames, side,
-                                  side, video, error, error_size);
+            ok = ltx_video_decode(gpu, vae, video_latent, latent_frames,
+                                  cells_high, cells_wide, video, error,
+                                  error_size);
         h3_weight_store_free(vae);
     }
     if (ok) {

@@ -266,6 +266,40 @@ struct LoudnessTests {
     #expect(gain > 1)
     #expect(gain < 20)
   }
+
+  @Test("Streaming chunks preserve the integrated measurement")
+  func streamingChunks() {
+    let sampleRate = 48_000.0
+    let channels = 2
+    let frameCount = Int(sampleRate * 1.25)
+    var samples = [Float](repeating: 0, count: frameCount * channels)
+    for frame in 0..<frameCount {
+      let amplitude: Float = frame < frameCount / 2 ? 0.03 : 0.12
+      let sample = sin(2 * Float.pi * 440 * Float(frame) / Float(sampleRate)) * amplitude
+      samples[frame * channels] = sample
+      samples[frame * channels + 1] = sample * 0.8
+    }
+
+    let expected = Loudness.integratedLUFS(
+      samples: samples,
+      sampleRate: sampleRate,
+      channels: channels
+    )
+    var meter = Loudness.Meter(sampleRate: sampleRate, channels: channels)
+    samples.withUnsafeBufferPointer { pointer in
+      var offset = 0
+      var chunkIndex = 0
+      let chunkFrames = [73, 521, 1_024, 257]
+      while offset < pointer.count {
+        let count = min(chunkFrames[chunkIndex % chunkFrames.count] * channels, pointer.count - offset)
+        meter.append(UnsafeBufferPointer(rebasing: pointer[offset..<(offset + count)]))
+        offset += count
+        chunkIndex += 1
+      }
+    }
+
+    #expect(abs(meter.integratedLUFS - expected) < 0.000_1)
+  }
 }
 
 enum ExportTestMedia {

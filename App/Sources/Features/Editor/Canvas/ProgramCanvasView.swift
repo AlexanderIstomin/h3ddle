@@ -20,6 +20,7 @@ struct ProgramCanvasView: View {
   @State private var panFromEmpty = false
   @State private var didDrag = false
   @State private var canvasFrame: CGRect = .zero
+  @State private var mediaSizes: [URL: CanvasMediaDimensions] = [:]
 
   var body: some View {
     GeometryReader { proxy in
@@ -80,6 +81,9 @@ struct ProgramCanvasView: View {
     .onChange(of: model.audioLaneAudible) { _, _ in refreshPreview() }
     .onChange(of: model.canvasGesture) { _, _ in refreshPreview() }
     .onChange(of: monitorSize) { _, _ in refreshPreview() }
+    .task(id: model.project.assets) {
+      await loadMediaSizes(for: model.project.assets)
+    }
   }
 
   @ViewBuilder
@@ -376,9 +380,31 @@ struct ProgramCanvasView: View {
 
   private func sourceSize(for item: VisualItem) -> (width: Double, height: Double) {
     if let asset = model.project.asset(id: item.assetID) {
-      return CanvasMediaSize.size(for: asset)
+      let size = mediaSizes[asset.url] ?? .fallback
+      return (size.width, size.height)
     }
     return (canvas.width, canvas.height)
+  }
+
+  private func loadMediaSizes(for assets: [AssetReference]) async {
+    let visualAssets = assets.filter { $0.kind != .audio }
+    let resolved = await withTaskGroup(
+      of: (URL, CanvasMediaDimensions).self,
+      returning: [URL: CanvasMediaDimensions].self
+    ) { group in
+      for asset in visualAssets {
+        group.addTask {
+          (asset.url, await CanvasMediaSize.shared.size(for: asset))
+        }
+      }
+      var sizes: [URL: CanvasMediaDimensions] = [:]
+      for await (url, size) in group {
+        sizes[url] = size
+      }
+      return sizes
+    }
+    guard !Task.isCancelled else { return }
+    mediaSizes = resolved
   }
 
   private var canvas: (width: Double, height: Double) {
@@ -447,32 +473,40 @@ struct ProgramCanvasView: View {
   }
 
   private func refreshPreview() {
-    model.playback.sync(
-      project: model.project,
-      visualMuted: !model.visualLaneAudible,
-      audioMuted: !model.audioLaneAudible
-    )
-    guard !model.project.timeline.visualItems.isEmpty else {
-      presenter.clear()
-      return
-    }
     var overrides: [UUID: CanvasObjectTransform] = [:]
     if let gesture = model.canvasGesture, case .visual(let id) = gesture.target {
       overrides[id] = gesture.current
     }
-    let frame = ProgramPreview.frame(
-      at: model.playback.clock.currentTime,
+    let frame = model.playback.sync(
       project: model.project,
       visualMuted: !model.visualLaneAudible,
       audioMuted: !model.audioLaneAudible,
       transformOverrides: overrides
     )
+    guard !model.project.timeline.visualItems.isEmpty else {
+      presenter.clear()
+      return
+    }
+    let videoFrame: CGImage?
+    if case .video(_, let localTime, _) = frame.visual {
+      if model.playback.isPlaying {
+        guard let liveFrame = model.playback.copyCurrentVisualVideoImage() else { return }
+        videoFrame = liveFrame
+      } else {
+        videoFrame = model.playback.copyVisualVideoImage(matching: localTime)
+      }
+    } else {
+      videoFrame = nil
+    }
+    let renderScale: CGFloat = model.canvasGesture == nil
+      ? NSScreen.main?.backingScaleFactor ?? 2
+      : 1
     presenter.render(
       frame: frame,
       canvas: canvasSize,
-      scale: NSScreen.main?.backingScaleFactor ?? 2,
+      scale: renderScale,
       background: model.project.settings.background,
-      videoFrame: nil,
+      videoFrame: videoFrame,
       layoutWidth: model.project.settings.width,
       layoutHeight: model.project.settings.height
     )

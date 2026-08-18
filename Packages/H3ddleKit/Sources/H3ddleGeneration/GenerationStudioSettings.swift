@@ -197,10 +197,10 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   /// are different shapes, and switching model should not forget which
   /// resolution the other one was set to.
   public var imageCanvas: ImageCanvas
-  /// Which square LTX renders. Separate from `imageCanvas` because a lane
-  /// keeps its own choice: picking 768 for a still should not quietly make
-  /// every clip four times more expensive.
-  public var ltxCanvas: LTXCanvas
+  /// How large LTX renders. Separate from `imageCanvas` because a lane keeps
+  /// its own choice: picking 1536 for a still should not quietly make every
+  /// clip an hour long.
+  public var ltxResolution: LTXResolution
   public var denoisingSteps: Int
   public var activeDiTLayers: Int
   public var coreReuse: Int
@@ -215,7 +215,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   public init(
     canvas: GenerationCanvas,
     imageCanvas: ImageCanvas = .s1024,
-    ltxCanvas: LTXCanvas = .s512,
+    ltxResolution: LTXResolution = .p480,
     denoisingSteps: Int,
     activeDiTLayers: Int,
     coreReuse: Int,
@@ -224,7 +224,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   ) {
     self.canvas = canvas
     self.imageCanvas = imageCanvas
-    self.ltxCanvas = ltxCanvas
+    self.ltxResolution = ltxResolution
     self.denoisingSteps = denoisingSteps
     self.activeDiTLayers = activeDiTLayers
     self.coreReuse = coreReuse
@@ -235,7 +235,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case canvas
     case imageCanvas
-    case ltxCanvas
+    case ltxResolution
     case denoisingSteps
     case activeDiTLayers
     case coreReuse
@@ -250,7 +250,9 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     // the tier its own card quotes a time for.
     imageCanvas =
       try container.decodeIfPresent(ImageCanvas.self, forKey: .imageCanvas) ?? .s1024
-    ltxCanvas = try container.decodeIfPresent(LTXCanvas.self, forKey: .ltxCanvas) ?? .s512
+    ltxResolution =
+      try container.decodeIfPresent(LTXResolution.self, forKey: .ltxResolution)
+      ?? .p480
     denoisingSteps = try container.decode(Int.self, forKey: .denoisingSteps)
     activeDiTLayers = try container.decode(Int.self, forKey: .activeDiTLayers)
     coreReuse = try container.decode(Int.self, forKey: .coreReuse)
@@ -279,39 +281,66 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
   }
 }
 
-/// LTX-2.5's square canvases.
+/// LTX-2.5's frame sizes, named the way video is named: by the short edge.
 ///
-/// Unlike H3, whose canvas is fixed by the model, this one renders any
-/// multiple of 32 — the video VAE's spatial factor. These are the useful
-/// rungs of that ladder rather than the whole of it: below 384 the picture
-/// stops holding together, and above 768 a clip costs more than anyone will
-/// wait on an M-series laptop.
-public enum LTXCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
-  case s384
-  case s512
-  case s640
-  case s768
+/// The shape comes from the project's aspect ratio rather than from this, so
+/// one choice reads the same in a landscape project and a portrait one. The
+/// model has no aspect ratio it insists on — its only rule is that both sides
+/// divide by 32, and its own released example renders 960x544 rather than a
+/// square.
+///
+/// That rule is why two of these tiers do not render the number they name:
+/// 720 and 1080 are not multiples of 32, so they render 704 and 1088. The
+/// second is a happy landing — 1088 at 16:9 gives 1920x1088, which is exactly
+/// what the released example reaches when its second stage doubles 960x544.
+public enum LTXResolution: String, CaseIterable, Codable, Sendable, Identifiable {
+    case p320
+    case p480
+    case p720
+    case p1080
 
-  public var id: String { rawValue }
+    public var id: String { rawValue }
 
-  public var side: Int {
-    switch self {
-    case .s384: 384
-    case .s512: 512
-    case .s640: 640
-    case .s768: 768
+    public var label: String {
+        switch self {
+        case .p320: "320p"
+        case .p480: "480p"
+        case .p720: "720p"
+        case .p1080: "1080p"
+        }
     }
-  }
 
-  public var label: String { "\(side) × \(side)" }
+    /// The short edge actually rendered, snapped to the multiple of 32 the
+    /// video VAE insists on.
+    public var shortEdge: Int {
+        switch self {
+        case .p320: 320
+        case .p480: 480
+        case .p720: 704
+        case .p1080: 1088
+        }
+    }
 
-  /// Latent cells in one frame. The DiT's cost is linear in the token count
-  /// and the token count is this times the latent frames — measured, not
-  /// assumed: 29 s a step at 1872 tokens against 36 s at 2304.
-  public var cellsPerFrame: Int {
-    let cells = side / 32
-    return cells * cells
-  }
+    /// The frame for a project's aspect ratio: the short edge is the tier's,
+    /// and the long one follows it, rounded to the nearest legal multiple.
+    public func frame(aspect: Double) -> (width: Int, height: Int) {
+        func snap(_ value: Double) -> Int {
+            max(32, Int((value / 32).rounded()) * 32)
+        }
+        guard aspect > 0 else { return (shortEdge, shortEdge) }
+        if aspect >= 1 {
+            return (snap(Double(shortEdge) * aspect), shortEdge)
+        }
+        return (shortEdge, snap(Double(shortEdge) / aspect))
+    }
+
+    /// Latent cells in one frame at this aspect. The DiT's cost is linear in
+    /// the token count and the token count is this times the latent frames —
+    /// measured, not assumed: 29 s a step at 1872 tokens against 36 s at 2304.
+    public func cellsPerFrame(aspect: Double) -> Int {
+        let frame = self.frame(aspect: aspect)
+        return (frame.width / 32) * (frame.height / 32)
+    }
 }
 
 public struct GenerationStudioSettings: Hashable, Codable, Sendable {

@@ -22,9 +22,9 @@ public final class ProgramCompositor: @unchecked Sendable {
     Double(width) / Double(max(layoutWidth, 1))
   }
 
-  private var images: [URL: CGImage] = [:]
-  private var textImages: [TextRasterKey: CGImage] = [:]
-  private var generators: [URL: AVAssetImageGenerator] = [:]
+  private let images = NSCache<NSURL, CGImage>()
+  private let textImages = NSCache<CacheKey<TextRasterKey>, CGImage>()
+  private let generators = NSCache<NSURL, AVAssetImageGenerator>()
   private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
 
   public init(
@@ -41,6 +41,11 @@ public final class ProgramCompositor: @unchecked Sendable {
     self.layoutHeight = max(1, layoutHeight ?? height)
     self.background = background
     self.backgroundAlpha = min(max(backgroundAlpha, 0), 1)
+    images.countLimit = 12
+    images.totalCostLimit = 256 * 1_024 * 1_024
+    textImages.countLimit = 64
+    textImages.totalCostLimit = 64 * 1_024 * 1_024
+    generators.countLimit = 8
   }
 
   public convenience init(settings: ProjectSettings) {
@@ -273,28 +278,30 @@ public final class ProgramCompositor: @unchecked Sendable {
   }
 
   private func stillImage(at url: URL) -> CGImage? {
-    if let cached = images[url] { return cached }
+    let key = url as NSURL
+    if let cached = images.object(forKey: key) { return cached }
     guard FileManager.default.fileExists(atPath: url.path),
       let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
     else {
       return nil
     }
-    images[url] = image
+    images.setObject(image, forKey: key, cost: Self.cacheCost(of: image))
     return image
   }
 
   private func videoImage(at url: URL, time: TimeInterval) async -> CGImage? {
     guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let key = url as NSURL
     let generator: AVAssetImageGenerator
-    if let cached = generators[url] {
+    if let cached = generators.object(forKey: key) {
       generator = cached
     } else {
       let created = AVAssetImageGenerator(asset: AVURLAsset(url: url))
       created.appliesPreferredTrackTransform = true
       created.requestedTimeToleranceBefore = .zero
       created.requestedTimeToleranceAfter = .zero
-      generators[url] = created
+      generators.setObject(created, forKey: key)
       generator = created
     }
     let cmTime = CMTime(seconds: max(0, time), preferredTimescale: 600)
@@ -363,9 +370,10 @@ public final class ProgramCompositor: @unchecked Sendable {
       layoutHeight: layoutHeight,
       scaleBucket: bucket
     )
+    let cacheKey = CacheKey(key)
     let image: CGImage
     let layout: TextLayout
-    if let cached = textImages[key] {
+    if let cached = textImages.object(forKey: cacheKey) {
       image = cached
       layout = TextRasterizer.layout(
         overlay.item,
@@ -376,7 +384,11 @@ public final class ProgramCompositor: @unchecked Sendable {
       layoutSize: (layoutWidth, layoutHeight),
       pixelScale: pixelScale
     ) {
-      textImages[key] = raster.image
+      textImages.setObject(
+        raster.image,
+        forKey: cacheKey,
+        cost: Self.cacheCost(of: raster.image)
+      )
       image = raster.image
       layout = raster.layout
     } else {
@@ -399,6 +411,11 @@ public final class ProgramCompositor: @unchecked Sendable {
       )
     )
     context.restoreGState()
+  }
+
+  private static func cacheCost(of image: CGImage) -> Int {
+    let (cost, overflow) = image.bytesPerRow.multipliedReportingOverflow(by: image.height)
+    return overflow ? Int.max : cost
   }
 
   private func rasterize(
@@ -623,6 +640,21 @@ private struct TextRasterKey: Hashable {
   var layoutWidth: Int
   var layoutHeight: Int
   var scaleBucket: Int
+}
+
+private final class CacheKey<Value: Hashable>: NSObject {
+  let value: Value
+
+  init(_ value: Value) {
+    self.value = value
+  }
+
+  override var hash: Int { value.hashValue }
+
+  override func isEqual(_ object: Any?) -> Bool {
+    guard let other = object as? CacheKey<Value> else { return false }
+    return value == other.value
+  }
 }
 
 extension ProjectBackground {

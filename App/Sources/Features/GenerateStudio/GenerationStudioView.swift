@@ -3,6 +3,7 @@ import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleEngineProtocol
 import H3ddleGeneration
+import ImageIO
 import SwiftUI
 
 struct GenerationStudioView: View {
@@ -1666,13 +1667,16 @@ private struct StudioImageCard: View {
   var caption: String
   var onRemove: () -> Void
 
+  @State private var thumbnail: CGImage?
+
   var body: some View {
     VStack(spacing: 6) {
       ZStack(alignment: .topTrailing) {
         Group {
-          if let image = NSImage(contentsOf: url) {
-            Image(nsImage: image)
+          if let thumbnail {
+            Image(decorative: thumbnail, scale: 1)
               .resizable()
+              .interpolation(.high)
               .scaledToFill()
           } else {
             H3Color.chrome
@@ -1702,6 +1706,30 @@ private struct StudioImageCard: View {
         .foregroundStyle(H3Color.textSecondary)
         .lineLimit(1)
         .frame(width: 78)
+    }
+    .task(id: url) {
+      thumbnail = nil
+      let loaded = await Task.detached(priority: .utility) {
+        Self.loadThumbnail(at: url)
+      }.value
+      guard !Task.isCancelled else { return }
+      thumbnail = loaded
+    }
+  }
+
+  nonisolated private static func loadThumbnail(at url: URL) -> CGImage? {
+    autoreleasepool {
+      let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+        return nil
+      }
+      let thumbnailOptions: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: 156,
+        kCGImageSourceShouldCacheImmediately: true,
+      ]
+      return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
     }
   }
 }
@@ -1927,5 +1955,4 @@ private struct ModelDropdownMenu: View {
     .shadow(color: .black.opacity(0.55), radius: 20, y: 14)
   }
 }
-
 

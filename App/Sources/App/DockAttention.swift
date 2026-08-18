@@ -27,26 +27,29 @@ enum DockAttention {
 
   /// A percentage on the Dock icon while a generation runs.
   ///
-  /// The badge rather than a drawn ring: at Dock size a ring reads as
-  /// decoration, where "42%" answers the question the user actually walked
-  /// away with, and it survives being scaled into the app switcher.
+  /// This is drawn into the tile rather than assigned to `badgeLabel`.
+  /// macOS can accept and log a badge label while suppressing its rendering;
+  /// a custom tile keeps progress visible regardless of that system setting.
   static func showProgress(_ fraction: Double) {
     let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
     isRunning = true
     guard percent != shownPercent else { return }
     shownPercent = percent
     let tile = NSApp.dockTile
-    if tile.contentView != nil {
-      tile.contentView = nil
+    let view: DockIconProgressView
+    if let current = tile.contentView as? DockIconProgressView {
+      view = current
+    } else {
+      view = DockIconProgressView(frame: NSRect(origin: .zero, size: tile.size))
+      view.autoresizingMask = [.width, .height]
+      view.icon = NSApp.applicationIconImage
+      tile.contentView = view
     }
-    tile.badgeLabel = "\(percent)%"
-    // `badgeLabel` changes the tile's state, but the Dock is not required to
-    // repaint that state until asked. Redraw after both the custom view and
-    // label have reached their final values so the percentage appears on the
-    // first update as well as after a finished-marker view.
+    view.percent = percent
+    tile.badgeLabel = nil
     tile.display()
     hasWritten = true
-    log.notice("Dock badge -> \(percent, privacy: .public)%")
+    log.notice("Dock progress -> \(percent, privacy: .public)%")
   }
 
   static func markGenerationFinished() {
@@ -104,6 +107,54 @@ enum DockAttention {
     tile.display()
     hasWritten = true
     log.notice("Dock tile shows the finished marker")
+  }
+}
+
+private final class DockIconProgressView: NSView {
+  var icon: NSImage?
+  var percent = 0
+
+  override func draw(_ dirtyRect: NSRect) {
+    guard let icon else { return }
+    icon.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
+
+    let scale = bounds.width / 128
+    let font = NSFont.monospacedDigitSystemFont(
+      ofSize: max(10, 20 * scale),
+      weight: .bold
+    )
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .center
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: NSColor.white,
+      .paragraphStyle: paragraph,
+    ]
+    let label = "\(percent)%" as NSString
+    let textSize = label.size(withAttributes: attributes)
+    let verticalPadding = max(2, 3 * scale)
+    let horizontalPadding = max(4, 7 * scale)
+    let height = textSize.height + verticalPadding * 2
+    let width = max(height, textSize.width + horizontalPadding * 2)
+    let inset = max(2, 5 * scale)
+    let badge = NSRect(
+      x: bounds.maxX - width - inset,
+      y: bounds.maxY - height - inset,
+      width: width,
+      height: height
+    )
+
+    NSColor(red: 229 / 255, green: 72 / 255, blue: 77 / 255, alpha: 1).setFill()
+    NSBezierPath(roundedRect: badge, xRadius: height / 2, yRadius: height / 2).fill()
+    label.draw(
+      in: NSRect(
+        x: badge.minX,
+        y: badge.midY - textSize.height / 2,
+        width: badge.width,
+        height: textSize.height
+      ),
+      withAttributes: attributes
+    )
   }
 }
 

@@ -75,20 +75,24 @@ final class SoftwareVideoEncoder: @unchecked Sendable {
     try sink.thrownError()
   }
 
+  func completeFrames(through presentation: CMTime) throws -> [CMSampleBuffer] {
+    try completeFrames(until: presentation)
+  }
+
   func finish() throws -> [CMSampleBuffer] {
+    try completeFrames(until: .invalid)
+  }
+
+  private func completeFrames(until presentation: CMTime) throws -> [CMSampleBuffer] {
     let status = VTCompressionSessionCompleteFrames(
       session,
-      untilPresentationTimeStamp: .invalid
+      untilPresentationTimeStamp: presentation
     )
     if status != noErr {
       throw MediaExportError.failed("Software encoder could not finish (\(status)).")
     }
     try sink.thrownError()
-    let encoded = sink.encodedSamples()
-    guard !encoded.isEmpty else {
-      throw MediaExportError.failed("Software encoder produced no video frames.")
-    }
-    return encoded
+    return sink.takeEncodedSamples()
   }
 
   deinit {
@@ -113,10 +117,12 @@ private final class SampleSink: @unchecked Sendable {
     }
   }
 
-  func encodedSamples() -> [CMSampleBuffer] {
+  func takeEncodedSamples() -> [CMSampleBuffer] {
     lock.lock()
     defer { lock.unlock() }
-    return samples
+    let encoded = samples
+    samples.removeAll(keepingCapacity: true)
+    return encoded
   }
 
   func thrownError() throws {
