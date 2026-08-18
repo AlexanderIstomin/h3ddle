@@ -39,7 +39,7 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
  * constrains this app, and the decoder alone wants 12 GB of working buffers
  * at 1536 pixels.
  *
- * `rgb` receives pixels * pixels * 3 bytes, interleaved and 8-bit, which is
+ * `rgb` receives width * height * 3 bytes, interleaved and 8-bit, which is
  * what the service's PNG encoder already takes. `shaders` may be NULL to stay
  * on the CPU, which is correct and roughly twenty times slower.
  *
@@ -56,15 +56,16 @@ typedef int (*h3ddle_zimage_step)(const char *phase, int completed, int total,
  * straight back. `strength` is how much of it to discard, 1 keeping nothing
  * and matching a NULL source. Framing and resampling belong to the caller. */
 int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
-                           const char *prompt, int pixels, int steps,
+                           const char *prompt, int width, int height, int steps,
                            unsigned long long seed,
                            const unsigned char *source_rgb, float strength,
                            unsigned char *rgb,
                            h3ddle_zimage_step on_step, void *opaque,
                            char *error, size_t error_size);
-/* Whether this build renders `pixels` square; the token count must be a
- * multiple of 32, so 1440 is out where 1024 and 1536 are in. */
-int h3ddle_zimage_supports_canvas(int pixels);
+/* Whether this build renders this frame. Both sides must be a multiple of 16
+ * and their token count a multiple of 32 — the reference pads instead, and
+ * this path refuses rather than renders wrongly. */
+int h3ddle_zimage_supports_frame(int width, int height);
 
 /* LTX-2.5: a prompt in, a clip **with its own soundtrack** out.
  *

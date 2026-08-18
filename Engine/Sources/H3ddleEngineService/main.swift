@@ -734,17 +734,15 @@ private final class EngineRuntime: @unchecked Sendable {
           EngineOutput.fail(command, message: "This engine cannot run Z-Image")
           return
         }
-        let pixels = request.canvasWidth ?? 0
-        guard pixels == (request.canvasHeight ?? pixels) else {
-          EngineOutput.fail(
-            command, message: "Z-Image renders square canvases only")
-          return
-        }
-        guard h3ddle_zimage_supports_canvas(Int32(pixels)) != 0 else {
+        let width = request.canvasWidth ?? 0
+        let height = request.canvasHeight ?? 0
+        guard h3ddle_zimage_supports_frame(Int32(width), Int32(height)) != 0
+        else {
           EngineOutput.fail(
             command,
-            message: "Z-Image cannot render \(pixels) pixels square; "
-              + "256, 512, 768, 1024, 1280, 1536 and 2048 it can")
+            message: "Z-Image cannot render \(width)×\(height); both sides "
+              + "must be a multiple of 16 and their token count a multiple "
+              + "of 32")
           return
         }
         /* A start frame is the picture to work from and is honoured. The
@@ -990,38 +988,47 @@ private final class EngineRuntime: @unchecked Sendable {
   /// A picture at exactly the size the model renders, which is square.
   ///
   /// Anything else is cropped to its middle first rather than squashed: a
-  /// portrait squeezed to a square comes back as a subtly wrong-shaped face,
-  /// which reads as the model being poor rather than the framing being lost.
-  /// Cropping is the lesser harm and the one the user can see coming.
-  private func squarePixels(from url: URL, side: Int) -> [UInt8]? {
+  /// portrait squeezed to a landscape comes back as a subtly wrong-shaped
+  /// face, which reads as the model being poor rather than the framing being
+  /// lost. Cropping is the lesser harm and the one the user can see coming.
+  private func framePixels(from url: URL, width: Int, height: Int) -> [UInt8]? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
     else { return nil }
-    let edge = min(image.width, image.height)
-    guard edge > 0,
+    /* Centre-crop to the *target's* shape rather than to a square: the canvas
+     * is no longer always square, and cropping to one would letterbox a
+     * landscape source into a landscape frame. */
+    let wanted = Double(width) / Double(height)
+    var cropWidth = image.width
+    var cropHeight = Int((Double(image.width) / wanted).rounded())
+    if cropHeight > image.height {
+      cropHeight = image.height
+      cropWidth = Int((Double(image.height) * wanted).rounded())
+    }
+    guard cropWidth > 0, cropHeight > 0,
       let cropped = image.cropping(
         to: CGRect(
-          x: (image.width - edge) / 2, y: (image.height - edge) / 2,
-          width: edge, height: edge))
+          x: (image.width - cropWidth) / 2, y: (image.height - cropHeight) / 2,
+          width: cropWidth, height: cropHeight))
     else { return nil }
 
-    var pixels = [UInt8](repeating: 0, count: 4 * side * side)
+    var pixels = [UInt8](repeating: 0, count: 4 * width * height)
     let drawn: Bool = pixels.withUnsafeMutableBytes { raw in
       guard let context = CGContext(
-        data: raw.baseAddress, width: side, height: side,
-        bitsPerComponent: 8, bytesPerRow: 4 * side,
+        data: raw.baseAddress, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: 4 * width,
         space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
       else { return false }
       context.interpolationQuality = .high
-      context.draw(cropped, in: CGRect(x: 0, y: 0, width: side, height: side))
+      context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
       return true
     }
     guard drawn else { return nil }
 
     /* RGBX down to RGB, which is what the engine takes. */
-    var rgb = [UInt8](repeating: 0, count: 3 * side * side)
-    for index in 0..<(side * side) {
+    var rgb = [UInt8](repeating: 0, count: 3 * width * height)
+    for index in 0..<(width * height) {
       rgb[index * 3] = pixels[index * 4]
       rgb[index * 3 + 1] = pixels[index * 4 + 1]
       rgb[index * 3 + 2] = pixels[index * 4 + 2]
@@ -1036,14 +1043,16 @@ private final class EngineRuntime: @unchecked Sendable {
     packageDirectory: URL,
     callbackContext: GenerationCallbackContext
   ) {
-    let pixels = request.canvasWidth ?? 1024
+    let width = request.canvasWidth ?? 1024
+    let height = request.canvasHeight ?? width
     var error = [CChar](repeating: 0, count: 512)
-    var rgb = [UInt8](repeating: 0, count: 3 * pixels * pixels)
+    var rgb = [UInt8](repeating: 0, count: 3 * width * height)
     let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
 
     var source: [UInt8]? = nil
     if let frame = request.firstFrameURL {
-      guard let squared = squarePixels(from: frame, side: pixels) else {
+      guard let squared = framePixels(from: frame, width: width, height: height)
+      else {
         EngineOutput.fail(
           command, message: "That picture cannot be read as an image")
         return
@@ -1066,7 +1075,8 @@ private final class EngineRuntime: @unchecked Sendable {
               packagePath,
               shaders,
               prompt,
-              Int32(pixels),
+              Int32(width),
+              Int32(height),
               Int32(options.steps ?? 0),
               request.seed ?? 42,
               sourcePointer,
@@ -1096,9 +1106,9 @@ private final class EngineRuntime: @unchecked Sendable {
       return
     }
     var frame = h3_frame()
-    frame.width = Int32(pixels)
-    frame.height = Int32(pixels)
-    frame.stride = Int32(pixels * 3)
+    frame.width = Int32(width)
+    frame.height = Int32(height)
+    frame.stride = Int32(width * 3)
     let wrote: Bool = rgb.withUnsafeBufferPointer { pixelBuffer in
       frame.rgb = pixelBuffer.baseAddress
       guard let png = GenerationCallbackContext.encodePNG(frame) else {

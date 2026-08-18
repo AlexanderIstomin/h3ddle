@@ -26,6 +26,7 @@ public final class ProgramCompositor: @unchecked Sendable {
   private let textImages = NSCache<CacheKey<TextRasterKey>, CGImage>()
   private let generators = NSCache<NSURL, AVAssetImageGenerator>()
   private let ciContext = CIContext(options: [CIContextOption.useSoftwareRenderer: false])
+  private let pixelBufferPool: CVPixelBufferPool?
 
   public init(
     width: Int,
@@ -35,12 +36,15 @@ public final class ProgramCompositor: @unchecked Sendable {
     layoutWidth: Int? = nil,
     layoutHeight: Int? = nil
   ) {
-    self.width = max(1, width)
-    self.height = max(1, height)
+    let resolvedWidth = max(1, width)
+    let resolvedHeight = max(1, height)
+    self.width = resolvedWidth
+    self.height = resolvedHeight
     self.layoutWidth = max(1, layoutWidth ?? width)
     self.layoutHeight = max(1, layoutHeight ?? height)
     self.background = background
     self.backgroundAlpha = min(max(backgroundAlpha, 0), 1)
+    pixelBufferPool = Self.makePixelBufferPool(width: resolvedWidth, height: resolvedHeight)
     images.countLimit = 12
     images.totalCostLimit = 256 * 1_024 * 1_024
     textImages.countLimit = 64
@@ -210,19 +214,7 @@ public final class ProgramCompositor: @unchecked Sendable {
   }
 
   private func prepareCanvas() -> (buffer: CVPixelBuffer, context: CGContext)? {
-    var buffer: CVPixelBuffer?
-    let status = CVPixelBufferCreate(
-      kCFAllocatorDefault,
-      width,
-      height,
-      kCVPixelFormatType_32BGRA,
-      [
-        kCVPixelBufferCGImageCompatibilityKey: true,
-        kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-      ] as CFDictionary,
-      &buffer
-    )
-    guard status == kCVReturnSuccess, let buffer else { return nil }
+    guard let buffer = makePixelBuffer() else { return nil }
     CVPixelBufferLockBaseAddress(buffer, [])
     guard let data = CVPixelBufferGetBaseAddress(buffer),
       let context = CGContext(
@@ -241,6 +233,48 @@ public final class ProgramCompositor: @unchecked Sendable {
     }
     fillBackground(context)
     return (buffer, context)
+  }
+
+  private func makePixelBuffer() -> CVPixelBuffer? {
+    var buffer: CVPixelBuffer?
+    if let pixelBufferPool,
+      CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &buffer)
+        == kCVReturnSuccess,
+      let buffer
+    {
+      return buffer
+    }
+    let status = CVPixelBufferCreate(
+      kCFAllocatorDefault,
+      width,
+      height,
+      kCVPixelFormatType_32BGRA,
+      [
+        kCVPixelBufferCGImageCompatibilityKey: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+      ] as CFDictionary,
+      &buffer
+    )
+    return status == kCVReturnSuccess ? buffer : nil
+  }
+
+  private static func makePixelBufferPool(width: Int, height: Int) -> CVPixelBufferPool? {
+    var pool: CVPixelBufferPool?
+    let poolAttributes = [kCVPixelBufferPoolMinimumBufferCountKey: 3] as CFDictionary
+    let attributes: [CFString: Any] = [
+      kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+      kCVPixelBufferWidthKey: width,
+      kCVPixelBufferHeightKey: height,
+      kCVPixelBufferCGImageCompatibilityKey: true,
+      kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+    ]
+    let status = CVPixelBufferPoolCreate(
+      kCFAllocatorDefault,
+      poolAttributes,
+      attributes as CFDictionary,
+      &pool
+    )
+    return status == kCVReturnSuccess ? pool : nil
   }
 
   private func fillBackground(_ context: CGContext) {

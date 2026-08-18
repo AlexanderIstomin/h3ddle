@@ -27,7 +27,8 @@ typedef void (*zimage_dit_tap)(const char *stage, const float *values,
 
 typedef struct {
     qwen_weights *weights;
-    int latent_side, tokens_side, image_tokens;
+    int latent_height, latent_width;
+    int tokens_high, tokens_wide, image_tokens;
     int caption_tokens, caption_padded, sequence;
     float *cosines, *sines;
     float *unified;           /* [sequence][DIM], image half then caption half */
@@ -38,12 +39,13 @@ typedef struct {
 } zimage_dit;
 
 /* `caption` is [caption_tokens][CAP_DIM] straight from the encoder. */
-int zimage_dit_init(zimage_dit *dit, qwen_weights *weights, int latent_side,
+int zimage_dit_init(zimage_dit *dit, qwen_weights *weights,
+                    int latent_height, int latent_width,
                     const float *caption, int caption_tokens,
                     zimage_gpu *device, char *error, size_t error_size);
 void zimage_dit_release(zimage_dit *dit);
 
-/* `latent` and `velocity` are both [16][side][side]; `timestep` is what the
+/* `latent` and `velocity` are both [16][height][width]; `timestep` is what the
  * sampler feeds the model, namely 1 - sigma. */
 int zimage_dit_step(zimage_dit *dit, const float *latent, float timestep,
                     float *velocity, zimage_dit_tap tap, void *context);

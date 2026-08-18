@@ -58,9 +58,9 @@ static int load_block(qwen_weights *store, const char *prefix,
  * spreads across the two spatial ones. Image tokens come first in the
  * sequence, which is the opposite of most joint-attention models. */
 static void build_positions(const zimage_dit *dit, float *pos_ids) {
-    for (int row = 0; row < dit->tokens_side; row++)
-        for (int column = 0; column < dit->tokens_side; column++) {
-            float *ids = pos_ids + ((size_t)row * dit->tokens_side + column) * 3;
+    for (int row = 0; row < dit->tokens_high; row++)
+        for (int column = 0; column < dit->tokens_wide; column++) {
+            float *ids = pos_ids + ((size_t)row * dit->tokens_wide + column) * 3;
             ids[0] = (float)(dit->caption_padded + 1);
             ids[1] = (float)row;
             ids[2] = (float)column;
@@ -72,7 +72,8 @@ static void build_positions(const zimage_dit *dit, float *pos_ids) {
     }
 }
 
-int zimage_dit_init(zimage_dit *dit, qwen_weights *store, int latent_side,
+int zimage_dit_init(zimage_dit *dit, qwen_weights *store,
+                    int latent_height, int latent_width,
                     const float *caption, int caption_tokens,
                     zimage_gpu *device, char *error, size_t error_size) {
     memset(dit, 0, sizeof(*dit));
@@ -81,18 +82,21 @@ int zimage_dit_init(zimage_dit *dit, qwen_weights *store, int latent_side,
     scratch_error_size = error_size;
 
     dit->weights = store;
-    dit->latent_side = latent_side;
-    dit->tokens_side = latent_side / ZIMAGE_PATCH;
-    dit->image_tokens = dit->tokens_side * dit->tokens_side;
+    dit->latent_height = latent_height;
+    dit->latent_width = latent_width;
+    dit->tokens_high = latent_height / ZIMAGE_PATCH;
+    dit->tokens_wide = latent_width / ZIMAGE_PATCH;
+    dit->image_tokens = dit->tokens_high * dit->tokens_wide;
     dit->caption_tokens = caption_tokens;
     dit->caption_padded = caption_tokens +
         (ZIMAGE_SEQ_MULTIPLE - caption_tokens % ZIMAGE_SEQ_MULTIPLE) % ZIMAGE_SEQ_MULTIPLE;
     dit->sequence = dit->image_tokens + dit->caption_padded;
     if (dit->image_tokens % ZIMAGE_SEQ_MULTIPLE) {
         snprintf(error, error_size,
-                 "latent side %d gives %d image tokens, which is not a multiple "
-                 "of %d and would need padding this path does not implement",
-                 latent_side, dit->image_tokens, ZIMAGE_SEQ_MULTIPLE);
+                 "a %dx%d latent gives %d image tokens, which is not a "
+                 "multiple of %d and would need padding this path does not "
+                 "implement", latent_width, latent_height, dit->image_tokens,
+                 ZIMAGE_SEQ_MULTIPLE);
         return 0;
     }
 
@@ -193,16 +197,18 @@ int zimage_dit_step(zimage_dit *dit, const float *latent, float timestep,
 
     /* ---- patchify and embed ------------------------------------------ */
     /* Channel varies fastest within a patch. */
-    const int side = dit->latent_side, span = dit->tokens_side;
-    for (int row = 0; row < span; row++)
-        for (int column = 0; column < span; column++) {
-            float *patch = dit->patches + ((size_t)row * span + column) * PATCH_DIM;
+    const int height = dit->latent_height, width = dit->latent_width;
+    const int rows = dit->tokens_high, columns = dit->tokens_wide;
+    for (int row = 0; row < rows; row++)
+        for (int column = 0; column < columns; column++) {
+            float *patch =
+                dit->patches + ((size_t)row * columns + column) * PATCH_DIM;
             for (int y = 0; y < ZIMAGE_PATCH; y++)
                 for (int x = 0; x < ZIMAGE_PATCH; x++)
                     for (int channel = 0; channel < ZIMAGE_LATENT_CHANNELS; channel++)
                         patch[(y * ZIMAGE_PATCH + x) * ZIMAGE_LATENT_CHANNELS + channel] =
-                            latent[((size_t)channel * side +
-                                    (row * ZIMAGE_PATCH + y)) * side +
+                            latent[((size_t)channel * height +
+                                    (row * ZIMAGE_PATCH + y)) * width +
                                    (column * ZIMAGE_PATCH + x)];
         }
     const uint16_t *x_weight, *x_bias;
@@ -285,18 +291,19 @@ head:
     emit(tap, context, "head", dit->head, (size_t)dit->sequence * PATCH_DIM);
 
     /* ---- unpatchify, image tokens only -------------------------------- */
-    for (int row = 0; row < span; row++)
-        for (int column = 0; column < span; column++) {
-            const float *patch = dit->head + ((size_t)row * span + column) * PATCH_DIM;
+    for (int row = 0; row < rows; row++)
+        for (int column = 0; column < columns; column++) {
+            const float *patch =
+                dit->head + ((size_t)row * columns + column) * PATCH_DIM;
             for (int y = 0; y < ZIMAGE_PATCH; y++)
                 for (int x = 0; x < ZIMAGE_PATCH; x++)
                     for (int channel = 0; channel < ZIMAGE_LATENT_CHANNELS; channel++)
-                        velocity[((size_t)channel * side +
-                                  (row * ZIMAGE_PATCH + y)) * side +
+                        velocity[((size_t)channel * height +
+                                  (row * ZIMAGE_PATCH + y)) * width +
                                  (column * ZIMAGE_PATCH + x)] =
                             patch[(y * ZIMAGE_PATCH + x) * ZIMAGE_LATENT_CHANNELS + channel];
         }
     emit(tap, context, "output", velocity,
-         (size_t)ZIMAGE_LATENT_CHANNELS * side * side);
+         (size_t)ZIMAGE_LATENT_CHANNELS * height * width);
     return 1;
 }

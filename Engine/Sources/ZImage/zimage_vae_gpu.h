@@ -26,27 +26,31 @@ typedef struct zimage_vae_gpu zimage_vae_gpu;
 
 /* `device` may be an existing context to share, or NULL to create one. */
 zimage_vae_gpu *zimage_vae_gpu_create(const char *shaders, const char *decoder,
-                                      h3_gpu *device, int max_side,
+                                      h3_gpu *device, int max_height,
+                                      int max_width,
                                       char *error, size_t error_size);
 void zimage_vae_gpu_release(zimage_vae_gpu *vae);
 
-/* `latent` is [16][side][side] and already unscaled; `image` receives
- * [3][side*8][side*8], both channel-major as the CPU path has them. */
-int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent, int side,
+/* `latent` is [16][height][width] and already unscaled; `image` receives
+ * [3][height*8][width*8], both channel-major as the CPU path has them. The
+ * two sides are independent; see the CPU header. */
+int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent,
+                          int height, int width,
                           float *image, char *error, size_t error_size);
 
 /* The same autoencoder the other way, for working from a picture. Built
- * separately because it holds different weights, and `max_side` is the
- * *picture's* side here where the decoder's is the latent's.
+ * separately because it holds different weights, and the maxima are the
+ * *picture's* here where the decoder's are the latent's.
  *
- * `image` is [3][side][side] and `latent` receives [16][side/8][side/8], both
+ * `image` is [3][height][width] and `latent` receives [16][h/8][w/8], both
  * channel-major, matching the CPU pair exactly. Released with the same call. */
 zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
                                               const char *encoder,
-                                              h3_gpu *device, int max_side,
+                                              h3_gpu *device, int max_height,
+                                              int max_width,
                                               char *error, size_t error_size);
 int zimage_vae_gpu_encode(zimage_vae_gpu *vae, const float *image,
-                          int image_side, float *latent,
+                          int image_height, int image_width, float *latent,
                           char *error, size_t error_size);
 
 #endif

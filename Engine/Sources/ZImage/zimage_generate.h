@@ -23,13 +23,15 @@ typedef struct {
      * and roughly twenty times slower. */
     const char *shaders;
     const char *prompt;
-    /* Picture side in pixels; must be a multiple of 16, and its token count
-     * a multiple of 32. 256, 512, 768, 1024, 1280, 1536 and 2048 qualify. */
-    int pixels;
+    /* Both a multiple of 16, and their token count — (width/16) * (height/16)
+     * — a multiple of 32. The two sides are independent: the reference takes
+     * height and width separately and pads the token count, and this path
+     * refuses what would need padding rather than rendering it wrongly. */
+    int width, height;
     int steps;              /* 0 takes ZIMAGE_DEFAULT_STEPS */
     uint64_t seed;
 
-    /* img2img. `source` is a picture to work from: 3 * pixels * pixels floats,
+    /* img2img. `source` is a picture to work from: 3 * width * height floats,
      * channel-major, in [-1, 1] — the same layout and range this call returns,
      * so a render can be fed straight back in. It must already be the
      * generation size; resampling belongs to the caller, which knows what the
@@ -56,15 +58,15 @@ typedef struct {
 typedef int (*zimage_progress)(const char *phase, int step, int steps,
                                void *context);
 
-/* `image` receives 3 * pixels * pixels floats, channel-major, in [-1, 1] —
+/* `image` receives 3 * width * height floats, channel-major, in [-1, 1] —
  * the range the reference's own post-processing expects. Returns 0 on failure
  * with `error` set, and 0 with an empty `error` when the caller cancelled. */
 int zimage_generate(const zimage_request *request, float *image,
                     zimage_progress progress, void *context,
                     char *error, size_t error_size);
 
-/* Whether this build can render `pixels` square, so a caller can refuse early
+/* Whether this build can render this frame, so a caller can refuse early
  * rather than after loading fourteen gigabytes. */
-int zimage_supports_canvas(int pixels);
+int zimage_supports_frame(int width, int height);
 
 #endif

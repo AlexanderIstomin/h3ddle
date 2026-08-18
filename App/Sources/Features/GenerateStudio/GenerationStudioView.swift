@@ -660,9 +660,9 @@ struct GenerationStudioView: View {
           // Hidden rather than shown-and-ignored while a square-only model is
           // drawing: offering a ratio the renderer cannot honour is how the
           // lane came to fail with "renders square canvases only".
-          // Z-Image is the only model here that renders a fixed square and
-          // ignores this. LTX takes its shape from it, and H3 its canvas.
-          if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
+          // Every model here takes its shape from this now: H3 its canvas,
+          // and both prompt-only models the aspect their tier is stretched to.
+          if kind != .audio {
             labeled("ASPECT RATIO") {
               HStack(spacing: 9) {
                 ForEach(ProgramAspectRatio.allCases) { ratio in
@@ -922,14 +922,24 @@ struct GenerationStudioView: View {
   /// Two parameters over three points is the honest version.
   private func ltxMinutes(_ tier: LTXResolution) -> Double {
     let latentFrames = (ltxFrames - 1) / 8 + 1
-    let cells = tier.cellsPerFrame(aspect: Double(model.studioAspect.fraction))
+    let cells = tier.cellsPerFrame(aspect: studioAspect)
     return (40.3 + 0.0195 * Double(latentFrames * cells * knobs.denoisingSteps)) / 60
+  }
+
+  /// The project's aspect as a plain fraction, which is what both engines'
+  /// tier maths takes.
+  private var studioAspect: Double { Double(model.studioAspect.fraction) }
+
+  /// The frame a Z-Image tier renders at this project's shape.
+  private func imageFrameLabel(_ canvas: ImageCanvas) -> String {
+    let frame = canvas.frame(aspect: studioAspect)
+    return "\(frame.width)×\(frame.height)"
   }
 
   /// The frame a tier actually renders at this project's shape, shown beside
   /// the tier because two of them do not render the number they name.
   private func ltxFrameLabel(_ tier: LTXResolution) -> String {
-    let frame = tier.frame(aspect: Double(model.studioAspect.fraction))
+    let frame = tier.frame(aspect: studioAspect)
     return "\(frame.width)×\(frame.height)"
   }
 
@@ -937,7 +947,8 @@ struct GenerationStudioView: View {
     labeled("RESOLUTION") {
       Menu {
         ForEach(ImageCanvas.allCases) { canvas in
-          Button("\(canvas.label)  ·  ~\(minutesLabel(canvas.approximateMinutes))") {
+          Button("\(canvas.label)  ·  \(imageFrameLabel(canvas))  ·  "
+            + "~\(minutesLabel(canvas.approximateMinutes(aspect: studioAspect)))") {
             model.updateStudioKnobs { $0.imageCanvas = canvas }
           }
         }
@@ -962,7 +973,8 @@ struct GenerationStudioView: View {
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       Text("Square only in this build, so the project's aspect ratio does "
-        + "not apply. About \(minutesLabel(knobs.imageCanvas.approximateMinutes)) "
+        + "not apply. About "
+        + "\(minutesLabel(knobs.imageCanvas.approximateMinutes(aspect: studioAspect))) "
         + "on an M1 Pro; the first render after launch takes longer.")
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
@@ -1471,9 +1483,9 @@ struct GenerationStudioView: View {
     // and silently charged to every video.
     let size: (width: Int, height: Int) =
       isLTX
-      ? knobs.ltxResolution.frame(aspect: Double(model.studioAspect.fraction))
+      ? knobs.ltxResolution.frame(aspect: studioAspect)
       : (promptOnlyModel
-        ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
+        ? knobs.imageCanvas.frame(aspect: studioAspect)
         : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction)))
     model.generate(
       prompt: model.generationPrompt,

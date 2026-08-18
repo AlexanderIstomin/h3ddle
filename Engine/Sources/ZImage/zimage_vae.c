@@ -341,11 +341,12 @@ static void emit(zimage_vae_tap tap, void *context, const char *stage,
     if (tap) tap(stage, values, count, context);
 }
 
-int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
+int zimage_vae_decode(qwen_weights *decoder, const float *latent,
+                      int height_in, int width_in,
                       float *image, zimage_vae_tap tap, void *context) {
     model = decoder;
     const int channels[4] = {512, 512, 256, 128};   /* per up block, in order */
-    const int final_side = side * 8;
+    const int final_height = height_in * 8, final_width = width_in * 8;
 
     /* The widest the stack ever gets, in floats. Walking the stages at side s:
      * conv_in and mid hold 512s^2; the up blocks hold 512*(2s)^2 and
@@ -353,7 +354,7 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
      * 256*(8s)^2, before block 3 halves the channels again to 128*(8s)^2. The
      * third upsample is therefore the peak — 256 channels already at full
      * size — and nothing later exceeds it. */
-    const size_t peak = (size_t)256 * (size_t)final_side * (size_t)final_side;
+    const size_t peak = (size_t)256 * (size_t)final_height * (size_t)final_width;
     float *x = calloc(peak, sizeof(float));
     float *scratch = calloc(peak, sizeof(float));
     float *branch = calloc(peak, sizeof(float));
@@ -364,8 +365,8 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
     }
 
     conv2d conv_in = take_conv("decoder.conv_in", -1, -1, 512, 16, 3, 1);
-    convolve(&conv_in, latent, x, side, side);
-    emit(tap, context, "conv_in", x, (size_t)512 * side * side);
+    convolve(&conv_in, latent, x, height_in, width_in);
+    emit(tap, context, "conv_in", x, (size_t)512 * height_in * width_in);
 
     /* mid block: resnet, attention, resnet */
     for (int index = 0; index < 2; index++) {
@@ -376,7 +377,7 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
             take_conv("decoder.mid_block.resnets.%d.conv2", index, -1, 512, 512, 3, 1),
             {NULL, NULL, 0, 0, 0},
         };
-        resnet_forward(&block, x, 512, 512, side, side, scratch, branch);
+        resnet_forward(&block, x, 512, 512, height_in, width_in, scratch, branch);
         if (index == 0) {
             norm2d norm = take_norm("decoder.mid_block.attentions.0.group_norm",
                                     -1, -1, 512);
@@ -390,12 +391,12 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
                 take_vector("decoder.mid_block.attentions.0.to_v.bias", 512),
                 take_linear("decoder.mid_block.attentions.0.to_out.0.weight", 512, 512),
                 take_vector("decoder.mid_block.attentions.0.to_out.0.bias", 512),
-                x, 512, side, side, scratch);
+                x, 512, height_in, width_in, scratch);
         }
     }
-    emit(tap, context, "mid_block", x, (size_t)512 * side * side);
+    emit(tap, context, "mid_block", x, (size_t)512 * height_in * width_in);
 
-    int current = 512, height = side, width = side;
+    int current = 512, height = height_in, width = width_in;
     for (int block_index = 0; block_index < 4; block_index++) {
         const int out_channels = channels[block_index];
         for (int index = 0; index < 3; index++) {
@@ -436,7 +437,7 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
     convolve(&conv_out, scratch, image, height, width);
     emit(tap, context, "image", image, (size_t)3 * height * width);
 
-    (void)final_side;
+    (void)final_height; (void)final_width;
     free(x); free(scratch); free(branch); free(spare);
     return 1;
 }
@@ -458,16 +459,17 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
  * `image` is [3][image_side][image_side] roughly in [-1, 1]; `latent`
  * receives [16][image_side/8][image_side/8] raw, before the DiT's scale and
  * shift. */
-int zimage_vae_encode(qwen_weights *encoder, const float *image, int image_side,
+int zimage_vae_encode(qwen_weights *encoder, const float *image,
+                      int image_height, int image_width,
                       float *latent, zimage_vae_tap tap, void *context) {
     model = encoder;
-    const int side = image_side;
+
     const int channels[4] = {128, 256, 512, 512};   /* per down block, in order */
 
     /* The stack is widest at the start: 128 channels at the full picture.
      * Every later stage doubles the channels only after quartering the area,
      * so 128*s^2 is the peak and nothing after it comes close. */
-    const size_t peak = (size_t)128 * (size_t)side * (size_t)side;
+    const size_t peak = (size_t)128 * (size_t)image_height * (size_t)image_width;
     float *x = calloc(peak, sizeof(float));
     float *scratch = calloc(peak, sizeof(float));
     float *branch = calloc(peak, sizeof(float));
@@ -478,10 +480,10 @@ int zimage_vae_encode(qwen_weights *encoder, const float *image, int image_side,
     }
 
     conv2d conv_in = take_conv("encoder.conv_in", -1, -1, 128, 3, 3, 1);
-    convolve(&conv_in, image, x, side, side);
-    emit(tap, context, "conv_in", x, (size_t)128 * side * side);
+    convolve(&conv_in, image, x, image_height, image_width);
+    emit(tap, context, "conv_in", x, (size_t)128 * image_height * image_width);
 
-    int current = 128, height = side, width = side;
+    int current = 128, height = image_height, width = image_width;
     for (int block_index = 0; block_index < 4; block_index++) {
         const int out_channels = channels[block_index];
         for (int index = 0; index < 2; index++) {

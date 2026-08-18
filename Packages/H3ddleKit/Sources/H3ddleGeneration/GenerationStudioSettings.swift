@@ -59,30 +59,58 @@ public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifia
 /// full picture — about 12 GB there — and starts at 512 because below it the
 /// model stops following the prompt reliably.
 public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
-  case s512
-  case s768
-  case s1024
-  case s1280
-  case s1536
+  case p512
+  case p768
+  case p1024
+  case p1280
+  case p1536
 
   public var id: String { rawValue }
 
-  public var side: Int {
+  /// The short edge this tier names. Z-Image's rule is that both sides divide
+  /// by 16 and their token count — (width/16) x (height/16) — divides by 32;
+  /// every one of these lands on that at every aspect the app offers, which a
+  /// test checks rather than this comment asserting.
+  public var shortEdge: Int {
     switch self {
-    case .s512: 512
-    case .s768: 768
-    case .s1024: 1024
-    case .s1280: 1280
-    case .s1536: 1536
+    case .p512: 512
+    case .p768: 768
+    case .p1024: 1024
+    case .p1280: 1280
+    case .p1536: 1536
     }
   }
 
-  public var label: String { "\(side) × \(side)" }
+  public var label: String { "\(shortEdge)p" }
 
-  /// Image tokens at this size, which is what the transformer's cost tracks.
-  public var tokens: Int {
-    let side = self.side / 8 / 2
-    return side * side
+  /// The frame for a project's aspect ratio: the short edge is the tier's and
+  /// the long one follows, nudged up until the token count is legal.
+  ///
+  /// The model itself has no aspect ratio it insists on — the released
+  /// pipeline takes height and width separately and pads the token count. This
+  /// engine refuses what would need padding rather than rendering it wrongly,
+  /// so the nudge is what keeps every offered frame inside that.
+  public func frame(aspect: Double) -> (width: Int, height: Int) {
+    func snap(_ value: Double) -> Int { max(16, Int((value / 16).rounded()) * 16) }
+    func legal(_ width: Int, _ height: Int) -> Bool {
+      ((width / 16) * (height / 16)) % 32 == 0
+    }
+    guard aspect > 0 else { return (shortEdge, shortEdge) }
+    var width = aspect >= 1 ? snap(Double(shortEdge) * aspect) : shortEdge
+    var height = aspect >= 1 ? shortEdge : snap(Double(shortEdge) / aspect)
+    var tries = 0
+    while !legal(width, height), tries < 8 {
+      if aspect >= 1 { width += 16 } else { height += 16 }
+      tries += 1
+    }
+    return (width, height)
+  }
+
+  /// Image tokens at this size and shape, which is what the transformer's cost
+  /// tracks.
+  public func tokens(aspect: Double) -> Int {
+    let frame = self.frame(aspect: aspect)
+    return (frame.width / 16) * (frame.height / 16)
   }
 
   /// Roughly what a whole render costs on an M1 Pro at eight passes, so the
@@ -96,9 +124,9 @@ public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   /// launch runs longer than any of these while 14 GB of weights are read
   /// from disk for the first time; a measured 1024 came in at 322s cold
   /// against 234s warm.
-  public var approximateMinutes: Double {
+  public func approximateMinutes(aspect: Double) -> Double {
     // 25.9s of fixed cost plus 50.9ms a token, from the two measured ends.
-    (25.9 + 0.0509 * Double(tokens)) / 60
+    (25.9 + 0.0509 * Double(tokens(aspect: aspect))) / 60
   }
 }
 
@@ -214,7 +242,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
 
   public init(
     canvas: GenerationCanvas,
-    imageCanvas: ImageCanvas = .s1024,
+    imageCanvas: ImageCanvas = .p1024,
     ltxResolution: LTXResolution = .p480,
     denoisingSteps: Int,
     activeDiTLayers: Int,
@@ -249,7 +277,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     // Settings persisted before a dedicated image model existed decode to
     // the tier its own card quotes a time for.
     imageCanvas =
-      try container.decodeIfPresent(ImageCanvas.self, forKey: .imageCanvas) ?? .s1024
+      try container.decodeIfPresent(ImageCanvas.self, forKey: .imageCanvas) ?? .p1024
     ltxResolution =
       try container.decodeIfPresent(LTXResolution.self, forKey: .ltxResolution)
       ?? .p480

@@ -21,9 +21,14 @@
 typedef void (*zimage_vae_tap)(const char *stage, const float *values,
                                size_t count, void *context);
 
-/* `latent` is [16][side][side] and already unscaled; `image` must hold
- * 3 * (side*8) * (side*8) floats, roughly in [-1, 1]. Returns 0 on failure. */
-int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
+/* `latent` is [16][height][width] and already unscaled; `image` must hold
+ * 3 * (height*8) * (width*8) floats, roughly in [-1, 1].
+ *
+ * The two sides are independent: this stack is a convolution tower and was
+ * always rectangular inside, so a square was a restriction of the entry point
+ * rather than of the arithmetic. Returns 0 on failure. */
+int zimage_vae_decode(qwen_weights *decoder, const float *latent,
+                      int height, int width,
                       float *image, zimage_vae_tap tap, void *context);
 
 #define ZIMAGE_VAE_LATENT_CHANNELS 16
@@ -35,7 +40,8 @@ int zimage_vae_decode(qwen_weights *decoder, const float *latent, int side,
  * receives [16][image_side/8][image_side/8], raw — the caller applies the
  * scale and shift, exactly as it removes them before decoding.
  * `image_side` must be a multiple of 8. Returns 0 on failure. */
-int zimage_vae_encode(qwen_weights *encoder, const float *image, int image_side,
+int zimage_vae_encode(qwen_weights *encoder, const float *image,
+                      int image_height, int image_width,
                       float *latent, zimage_vae_tap tap, void *context);
 
 #endif

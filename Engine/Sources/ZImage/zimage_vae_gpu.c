@@ -136,7 +136,8 @@ static h3_gpu_tensor *take_vector(zimage_vae_gpu *vae, const char *name,
 }
 
 zimage_vae_gpu *zimage_vae_gpu_create(const char *shaders, const char *decoder,
-                                      h3_gpu *device, int max_side,
+                                      h3_gpu *device, int max_height,
+                                      int max_width,
                                       char *error, size_t error_size) {
     if (!device && !h3_gpu_prepare(shaders, error, error_size)) return NULL;
     zimage_vae_gpu *vae = calloc(1, sizeof(*vae));
@@ -148,7 +149,8 @@ zimage_vae_gpu *zimage_vae_gpu_create(const char *shaders, const char *decoder,
 
     /* The widest the stack gets: the third upsample carries 256 channels at
      * the full picture size, and nothing later exceeds it. */
-    const size_t peak = (size_t)256 * (size_t)(max_side * 8) * (size_t)(max_side * 8);
+    const size_t peak = (size_t)256 * (size_t)(max_height * 8) *
+                        (size_t)(max_width * 8);
     for (int index = 0; index < 5; index++) {
         vae->work[index] = h3_gpu_tensor_new_f32(vae->gpu, peak);
         if (!vae->work[index]) {
@@ -326,40 +328,44 @@ static int run_attention(zimage_vae_gpu *vae, int height, int width,
     return 1;
 }
 
-int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent, int side,
+int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent,
+                          int height_in, int width_in,
                           float *image, char *error, size_t error_size) {
     if (vae->is_encoder)
         return fail(error, error_size, "this autoencoder was built to encode");
-    const int final_side = side * 8;
-    if ((size_t)256 * final_side * final_side > vae->work_elements)
+    const int final_height = height_in * 8, final_width = width_in * 8;
+    if ((size_t)256 * final_height * final_width > vae->work_elements)
         return fail(error, error_size, "%d is larger than this was sized for",
-                    side);
+                    height_in, width_in);
 
     /* Channel-major in, channel-last on the device. */
-    float *staged = malloc((size_t)LATENT_CHANNELS * side * side * sizeof(float));
+    float *staged =
+        malloc((size_t)LATENT_CHANNELS * height_in * width_in * sizeof(float));
     if (!staged) return fail(error, error_size, "out of memory");
-    for (int y = 0; y < side; y++)
-        for (int x = 0; x < side; x++)
+    for (int y = 0; y < height_in; y++)
+        for (int x = 0; x < width_in; x++)
             for (int channel = 0; channel < LATENT_CHANNELS; channel++)
-                staged[((size_t)y * side + x) * LATENT_CHANNELS + channel] =
-                    latent[((size_t)channel * side + y) * side + x];
+                staged[((size_t)y * width_in + x) * LATENT_CHANNELS + channel] =
+                    latent[((size_t)channel * height_in + y) * width_in + x];
     const int uploaded = h3_gpu_tensor_write_f32(
-        vae->work[1], staged, (size_t)LATENT_CHANNELS * side * side);
+        vae->work[1], staged, (size_t)LATENT_CHANNELS * height_in * width_in);
     free(staged);
     if (!uploaded) return fail(error, error_size, "cannot upload the latent");
 
     if (!h3_gpu_begin(vae->gpu)) return fail(error, error_size, "cannot begin");
-    if (!run_conv(vae, &vae->conv_in, vae->work[0], vae->work[1], side, side,
+    if (!run_conv(vae, &vae->conv_in, vae->work[0], vae->work[1], height_in,
+                  width_in,
                   error, error_size)) return 0;
 
     for (int index = 0; index < 2; index++) {
         if (!run_resnet(vae, &vae->mid[index], MID_CHANNELS, MID_CHANNELS,
-                        side, side, error, error_size)) return 0;
-        if (index == 0 && !run_attention(vae, side, side, error, error_size))
+                        height_in, width_in, error, error_size)) return 0;
+        if (index == 0 &&
+            !run_attention(vae, height_in, width_in, error, error_size))
             return 0;
     }
 
-    int current = MID_CHANNELS, height = side, width = side;
+    int current = MID_CHANNELS, height = height_in, width = width_in;
     for (int block = 0; block < UP_BLOCKS; block++) {
         const int out_channels = CHANNELS[block];
         for (int index = 0; index < RESNETS; index++) {
@@ -413,7 +419,8 @@ int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent, int side,
  */
 zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
                                               const char *encoder,
-                                              h3_gpu *device, int max_side,
+                                              h3_gpu *device, int max_height,
+                                              int max_width,
                                               char *error, size_t error_size) {
     if (!device && !h3_gpu_prepare(shaders, error, error_size)) return NULL;
     zimage_vae_gpu *vae = calloc(1, sizeof(*vae));
@@ -426,7 +433,8 @@ zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
 
     /* Widest at the start: 128 channels at the whole picture. Every later
      * stage doubles the channels only after quartering the area. */
-    const size_t peak = (size_t)DOWN_CHANNELS[0] * (size_t)max_side * (size_t)max_side;
+    const size_t peak = (size_t)DOWN_CHANNELS[0] * (size_t)max_height *
+                        (size_t)max_width;
     for (int index = 0; index < 5; index++) {
         vae->work[index] = h3_gpu_tensor_new_f32(vae->gpu, peak);
         if (!vae->work[index]) {
@@ -555,33 +563,34 @@ static int run_downsample(zimage_vae_gpu *vae, const conv *c, int height,
 }
 
 int zimage_vae_gpu_encode(zimage_vae_gpu *vae, const float *image,
-                          int image_side, float *latent,
+                          int image_height, int image_width, float *latent,
                           char *error, size_t error_size) {
     if (!vae->is_encoder)
         return fail(error, error_size, "this autoencoder was built to decode");
-    if ((size_t)DOWN_CHANNELS[0] * image_side * image_side > vae->work_elements)
+    if ((size_t)DOWN_CHANNELS[0] * image_height * image_width >
+        vae->work_elements)
         return fail(error, error_size, "%d is larger than this was sized for",
-                    image_side);
+                    image_height, image_width);
 
     /* Channel-major in, channel-last on the device. */
-    const size_t pixels = (size_t)image_side * image_side;
+    const size_t pixels = (size_t)image_height * image_width;
     float *staged = malloc(pixels * IMAGE_CHANNELS * sizeof(float));
     if (!staged) return fail(error, error_size, "out of memory");
-    for (int y = 0; y < image_side; y++)
-        for (int x = 0; x < image_side; x++)
+    for (int y = 0; y < image_height; y++)
+        for (int x = 0; x < image_width; x++)
             for (int channel = 0; channel < IMAGE_CHANNELS; channel++)
-                staged[((size_t)y * image_side + x) * IMAGE_CHANNELS + channel] =
-                    image[((size_t)channel * image_side + y) * image_side + x];
+                staged[((size_t)y * image_width + x) * IMAGE_CHANNELS + channel] =
+                    image[((size_t)channel * image_height + y) * image_width + x];
     const int uploaded = h3_gpu_tensor_write_f32(vae->work[1], staged,
                                                  pixels * IMAGE_CHANNELS);
     free(staged);
     if (!uploaded) return fail(error, error_size, "cannot upload the picture");
 
     if (!h3_gpu_begin(vae->gpu)) return fail(error, error_size, "cannot begin");
-    if (!run_conv(vae, &vae->conv_in, vae->work[0], vae->work[1], image_side,
-                  image_side, error, error_size)) return 0;
+    if (!run_conv(vae, &vae->conv_in, vae->work[0], vae->work[1], image_height,
+                  image_width, error, error_size)) return 0;
 
-    int current = DOWN_CHANNELS[0], height = image_side, width = image_side;
+    int current = DOWN_CHANNELS[0], height = image_height, width = image_width;
     for (int block = 0; block < UP_BLOCKS; block++) {
         const int out_channels = DOWN_CHANNELS[block];
         for (int index = 0; index < DOWN_RESNETS; index++) {

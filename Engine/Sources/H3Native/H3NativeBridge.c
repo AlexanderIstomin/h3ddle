@@ -448,12 +448,12 @@ static int zimage_bridge_step(const char *phase, int step, int steps,
     return bridge->on_step(phase, step, steps, bridge->opaque);
 }
 
-int h3ddle_zimage_supports_canvas(int pixels) {
-    return zimage_supports_canvas(pixels);
+int h3ddle_zimage_supports_frame(int width, int height) {
+    return zimage_supports_frame(width, height);
 }
 
 int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
-                           const char *prompt, int pixels, int steps,
+                           const char *prompt, int width, int height, int steps,
                            unsigned long long seed,
                            const unsigned char *source_rgb, float strength,
                            unsigned char *rgb,
@@ -463,7 +463,7 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
         snprintf(error, error_size, "somewhere to put the picture is required");
         return 0;
     }
-    const size_t area = (size_t)pixels * pixels;
+    const size_t area = (size_t)width * height;
     const size_t count = (size_t)3 * area;
 
     /* Interleaved 8-bit up to channel-major [-1, 1]: the exact inverse of the
@@ -486,7 +486,8 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
         .package = package_directory,
         .shaders = shaders,
         .prompt = prompt,
-        .pixels = pixels,
+        .width = width,
+        .height = height,
         .steps = steps,
         .seed = seed,
         .source = source,
@@ -495,7 +496,8 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
     float *planes = malloc(count * sizeof(float));
     if (!planes) {
         free(source);
-        snprintf(error, error_size, "out of memory for a %d pixel picture", pixels);
+        snprintf(error, error_size, "out of memory for a %dx%d picture",
+                 width, height);
         return 0;
     }
     zimage_bridge_context bridge = {on_step, opaque};

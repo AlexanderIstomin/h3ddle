@@ -39,14 +39,15 @@ static int fail(char *error, size_t error_size, const char *format, ...) {
     return 0;
 }
 
-int zimage_supports_canvas(int pixels) {
-    if (pixels < 128 || pixels % (VAE_SCALE * ZIMAGE_PATCH)) return 0;
-    const int side = pixels / VAE_SCALE;
-    const int tokens_side = side / ZIMAGE_PATCH;
+int zimage_supports_frame(int width, int height) {
+    if (width < 128 || width % (VAE_SCALE * ZIMAGE_PATCH)) return 0;
+    if (height < 128 || height % (VAE_SCALE * ZIMAGE_PATCH)) return 0;
+    const int tokens_wide = width / VAE_SCALE / ZIMAGE_PATCH;
+    const int tokens_high = height / VAE_SCALE / ZIMAGE_PATCH;
     /* The reference pads image tokens to a multiple of 32; this path asserts
      * instead, so canvases needing padding are refused rather than rendered
      * wrongly. 1440 gives 8100 tokens and does not qualify. */
-    return (tokens_side * tokens_side) % ZIMAGE_SEQ_MULTIPLE == 0;
+    return (tokens_wide * tokens_high) % ZIMAGE_SEQ_MULTIPLE == 0;
 }
 
 /* A seeded normal, so a seed and settings reproduce a picture exactly.
@@ -71,13 +72,15 @@ int zimage_generate(const zimage_request *request, float *image,
     if (!request || !request->package || !request->prompt || !image)
         return fail(error, error_size, "a package, a prompt and somewhere to "
                                        "put the picture are all required");
-    if (!zimage_supports_canvas(request->pixels))
+    if (!zimage_supports_frame(request->width, request->height))
         return fail(error, error_size,
-                    "%d pixels square is not a canvas this build renders; "
-                    "256, 512, 768, 1024, 1280, 1536 and 2048 are",
-                    request->pixels);
+                    "%dx%d is not a frame this build renders; both sides must "
+                    "be a multiple of %d and their token count a multiple of "
+                    "%d", request->width, request->height,
+                    VAE_SCALE * ZIMAGE_PATCH, ZIMAGE_SEQ_MULTIPLE);
     const int steps = request->steps > 0 ? request->steps : ZIMAGE_DEFAULT_STEPS;
-    const int side = request->pixels / VAE_SCALE;
+    const int latent_width = request->width / VAE_SCALE;
+    const int latent_height = request->height / VAE_SCALE;
     char path[1200];
 
     /* ---- tokenize ---------------------------------------------------- */
@@ -130,7 +133,8 @@ int zimage_generate(const zimage_request *request, float *image,
      * hundred and twenty-eight channels at the full picture, which is two
      * gigabytes at 1024 square, and there is no sense holding that while
      * fourteen more are mapped. */
-    const size_t source_count = (size_t)ZIMAGE_LATENT_CHANNELS * side * side;
+    const size_t source_count =
+        (size_t)ZIMAGE_LATENT_CHANNELS * latent_height * latent_width;
     float *source_latent = NULL;
     if (request->source) {
         snprintf(path, sizeof(path), "%s/vae_encoder.safetensors",
@@ -152,14 +156,16 @@ int zimage_generate(const zimage_request *request, float *image,
         int encoded_source = 0;
         if (request->shaders) {
             zimage_vae_gpu *gpu_vae = zimage_vae_gpu_create_encoder(
-                request->shaders, path, NULL, request->pixels, error, error_size);
-            encoded_source = gpu_vae && zimage_vae_gpu_encode(
-                gpu_vae, request->source, request->pixels, source_latent,
+                request->shaders, path, NULL, request->height, request->width,
                 error, error_size);
+            encoded_source = gpu_vae && zimage_vae_gpu_encode(
+                gpu_vae, request->source, request->height, request->width,
+                source_latent, error, error_size);
             if (gpu_vae) zimage_vae_gpu_release(gpu_vae);
         } else {
             encoded_source = zimage_vae_encode(
-                vae, request->source, request->pixels, source_latent, NULL, NULL);
+                vae, request->source, request->height, request->width,
+                source_latent, NULL, NULL);
         }
         qwen_weights_close(vae);
         if (!encoded_source) {
@@ -186,8 +192,8 @@ int zimage_generate(const zimage_request *request, float *image,
 
     zimage_gpu *device = NULL;
     if (request->shaders) {
-        const int tokens_side = side / ZIMAGE_PATCH;
-        const int sequence = tokens_side * tokens_side + 512;
+        const int sequence = (latent_height / ZIMAGE_PATCH) *
+                             (latent_width / ZIMAGE_PATCH) + 512;
         device = zimage_gpu_create(request->shaders, path, sequence,
                                    error, error_size);
         if (!device) {
@@ -198,7 +204,8 @@ int zimage_generate(const zimage_request *request, float *image,
     }
 
     zimage_dit dit;
-    if (!zimage_dit_init(&dit, transformer, side, caption, (int)count, device,
+    if (!zimage_dit_init(&dit, transformer, latent_height, latent_width,
+                         caption, (int)count, device,
                          error, error_size)) {
         if (device) zimage_gpu_release(device);
         qwen_weights_close(transformer);
@@ -208,7 +215,8 @@ int zimage_generate(const zimage_request *request, float *image,
     free(caption);
     if (progress) progress("transformer", 1, 1, context);
 
-    const size_t latent_count = (size_t)ZIMAGE_LATENT_CHANNELS * side * side;
+    const size_t latent_count =
+        (size_t)ZIMAGE_LATENT_CHANNELS * latent_height * latent_width;
     float *latent = malloc(latent_count * sizeof(float));
     float *velocity = malloc(latent_count * sizeof(float));
     float *sigmas = malloc((size_t)(steps + 1) * sizeof(float));
@@ -301,13 +309,16 @@ int zimage_generate(const zimage_request *request, float *image,
     if (progress) progress("image VAE", 0, 1, context);
     if (request->shaders) {
         zimage_vae_gpu *vae = zimage_vae_gpu_create(request->shaders, path, NULL,
-                                                    side, error, error_size);
-        ok = vae && zimage_vae_gpu_decode(vae, latent, side, image,
+                                                    latent_height, latent_width,
+                                                    error, error_size);
+        ok = vae && zimage_vae_gpu_decode(vae, latent, latent_height,
+                                          latent_width, image,
                                           error, error_size);
         if (vae) zimage_vae_gpu_release(vae);
     } else {
         qwen_weights *decoder = qwen_weights_open(path, error, error_size);
-        ok = decoder && zimage_vae_decode(decoder, latent, side, image, NULL, NULL);
+        ok = decoder && zimage_vae_decode(decoder, latent, latent_height,
+                                          latent_width, image, NULL, NULL);
         if (decoder) qwen_weights_close(decoder);
         if (!ok && error && !*error)
             fail(error, error_size, "the decoder failed");

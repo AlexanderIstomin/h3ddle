@@ -127,7 +127,7 @@ struct GenerationCanvasTests {
   func imageCanvasCoding() throws {
     let knobs = GenerationKnobSnapshot(
       canvas: .p768,
-      imageCanvas: .s1280,
+      imageCanvas: .p1280,
       denoisingSteps: 8,
       activeDiTLayers: 30,
       coreReuse: 1
@@ -140,7 +140,7 @@ struct GenerationCanvasTests {
       #"{"canvas":"p768","denoisingSteps":8,"activeDiTLayers":30,"coreReuse":1}"#.utf8
     )
     let restored = try JSONDecoder().decode(GenerationKnobSnapshot.self, from: legacy)
-    #expect(restored.imageCanvas == .s1024)
+    #expect(restored.imageCanvas == .p1024)
   }
 
   /// Every tier the picker offers has to be one the renderer accepts: a
@@ -150,13 +150,19 @@ struct GenerationCanvasTests {
   @Test("Every offered image canvas is one the renderer can actually draw")
   func imageCanvasesAreRenderable() {
     for canvas in ImageCanvas.allCases {
-      #expect(canvas.side % 16 == 0, "\(canvas.side) is not a multiple of 16")
-      let tokensSide = canvas.side / 8 / 2
-      #expect(
-        (tokensSide * tokensSide) % 32 == 0,
-        "\(canvas.side) gives \(tokensSide * tokensSide) tokens, not a multiple of 32"
-      )
-      #expect(canvas.label == "\(canvas.side) × \(canvas.side)")
+      #expect(canvas.label == "\(canvas.shortEdge)p")
+      // Every tier at every aspect a project can be in, because the frame is
+      // no longer a square and the token rule bites on the product of the two
+      // sides rather than on one of them.
+      for aspect in [16.0 / 9, 9.0 / 16, 1.0, 4.0 / 5, 3.0 / 2] {
+        let frame = canvas.frame(aspect: aspect)
+        #expect(frame.width % 16 == 0, "\(frame.width) is not a multiple of 16")
+        #expect(frame.height % 16 == 0, "\(frame.height) is not a multiple of 16")
+        let tokens = (frame.width / 16) * (frame.height / 16)
+        #expect(tokens % 32 == 0, "the token count must divide by 32")
+        // The tier's short edge survives the stretch; only the long one moves.
+        #expect(min(frame.width, frame.height) == canvas.shortEdge)
+      }
     }
   }
 }
