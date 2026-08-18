@@ -62,11 +62,16 @@ public struct SupportedLength: Equatable, Sendable {
     stepSeconds: Double(H3Duration.chunk) / H3Duration.fps
   )
 
-  /// Stable Audio 3 holds quality across its whole window, and nothing here
-  /// is on a grid. These are the bounds the lane already used; they are not
-  /// a measured trained range, and should be replaced by one.
+  /// Both small Stable Audio 3 checkpoints, music and sound effects, take one
+  /// second to a hundred and twenty in whole seconds. That is the range the
+  /// model ships with rather than one this app chose: the released pipeline
+  /// offers `minimum=1, step=1` against a per-checkpoint table reading
+  /// `{"sm-music": 120, "sm-sfx": 120, "medium": 380}`, and the checkpoint's
+  /// own `sample_size` of 5,292,032 samples at 44.1 kHz is 120 seconds to
+  /// four decimal places. The medium checkpoint reaches 380 and would need
+  /// its own entry here if it is ever packaged.
   public static let stableAudio = SupportedLength(
-    minimumSeconds: 1, maximumSeconds: 120)
+    minimumSeconds: 1, maximumSeconds: 120, stepSeconds: 1)
 
   /// Speech has no length to choose: the line decides, and the number is a
   /// ceiling on a runaway rather than a target.

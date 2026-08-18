@@ -38,12 +38,32 @@ struct SupportedLengthTests {
     }
   }
 
+  /// Speech is the continuous case: its length is whatever the line takes to
+  /// say, so the range is a ceiling and any value inside it is legal. Stable
+  /// Audio moved onto a one-second grid once the shipped reference was read,
+  /// so it is no longer an example of this.
   @Test("A continuous range has no grid and passes values through")
   func continuousRanges() {
-    let audio = SupportedLength.stableAudio
-    #expect(audio.options.isEmpty)
-    #expect(audio.resolved(7.3) == 7.3)
-    #expect(audio.resolved(0.2) == audio.minimumSeconds)
-    #expect(audio.resolved(500) == audio.maximumSeconds)
+    let speech = SupportedLength.speechCeiling
+    #expect(speech.options.isEmpty)
+    #expect(speech.resolved(7.3) == 7.3)
+    #expect(speech.resolved(0.2) == speech.minimumSeconds)
+    #expect(speech.resolved(500) == speech.maximumSeconds)
+  }
+
+  /// The numbers come from the released pipeline, not from this app: its
+  /// slider is `minimum=1, step=1` and its per-checkpoint ceiling table reads
+  /// `{"sm-music": 120, "sm-sfx": 120, "medium": 380}`. The checkpoint's own
+  /// sample_size agrees — 5,292,032 samples at 44,100 is 120 seconds.
+  @Test("Stable Audio offers whole seconds across the window it ships with")
+  func stableAudioMatchesTheShippedRange() {
+    let sa = SupportedLength.stableAudio
+    #expect(sa.minimumSeconds == 1)
+    #expect(sa.maximumSeconds == 120)
+    #expect(5_292_032.0 / 44_100.0 >= 120)
+    #expect(sa.resolved(0.5) == 1)
+    #expect(sa.resolved(7.4) == 7)
+    #expect(sa.resolved(1000) == 120)
+    #expect(sa.options.count == 120)
   }
 }
