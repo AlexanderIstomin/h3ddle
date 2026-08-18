@@ -270,6 +270,145 @@ their recorded tolerances and timings were measured against it, and the output
 is bit identical either way, so there is nothing numerical to re-establish when
 they are switched.
 
+## The 512 result, and an artifact that was not one
+
+At 512×512 with 17 frames the output is properly good: a red sports car on a
+coastal road, sun low over the ocean, guardrail, rocks, road markings. It is
+recognisably the prompt rather than merely suggestive of it, which the 256×256
+run was.
+
+The first 8-step clip had what looked like a serious defect: frame 0 clean,
+frames 1 to 12 ghosted with several cars overlaid, frames 13 to 16 clean again.
+The boundary was suspiciously exact — three latent frames decode as 1 + 8 + 8
+pixel frames, and the corrupted span was almost exactly the middle latent
+frame's eight. Three structural causes were written down to test: the temporal
+rope, the keyframe marker, and the unpinned audio duration alignment.
+
+**It was none of them. The model was drawing motion blur.**
+
+Sixteen steps rather than eight cleaned up the back half and left frames 1–9
+smeared. Then the same scene with `driving fast` changed to `parked still` —
+same seed, same resolution, same 16 steps, same code — came out flawless across
+all seventeen frames, with a gentle camera drift and no ghosting anywhere. The
+per-frame contrast tells the same story without looking at the images: 72→86
+with a dip for the moving car, a flat 68.8–70.0 for the parked one.
+
+So the pipeline was right and the prompt was being obeyed. Worth recording for
+two reasons:
+
+- **an exact structural boundary is not evidence of a structural bug.** The
+  ghosting aligned with the latent frame boundary because motion blur has to
+  align with it too — that is the only temporal resolution the latent has;
+- **the cheap discriminator was a second prompt, not a code change.** Two and a
+  half minutes, and it ruled out three hypotheses at once. All three would have
+  meant reading reference code and instrumenting the driver.
+
+Step count is a real quality lever independently of this: 16 steps is visibly
+better than 8 on the moving clip.
+
+## Cost at two sizes, measured
+
+| | tokens | first steps | steady state | 8 steps |
+|---|---|---|---|---|
+| 256×256, 9 frames | 128 | ~33 s | ~31 s | 265 s |
+| 512×512, 17 frames | 768 | 158 s | **52 s** | 827 s |
+
+**The first steps of a run cost three times the steady state**, and it is not
+the file reads — `load_seconds` is only 73 s of the 827. It is warmup: MPS
+graph construction and kernel caches on first use at each shape. A benchmark
+that times step one and extrapolates is wrong by 3x.
+
+At steady state, six times the tokens costs 1.7x the time. That is strongly
+sublinear, which says fixed per-step overhead dominates at the small size and
+the 256x256 figure is nearly all overhead. It also means prefetching weights is
+worth less than the 20-28% estimated above once warmup is separated out.
+
+The sampler's shift is token-dependent, so the two runs get genuinely different
+schedules; that is the scheduler working, not a discrepancy.
+
+## The int8 tile, which is where the speed actually was
+
+The driver was calling `h3_gpu_linear_i8_weight_bf16` — the plain 8x8 simd
+path — for all six projections in a block, because that is what the component
+runners it was built from use. `h3_gpu_linear_i8_weight_bf16_square_output_major`
+takes the same arguments on the same on-disk layout and needs no
+re-quantization:
+
+| 512×512, 8 steps | blocks | loading | total |
+|---|---|---|---|
+| plain int8 | 732.7 s | 73.0 s | **827 s** |
+| square tile | 147.8 s | 74.3 s | **242 s** |
+
+**5x in the blocks, 3.4x end to end, and the latents are bit identical.**
+
+### This re-orders everything after it
+
+The obvious next move looked like an **input-major converter**: the input-major
+tile is faster still. Its own note prices that at **9%**, and it costs a
+conversion pipeline over a 21.5 GB checkpoint plus a second copy on disk. Nine
+percent of 242 s is 13 s.
+
+Meanwhile weight loading was 73 s against 827 — 9% — and is now 74 s against
+242, or **31%**. The prefetch `h3_dit.c` already implements went from marginal
+to the largest remaining lever, and it needs no new file format.
+
+The ordering is: **use the tuned kernel that exists (free, 3.4x), then hide the
+loading with the prefetch that exists, and only then consider a converter.**
+
+Both of the first two are now done. Prefetch, measured A/B at 512×512 over 4
+steps with the modes alternated so they see the same machine:
+
+| | blocks | loading | total |
+|---|---|---|---|
+| serial | 71.7 s | 43.3 s | 126.1 s |
+| **prefetch** | 45.8 s | 0.4 s | **56.5 s** |
+| serial | 45.0 s | 28.1 s | 82.4 s |
+| **prefetch** | 44.9 s | 0.5 s | **55.7 s** |
+
+Block time is unchanged between modes, so the worker costs the GPU nothing.
+Loading essentially disappears, and prefetching is also the *stable*
+configuration — the serial runs swing with whatever else the machine is doing
+while the prefetched ones do not, because the slack absorbs it.
+
+### A measurement I got wrong, and how
+
+The first attempt at this said the opposite and said it confidently: 242 s
+serial against 320 s prefetched, with a tidy mechanism — unified memory, a
+bandwidth-bound GEMM, a worker stealing the bus. It was written up as a
+negative result.
+
+Another generation was running on the machine at the time.
+
+**One timing run on a shared machine is not a measurement**, and a mechanism
+invented to explain one is worse than no explanation, because it is memorable
+and it forecloses the question. The A/B above alternates for exactly that
+reason, and the tell was available without knowing the cause: block time
+differed between the two runs when the thing being changed does not touch the
+GPU at all.
+
+### What that leaves for a converter
+
+Now that loading is ~0.5 s, the input-major converter's 9% is the only thing
+left to buy — and the file layout finding below means a converter's *real*
+value would have been the other thing it could fix, which prefetch has now
+made moot.
+
+### The file layout, which is worse than the matrix layout
+
+A block's 388 MB is not contiguous. The checkpoint is sorted by tensor name and
+grouped by size class, so a block's hundred-odd tensors interleave with every
+other block's and span the whole 21.5 GB at **1.8% density**. Reading a block is
+a hundred scattered seeks, not one sequential read.
+
+That is a better argument for a converter than the input-major one — rewriting
+the file block-major would make each block a single 388 MB sequential read. But
+prefetch already hides the cost entirely, so it buys nothing on top.
+
+The component runners still call the plain path. That is deliberate for now —
+their recorded tolerances and timings were measured against it, and the output
+is bit identical either way, so there is nothing numerical to re-establish when
+they are switched.
+
 ## The 512 result, and a temporal artifact worth chasing
 
 At 512×512 with 17 frames the output is properly good: a red sports car on a
