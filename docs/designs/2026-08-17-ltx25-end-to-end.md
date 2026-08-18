@@ -440,3 +440,67 @@ Candidates, cheapest first:
 
 Recording it rather than guessing further: the pipeline is proven, and this is
 a quality question with three testable causes.
+
+
+## The audio seam, and the third rope bug (2026-08-18)
+
+`tests/ltx_audio_decode.c` finally reads the audio latent that
+`h3_ltx_generate` had been writing since the day it was written:
+
+```
+latent [R, 128] -> unpatchify [8, R, 16] -> denormalize
+                -> audio VAE decoder -> log-mel [2, 4R-3, 64]
+                -> vocoder -> (4R-3) * 160 samples of 16 kHz stereo
+```
+
+It made a sound immediately, and the sound was wrong. **A listener said so;
+nothing else could.** Every number looked healthy — loud, tonal, and clearly
+prompt-dependent, with a sports car 22x louder than a sleeping cat.
+
+### The time axis is in seconds
+
+`create_initial_state` divides axis 0 by the fps right after
+`get_pixel_coords`. This engine was feeding pixel frames.
+
+That is the **third** time this one axis has been wrong: latent cells, then
+pixel frames, then seconds, each a separate bug in the same four lines. It
+survived the second fix because the picture barely shows it — per-frame content
+is not what a time scale controls — and it did its damage exactly where it was
+heard. The audio grid was already seconds (0 to 0.7) while the video grid was
+frames (0 to 17), so video filled 85% of the rope's range and audio 3.5% of it,
+and **the two streams attend to each other through those positions**.
+
+The "audio duration alignment" candidate listed above was therefore right in
+substance and too shallow in detail: the rate relating the streams was wrong,
+but because their *units* differed, not because a count was mischosen. Worth
+noting that the ghosting it was proposed to explain was later written off as
+motion blur — a conclusion that should now be re-tested rather than trusted.
+
+### The audio length was never a free parameter
+
+Two lines away in the same file:
+
+```python
+AudioLatentShape.from_video_pixel_shape:
+    duration = float(shape.frames) / float(shape.fps)
+    frames   = round(duration * sample_rate / hop_length / downsample)   # 25/s
+```
+
+At 3 latent frames and 24 fps that is 18 rows, against the 24 hardcoded here:
+
+```
+before   video 0.708 s   audio 0.930 s    31% too long
+after    video 0.708 s   audio 0.690 s    within one audio frame
+```
+
+`fps` is not in the checkpoint — `VideoPixelShape.fps` is supplied by the
+caller — so it is now a compile-time knob defaulting to 24, and both the rope
+scale and the row count follow from it rather than being chosen separately.
+
+### What this says about how to work on the rest
+
+Two days went into component anchors, each one green, before any modality was
+rendered end to end. The bug was found within an hour of the seam existing.
+A latent that has never been decoded has never been checked, and an artefact
+no person has looked at or listened to has not been verified — the numbers
+here were not merely insufficient, they were actively reassuring.
