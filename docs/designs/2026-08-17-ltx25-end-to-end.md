@@ -187,6 +187,41 @@ worth less than the 20-28% estimated above once warmup is separated out.
 The sampler's shift is token-dependent, so the two runs get genuinely different
 schedules; that is the scheduler working, not a discrepancy.
 
+## The int8 tile, which is where the speed actually was
+
+The driver was calling `h3_gpu_linear_i8_weight_bf16` — the plain 8x8 simd
+path — for all six projections in a block, because that is what the component
+runners it was built from use. `h3_gpu_linear_i8_weight_bf16_square_output_major`
+takes the same arguments on the same on-disk layout and needs no
+re-quantization:
+
+| 512×512, 8 steps | blocks | loading | total |
+|---|---|---|---|
+| plain int8 | 732.7 s | 73.0 s | **827 s** |
+| square tile | 147.8 s | 74.3 s | **242 s** |
+
+**5x in the blocks, 3.4x end to end, and the latents are bit identical.**
+
+### This re-orders everything after it
+
+The obvious next move looked like an **input-major converter**: the input-major
+tile is faster still. Its own note prices that at **9%**, and it costs a
+conversion pipeline over a 21.5 GB checkpoint plus a second copy on disk. Nine
+percent of 242 s is 13 s.
+
+Meanwhile weight loading was 73 s against 827 — 9% — and is now 74 s against
+242, or **31%**. The prefetch `h3_dit.c` already implements went from marginal
+to the largest remaining lever, and it needs no new file format.
+
+The ordering is: **use the tuned kernel that exists (free, 3.4x), then hide the
+loading with the prefetch that exists (up to 31%), and only then consider a
+converter for the last 9%.**
+
+The component runners still call the plain path. That is deliberate for now —
+their recorded tolerances and timings were measured against it, and the output
+is bit identical either way, so there is nothing numerical to re-establish when
+they are switched.
+
 ## The 512 result, and a temporal artifact worth chasing
 
 At 512×512 with 17 frames the output is properly good: a red sports car on a
