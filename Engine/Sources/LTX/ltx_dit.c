@@ -916,12 +916,24 @@ static void output_head(run *r, const float *x, const float *table,
  * a held token's timestep always is -- but nothing is held in this path, so
  * every token shares it. */
 static void advance(float *latent, const float *velocity, double sigma,
-                    double next, size_t count) {
-    for (size_t index = 0; index < count; index++) {
-        const double denoised = (double)latent[index] -
-                                (double)velocity[index] * sigma;
-        latent[index] = (float)((double)latent[index] +
-            (((double)latent[index] - denoised) / sigma) * (next - sigma));
+                    double next, uint32_t rows, uint32_t width,
+                    const float *held) {
+    for (uint32_t row = 0; row < rows; row++) {
+        /* The velocity is read at the token's *own* timestep and the Euler
+         * step runs on the scalar schedule sigma. The two are not
+         * interchangeable: sigma is never zero, while a held token's timestep
+         * always is -- and at zero the denoised prediction equals the sample,
+         * so the step below moves it by nothing at all. That is the whole of
+         * how a conditioned token stays put. */
+        const double timestep = held && held[row] ? sigma * (double)held[row]
+                                                  : sigma;
+        for (uint32_t index = 0; index < width; index++) {
+            const size_t at = (size_t)row * width + index;
+            const double denoised = (double)latent[at] -
+                                    (double)velocity[at] * timestep;
+            latent[at] = (float)((double)latent[at] +
+                (((double)latent[at] - denoised) / sigma) * (next - sigma));
+        }
     }
 }
 
@@ -1043,11 +1055,11 @@ static void adopt_preload(run *r, const preload_job *job) {
  * This is the seam no component test could reach: the block, top-level and
  * end-to-end anchors all fed the reference the *same* grid the engine used, so
  * latent coordinates agreed with themselves. */
-static void video_positions(const run *r, float *grid) {
+static void video_positions(const run *r, float *grid, uint32_t rows,
+                            uint32_t count) {
     static const int SCALE[VIDEO_AXES] = {8, 32, 32};
-    const uint32_t rows = r->video_rows;
     const uint32_t plane = r->height * r->width;
-    for (uint32_t token = 0; token < rows; token++) {
+    for (uint32_t token = 0; token < count; token++) {
         const int frame = (int)(token / plane);
         const uint32_t rest = token % plane;
         const int starts[VIDEO_AXES] = {frame, (int)(rest / r->width),
@@ -1069,6 +1081,41 @@ static void video_positions(const run *r, float *grid) {
              * the audio, whose bounds are already seconds. The two streams
              * attend to each other through these positions, so they have to
              * share units. */
+            grid[at] = axis == 0 ? (float)begin / (float)r->fps : (float)begin;
+            grid[at + 1] = axis == 0 ? (float)end / (float)r->fps : (float)end;
+        }
+    }
+}
+
+/* The same grid for a conditioning stack, offset to where it sits in the clip.
+ *
+ * `causal_fix` applies only at frame 0 -- a picture placed later in the clip is
+ * not the frame a causal encoder built from one pixel frame, so it does not get
+ * the opening frame's shortened span. The offset is added in **pixel** frames
+ * before the axis is divided by fps, which is the order the reference uses. */
+static void condition_positions(const run *r, const ltx_dit_condition *item,
+                                float *grid, uint32_t rows) {
+    static const int SCALE[VIDEO_AXES] = {8, 32, 32};
+    const uint32_t plane = r->height * r->width;
+    for (uint32_t token = 0; token < item->frames * plane; token++) {
+        const int frame = (int)(token / plane);
+        const uint32_t rest = token % plane;
+        const int starts[VIDEO_AXES] = {frame, (int)(rest / r->width),
+                                        (int)(rest % r->width)};
+        for (int axis = 0; axis < VIDEO_AXES; axis++) {
+            const size_t at = ((size_t)axis * rows + token) * 2;
+            int begin = starts[axis] * SCALE[axis];
+            int end = (starts[axis] + 1) * SCALE[axis];
+            if (axis == 0) {
+                if (item->frame_index == 0) {
+                    begin = begin + 1 - SCALE[0];
+                    end = end + 1 - SCALE[0];
+                    if (begin < 0) begin = 0;
+                    if (end < 0) end = 0;
+                }
+                begin += item->frame_index;
+                end += item->frame_index;
+            }
             grid[at] = axis == 0 ? (float)begin / (float)r->fps : (float)begin;
             grid[at + 1] = axis == 0 ? (float)end / (float)r->fps : (float)end;
         }
@@ -1144,6 +1191,35 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
     r.error_size = error_size;
 
     const int steps = request->steps;
+    /* The rows the caller gets back, before the conditioning tokens are added
+     * to the stream. */
+    const uint32_t target_rows = r.video_rows;
+    const uint32_t plane = request->height * request->width;
+    uint32_t cond_rows = 0;
+    double held_scale = 0.0;
+    for (uint32_t index = 0; index < request->condition_count; index++) {
+        const ltx_dit_condition *item = &request->conditions[index];
+        if (!item->latent || !item->frames) {
+            if (error && error_size)
+                snprintf(error, error_size, "conditioning item %u has no "
+                                            "latent", index);
+            return 0;
+        }
+        cond_rows += item->frames * plane;
+        /* One held level, so every conditioning item shares a strength. More
+         * than one distinct value wants a row per value, which the row map
+         * already supports and nothing yet asks for. */
+        const double scale = 1.0 - (double)item->strength;
+        if (index && fabs(scale - held_scale) > 1e-9) {
+            if (error && error_size)
+                snprintf(error, error_size, "conditioning items must share one "
+                                            "strength; got %.3f and %.3f",
+                         1.0 - held_scale, (double)item->strength);
+            return 0;
+        }
+        held_scale = scale;
+    }
+    r.video_rows += cond_rows;
     const uint32_t video_rows = r.video_rows, audio_rows = r.audio_rows;
     const size_t video_state = (size_t)video_rows * VIDEO_DIM;
     const size_t audio_state = (size_t)audio_rows * AUDIO_DIM;
@@ -1156,24 +1232,64 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                           VIDEO_DIM;
 
     float sigmas[MAX_STEPS + 1];
-    schedule(sigmas, steps, (double)video_rows);
+    /* The clip's own token count, not the grown sequence's. The shift
+     * interpolates a line anchored at 1024 and 4096 tokens to describe *this
+     * resolution's* denoising problem, and the reference keeps
+     * `num_noisy_tokens` separate from the total for exactly this reason —
+     * conditioning a clip must not change the schedule the clip is denoised
+     * on. */
+    schedule(sigmas, steps, (double)target_rows);
 
     rng noise = {request->seed};
     if (!noise.state) noise.state = 1;
-    /* Flow matching starts at pure noise, which is what sigma 1 means. */
-    gaussian_fill(&noise, video_latent, (size_t)video_rows * LATENT);
+    /* The stream the sampler works on: the caller's rows, then the
+     * conditioning tokens. The caller's buffer is only `target_rows` long, so
+     * with conditioning the loop runs on its own and copies back at the end. */
+    float *working = video_latent;
+    if (cond_rows) {
+        working = malloc((size_t)video_rows * LATENT * sizeof(*working));
+        if (!working) {
+            if (error && error_size)
+                snprintf(error, error_size, "cannot allocate the conditioned "
+                                            "latent");
+            return 0;
+        }
+    }
+    /* Flow matching starts at pure noise, which is what sigma 1 means. The
+     * noise is drawn for the target rows alone, so a conditioned run and an
+     * unconditioned one at the same seed start from the same picture. */
+    gaussian_fill(&noise, working, (size_t)target_rows * LATENT);
     gaussian_fill(&noise, audio_latent, (size_t)audio_rows * LATENT);
+    {
+        size_t at = (size_t)target_rows * LATENT;
+        for (uint32_t index = 0; index < request->condition_count; index++) {
+            const ltx_dit_condition *item = &request->conditions[index];
+            const size_t count = (size_t)item->frames * plane * LATENT;
+            memcpy(working + at, item->latent, count * sizeof(*working));
+            at += count;
+        }
+    }
 
     /* ------------------------------------ every module at every timestep */
 
-    /* Both streams denoise, so every token shares one modulation row and the
-     * two levels hold the same value; the row map stays at zero. */
+    /* Level 0 denoises at the step's sigma; level 1 is what a conditioned token
+     * is held at, `sigma * (1 - strength)`. With nothing conditioned the two
+     * are equal and the row map stays at zero, which is exactly the
+     * unconditioned path.
+     *
+     * Only the *per-token* modules take the held value. The two sigma-driven
+     * pairs describe the stream's overall noise level, which a conditioning
+     * token does not change -- and the cross-modal gates read the other
+     * stream's sigma, so they never see this at all. */
     float *modulation[MODULE_COUNT] = {0}, *embedded[MODULE_COUNT] = {0};
     for (int index = 0; index < MODULE_COUNT; index++) {
+        const int per_token = MODULES[index].source == VIDEO_TOKENS;
         double values[MAX_STEPS * LEVELS];
         for (int step = 0; step < steps; step++)
             for (int level = 0; level < LEVELS; level++)
-                values[step * LEVELS + level] = sigmas[step];
+                values[step * LEVELS + level] =
+                    (per_token && level == 1) ? sigmas[step] * held_scale
+                                              : sigmas[step];
         run_adaln(&r, &MODULES[index], values, (uint32_t)(steps * LEVELS),
                   TIMESTEP_MULTIPLIER, &modulation[index], &embedded[index]);
     }
@@ -1214,7 +1330,13 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
         if (!video_grid || !audio_grid)
             oops(&r, "cannot allocate the position grids");
         else {
-            video_positions(&r, video_grid);
+            video_positions(&r, video_grid, video_rows, target_rows);
+            uint32_t at = target_rows;
+            for (uint32_t index = 0; index < request->condition_count; index++) {
+                const ltx_dit_condition *item = &request->conditions[index];
+                condition_positions(&r, item, video_grid + at * 2, video_rows);
+                at += item->frames * plane;
+            }
             audio_positions(&r, audio_grid);
             rope_tables(&r, &s.video_pe.cos, &s.video_pe.sin, video_grid,
                         video_rows, VIDEO_DIM, VIDEO_AXES, VIDEO_MAX_POS);
@@ -1264,12 +1386,18 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                 oops(&r, "cannot upload a norm weight");
         }
     }
-    /* Every token takes modulation row zero: nothing is held. The map exists
-     * because the kernel indexes through it, and because conditioning -- an
-     * image held at timestep zero -- is what would give it a second row. */
+    /* Row zero denoises, row one is held. Without conditioning every token
+     * takes row zero and the two rows carry the same value, which is the
+     * unconditioned path unchanged. */
     const uint32_t map_rows = video_rows > audio_rows ? video_rows : audio_rows;
     uint32_t *level_of = calloc(map_rows, sizeof(*level_of));
-    if (!level_of) oops(&r, "cannot allocate a row map");
+    float *held = cond_rows ? calloc(video_rows, sizeof(*held)) : NULL;
+    if (!level_of || (cond_rows && !held)) oops(&r, "cannot allocate a row map");
+    else
+        for (uint32_t row = target_rows; row < video_rows; row++) {
+            level_of[row] = 1;
+            if (held) held[row] = (float)held_scale;
+        }
     if (!r.failed) {
         space.row_map_video = h3_gpu_tensor_from_u32(gpu, level_of, video_rows);
         space.row_map_audio = h3_gpu_tensor_from_u32(gpu, level_of, audio_rows);
@@ -1330,9 +1458,19 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
         cond.video_context = video_context;
         cond.audio_context = audio_context;
 
-        linear_rows(video_tokens, video_latent, video_patch_weight,
+        linear_rows(video_tokens, working, video_patch_weight,
                     video_patch_bias, video_rows, LATENT, VIDEO_DIM);
-        for (uint32_t row = 0; row < r.height * r.width; row++)
+        /* The marker says "this token covers a single pixel frame". A causal
+         * encoder makes the opening latent frame such, and a conditioning
+         * picture is one by construction, so both are marked. The validated
+         * DiT run takes this from an anchor's `keyframes_mask` rather than
+         * deriving it; deriving it is a reading of what that mask contains,
+         * and the place to check it is that anchor. */
+        for (uint32_t row = 0; row < plane; row++)
+            for (int index = 0; index < VIDEO_DIM; index++)
+                video_tokens[(size_t)row * VIDEO_DIM + index] +=
+                    keyframe_marker[index];
+        for (uint32_t row = target_rows; row < video_rows; row++)
             for (int index = 0; index < VIDEO_DIM; index++)
                 video_tokens[(size_t)row * VIDEO_DIM + index] +=
                     keyframe_marker[index];
@@ -1403,12 +1541,12 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                     audio_velocity, audio_rows, AUDIO_DIM);
         if (r.failed) break;
 
-        advance(video_latent, video_velocity, sigmas[step], sigmas[step + 1],
-                (size_t)video_rows * LATENT);
+        advance(working, video_velocity, sigmas[step], sigmas[step + 1],
+                video_rows, LATENT, held);
         advance(audio_latent, audio_velocity, sigmas[step], sigmas[step + 1],
-                (size_t)audio_rows * LATENT);
+                audio_rows, LATENT, NULL);
         for (size_t index = 0; index < (size_t)video_rows * LATENT; index++)
-            if (!isfinite(video_latent[index])) {
+            if (!isfinite(working[index])) {
                 oops(&r, "a video latent is not finite after step %d",
                      step + 1);
                 break;
@@ -1421,6 +1559,13 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
             }
     }
     if (tick && !r.failed && !tick(steps, steps, tick_context)) stop(&r);
+    if (cond_rows) {
+        if (!r.failed)
+            memcpy(video_latent, working,
+                   (size_t)target_rows * LATENT * sizeof(*video_latent));
+        free(working);
+    }
+    free(held);
 
     /* ------------------------------------------------------------ cleanup */
 

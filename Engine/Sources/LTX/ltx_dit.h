@@ -26,6 +26,29 @@
 #define LTX_DIT_BLOCKS 48
 #define LTX_DIT_MAX_STEPS 32
 
+/* A picture the clip is conditioned on, already in the DiT's latent space —
+ * `ltx_video_encode` is what puts it there.
+ *
+ * Conditioning here *appends* tokens rather than freezing existing ones. The
+ * keyframe's tokens join the sequence with their own positions, and the model
+ * matches the denoising tokens to them; the extra tokens are dropped on the
+ * way out. `VideoConditionByKeyframeIndex` is the reference for all of it.
+ */
+typedef struct {
+    /* `[frames][height][width][128]` channels-last, at the request's spatial
+     * size. One latent frame is a single picture. */
+    const float *latent;
+    uint32_t frames;
+    /* Where this sits in the clip, in **pixel** frames — 0 is the first frame,
+     * and the causal shift that gives the opening frame its own [0, 1) span
+     * applies only there. */
+    int frame_index;
+    /* 1 holds the picture exactly; below that lets the sampler move it. The
+     * per-token timestep is `sigma * (1 - strength)`, so 1 pins the token at
+     * timestep zero and its velocity contributes nothing. */
+    float strength;
+} ltx_dit_condition;
+
 typedef struct {
     /* Latent geometry. Pixel frames are 8(frames-1)+1 and each spatial cell is
      * 32 pixels; `ltx_plan` is what turns a request into these. */
@@ -41,6 +64,9 @@ typedef struct {
     int fps;
     int steps;
     uint64_t seed;
+    /* Optional. Each adds its tokens to the video stream for the whole run. */
+    const ltx_dit_condition *conditions;
+    uint32_t condition_count;
 } ltx_dit_request;
 
 /* Returning zero abandons the run. `step` counts *completed* denoise steps, so
