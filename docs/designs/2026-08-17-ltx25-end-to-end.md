@@ -214,8 +214,56 @@ Meanwhile weight loading was 73 s against 827 — 9% — and is now 74 s against
 to the largest remaining lever, and it needs no new file format.
 
 The ordering is: **use the tuned kernel that exists (free, 3.4x), then hide the
-loading with the prefetch that exists (up to 31%), and only then consider a
-converter for the last 9%.**
+loading with the prefetch that exists, and only then consider a converter.**
+
+Both of the first two are now done. Prefetch, measured A/B at 512×512 over 4
+steps with the modes alternated so they see the same machine:
+
+| | blocks | loading | total |
+|---|---|---|---|
+| serial | 71.7 s | 43.3 s | 126.1 s |
+| **prefetch** | 45.8 s | 0.4 s | **56.5 s** |
+| serial | 45.0 s | 28.1 s | 82.4 s |
+| **prefetch** | 44.9 s | 0.5 s | **55.7 s** |
+
+Block time is unchanged between modes, so the worker costs the GPU nothing.
+Loading essentially disappears, and prefetching is also the *stable*
+configuration — the serial runs swing with whatever else the machine is doing
+while the prefetched ones do not, because the slack absorbs it.
+
+### A measurement I got wrong, and how
+
+The first attempt at this said the opposite and said it confidently: 242 s
+serial against 320 s prefetched, with a tidy mechanism — unified memory, a
+bandwidth-bound GEMM, a worker stealing the bus. It was written up as a
+negative result.
+
+Another generation was running on the machine at the time.
+
+**One timing run on a shared machine is not a measurement**, and a mechanism
+invented to explain one is worse than no explanation, because it is memorable
+and it forecloses the question. The A/B above alternates for exactly that
+reason, and the tell was available without knowing the cause: block time
+differed between the two runs when the thing being changed does not touch the
+GPU at all.
+
+### What that leaves for a converter
+
+Now that loading is ~0.5 s, the input-major converter's 9% is the only thing
+left to buy — and the file layout finding below means a converter's *real*
+value would have been the other thing it could fix, which prefetch has now
+made moot.
+
+### The file layout, which is worse than the matrix layout
+
+A block's 388 MB is not contiguous. The checkpoint is sorted by tensor name and
+grouped by size class, so a block's hundred-odd tensors interleave with every
+other block's and span the whole 21.5 GB at **1.8% density**. Reading a block is
+a hundred scattered seeks, not one sequential read.
+
+That is a better argument for a converter than the input-major one — rewriting
+the file block-major would make each block a single 388 MB sequential read. But
+prefetch already hides the cost entirely, so it buys nothing on top.
 
 The component runners still call the plain path. That is deliberate for now —
 their recorded tolerances and timings were measured against it, and the output
