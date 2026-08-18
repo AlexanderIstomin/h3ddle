@@ -286,6 +286,11 @@ rope, the keyframe marker, and the unpinned audio duration alignment.
 
 **It was none of them. The model was drawing motion blur.**
 
+> **Wrong — corrected 2026-08-18.** It was the first of the three: the temporal
+> rope. See "The verdict on the ghosting, reversed" at the end of this
+> document. The reasoning below is left standing because the way it fails is
+> the point.
+
 Sixteen steps rather than eight cleaned up the back half and left frames 1–9
 smeared. Then the same scene with `driving fast` changed to `parked still` —
 same seed, same resolution, same 16 steps, same code — came out flawless across
@@ -504,3 +509,48 @@ rendered end to end. The bug was found within an hour of the seam existing.
 A latent that has never been decoded has never been checked, and an artefact
 no person has looked at or listened to has not been verified — the numbers
 here were not merely insufficient, they were actively reassuring.
+
+
+## The verdict on the ghosting, reversed
+
+The section above concluded the ghosting was motion blur, on the strength of a
+still scene coming out flawless at identical settings. That conclusion was
+wrong, and the fps fix is what showed it. Same geometry, same seed 16, same
+four steps, the *only* difference being whether the video rope's time axis is
+in seconds:
+
+```
+                     boundary delta   interior delta   ratio
+without the fps fix         0.1333           0.0648    2.06x
+with the fps fix            0.0380           0.0351    1.08x
+```
+
+A boundary artefact shows as a ratio well above 1. It was 2.06 and is now 1.08.
+The per-frame deltas tell the same story less abstractly: they used to lurch
+(0.142, 0.134, 0.098 … 0.017, 0.015) and are now even (0.028 to 0.046). So the
+**temporal rope** — the first of the three candidates written down and then
+dismissed — was genuinely wrong, and the video is temporally coherent in a way
+it had never been.
+
+### Why the discriminator lied
+
+The `parked still` test was not a bad experiment and its result was true: a
+still scene really was flawless. The error was in what that licensed
+concluding.
+
+**Removing the phenomenon cannot distinguish "the phenomenon is being rendered
+correctly" from "a bug that only manifests when the phenomenon is present."**
+A wrong time scale has nothing to corrupt in a scene where nothing moves. The
+test proved motion was *involved* in the artefact — which was never in doubt —
+and was read as proving the motion was *right*.
+
+What would have settled it is the experiment finally run above: hold the scene
+fixed and change the suspected cause. That is a code change rather than a
+second prompt, which is exactly why it was skipped — the cheap discriminator
+was cheap because it answered a different question.
+
+The earlier lesson that "an exact structural boundary is not evidence of a
+structural bug" also needs its edge back. It is true that motion blur must
+align with the latent boundary. It is not true that alignment is therefore
+uninformative — here the boundary was carrying a real structural defect, and
+the alignment was the correct signal all along.
