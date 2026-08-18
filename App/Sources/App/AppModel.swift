@@ -224,6 +224,14 @@ final class AppModel {
     }
   }
   var studioStartFrame: StudioImageAttachment?
+  /// How much of a start picture a still model repaints, 0 through 1. It sits
+  /// here beside the picture rather than among the quality knobs because it
+  /// describes that picture, and it means nothing without one.
+  ///
+  /// The default is measured, not conventional: this checkpoint holds onto a
+  /// source far harder than the usual half-way figure assumes, so 0.85 is
+  /// where the prompt visibly acts while the composition survives.
+  var studioSourceStrength: Double = 0.85
   var studioEndFrame: StudioImageAttachment?
   var studioReferenceImages: [StudioImageAttachment] = []
   /// Optional schema fields for the composed prompt: the ambient soundscape
@@ -605,11 +613,15 @@ final class AppModel {
     let ownPackage =
       audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
       || videoEngine.usesOwnPackage
-    /// Frames and references are H3's conditioning; no other engine here
-    /// reads a picture. The engine *refuses* a request carrying them rather
-    /// than dropping them, so this has to be right on the way out.
+    /// Frames and references are H3's conditioning. The engine *refuses* a
+    /// request carrying them rather than dropping them, so this has to be
+    /// right on the way out.
     let acceptsImageInputs =
       kind != .audio && imageEngine == .h3 && videoEngine.acceptsReferenceInputs
+    /// Z-Image reads exactly one picture — the one it works from — and takes
+    /// neither an end frame nor references, so it is its own question rather
+    /// than a widening of the one above.
+    let acceptsSourcePicture = kind == .image && imageEngine == .zImage
     // Speech and sound effects run in one phase and report no pass counter,
     // so their phase fraction is the run's rather than a band within it.
     // Rebuilt per run: a second generation from an already-open studio never
@@ -731,12 +743,15 @@ final class AppModel {
       previewDenoise: previewDenoise,
       useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
       seed: seed,
+      sourceStrength: acceptsSourcePicture && studioStartFrame != nil
+        ? studioSourceStrength : nil,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight,
-      // Only H3 conditions on pictures. The studio hides these while Z-Image
-      // is picked, but a selection made under H3 outlives the switch, so
+      // A selection made under one model outlives a switch to another, so
       // dropping them here is what actually keeps them out of the request.
-      firstFrameURL: acceptsImageInputs ? studioStartFrame?.url : nil,
+      // Z-Image takes the start frame and nothing else.
+      firstFrameURL: acceptsImageInputs || acceptsSourcePicture
+        ? studioStartFrame?.url : nil,
       lastFrameURL: acceptsImageInputs ? studioEndFrame?.url : nil,
       referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : []
     )

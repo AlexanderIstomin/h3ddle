@@ -104,6 +104,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed; nil keeps the engine default. Same seed and
   /// settings reproduce a generation.
   public var seed: UInt64?
+  /// How much of a start picture a still model repaints, 0 through 1. Nil
+  /// where the lane takes no picture, or where none was given.
+  public var sourceStrength: Double?
   /// Overrides the quality preset's square canvas when both are set.
   public var canvasWidth: Int?
   public var canvasHeight: Int?
@@ -128,6 +131,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
+    sourceStrength: Double? = nil,
     canvasWidth: Int? = nil,
     canvasHeight: Int? = nil,
     firstFrameURL: URL? = nil,
@@ -150,6 +154,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.sourceStrength = sourceStrength
     self.canvasWidth = canvasWidth
     self.canvasHeight = canvasHeight
     self.firstFrameURL = firstFrameURL

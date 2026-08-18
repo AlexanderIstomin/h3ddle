@@ -250,7 +250,11 @@ struct GenerationStudioView: View {
       // conditioning that turns the generation into an error.
       if acceptsConditioning {
         frameAnchorSection
-        referenceSection
+        if worksFromAPicture {
+          sourceStrengthControls
+        } else {
+          referenceSection
+        }
         if let note = conditioningNote {
           Text(note)
             .font(.system(size: 10))
@@ -314,11 +318,33 @@ struct GenerationStudioView: View {
     }
   }
 
+  /// Only once a picture is there. A strength slider with nothing to apply
+  /// it to invites the reading that it does something to a prompt-only
+  /// render, which it does not.
+  @ViewBuilder private var sourceStrengthControls: some View {
+    if model.studioStartFrame != nil {
+      labeled("HOW MUCH TO REPAINT") {
+        HStack(spacing: 10) {
+          Slider(value: $model.studioSourceStrength, in: 0.05...1, step: 0.05)
+            .accessibilityIdentifier("generation-source-strength")
+          Text("\(Int((model.studioSourceStrength * 100).rounded()))%")
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .frame(width: 46, alignment: .trailing)
+        }
+        Text("Lower keeps more of the picture. It chooses where the sampler "
+          + "starts, so it moves in whole steps.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
   private var frameAnchorSection: some View {
     let disabled = model.studioHasReferences
     return VStack(alignment: .leading, spacing: 10) {
       HStack {
-        Text("START / END FRAME")
+        Text(worksFromAPicture ? "PICTURE TO WORK FROM" : "START / END FRAME")
           .font(.system(size: 9, weight: .bold, design: .monospaced))
           .tracking(1.6)
           .foregroundStyle(H3Color.textSecondary.opacity(0.75))
@@ -334,12 +360,14 @@ struct GenerationStudioView: View {
           set: { model.setStudioStartFrame($0) },
           clear: { model.clearStudioStartFrame() }
         )
-        frameWell(
-          title: "End",
-          attachment: model.studioEndFrame,
-          set: { model.setStudioEndFrame($0) },
-          clear: { model.clearStudioEndFrame() }
-        )
+        if !worksFromAPicture {
+          frameWell(
+            title: "End",
+            attachment: model.studioEndFrame,
+            set: { model.setStudioEndFrame($0) },
+            clear: { model.clearStudioEndFrame() }
+          )
+        }
         Spacer(minLength: 0)
       }
     }
@@ -588,8 +616,16 @@ struct GenerationStudioView: View {
   /// questions have different answers and conflating them is what hid this.
   private var acceptsConditioning: Bool {
     if kind == .audio { return false }
-    if kind == .image { return model.imageEngine == .h3 }
+    if kind == .image { return model.imageEngine == .h3 || worksFromAPicture }
     return model.videoEngine.acceptsReferenceInputs
+  }
+
+  /// Z-Image takes one picture and repaints it. That is a different offer
+  /// from H3's conditioning — there is no end frame to pair with and no
+  /// reference to rank — so the section narrows to a single well rather than
+  /// showing three inputs of which two would be refused.
+  private var worksFromAPicture: Bool {
+    kind == .image && model.imageEngine == .zImage
   }
 
   private var conditioningNote: String? {
@@ -623,7 +659,9 @@ struct GenerationStudioView: View {
           // Hidden rather than shown-and-ignored while a square-only model is
           // drawing: offering a ratio the renderer cannot honour is how the
           // lane came to fail with "renders square canvases only".
-          if kind != .audio, !promptOnlyModel {
+          // Z-Image is the only model here that renders a fixed square and
+          // ignores this. LTX takes its shape from it, and H3 its canvas.
+          if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
             labeled("ASPECT RATIO") {
               HStack(spacing: 9) {
                 ForEach(ProgramAspectRatio.allCases) { ratio in
@@ -828,14 +866,15 @@ struct GenerationStudioView: View {
   private var ltxResolutionControls: some View {
     labeled("RESOLUTION") {
       Menu {
-        ForEach(LTXCanvas.allCases) { canvas in
-          Button("\(canvas.label)  ·  ~\(minutesLabel(ltxMinutes(canvas)))") {
-            model.updateStudioKnobs { $0.ltxCanvas = canvas }
+        ForEach(LTXResolution.allCases) { tier in
+          Button("\(tier.label)  ·  \(ltxFrameLabel(tier))  ·  "
+            + "~\(minutesLabel(ltxMinutes(tier)))") {
+            model.updateStudioKnobs { $0.ltxResolution = tier }
           }
         }
       } label: {
         HStack {
-          Text(knobs.ltxCanvas.label)
+          Text("\(knobs.ltxResolution.label)  \(ltxFrameLabel(knobs.ltxResolution))")
             .font(.system(size: 12, weight: .medium, design: .monospaced))
           Spacer()
           Image(systemName: "chevron.up.chevron.down")
@@ -854,7 +893,8 @@ struct GenerationStudioView: View {
       .menuStyle(.borderlessButton)
       .accessibilityIdentifier("generation-ltx-resolution")
       Text("\(ltxFrames) frames at 24 fps · about "
-        + "\(minutesLabel(ltxMinutes(knobs.ltxCanvas))) for this length")
+        + "\(minutesLabel(ltxMinutes(knobs.ltxResolution))) for this length. "
+        + "The aspect ratio above decides the shape.")
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -879,10 +919,17 @@ struct GenerationStudioView: View {
   /// three points reproduced them exactly and handed back a *negative* cost per
   /// pixel, which is the fit absorbing noise rather than measuring anything.
   /// Two parameters over three points is the honest version.
-  private func ltxMinutes(_ canvas: LTXCanvas) -> Double {
+  private func ltxMinutes(_ tier: LTXResolution) -> Double {
     let latentFrames = (ltxFrames - 1) / 8 + 1
-    let tokenSteps = Double(latentFrames * canvas.cellsPerFrame * knobs.denoisingSteps)
-    return (40.3 + 0.0195 * tokenSteps) / 60
+    let cells = tier.cellsPerFrame(aspect: Double(model.studioAspect.fraction))
+    return (40.3 + 0.0195 * Double(latentFrames * cells * knobs.denoisingSteps)) / 60
+  }
+
+  /// The frame a tier actually renders at this project's shape, shown beside
+  /// the tier because two of them do not render the number they name.
+  private func ltxFrameLabel(_ tier: LTXResolution) -> String {
+    let frame = tier.frame(aspect: Double(model.studioAspect.fraction))
+    return "\(frame.width)×\(frame.height)"
   }
 
   private var imageResolutionControls: some View {
@@ -1423,7 +1470,7 @@ struct GenerationStudioView: View {
     // and silently charged to every video.
     let size: (width: Int, height: Int) =
       isLTX
-      ? (knobs.ltxCanvas.side, knobs.ltxCanvas.side)
+      ? knobs.ltxResolution.frame(aspect: Double(model.studioAspect.fraction))
       : (promptOnlyModel
         ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
         : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction)))

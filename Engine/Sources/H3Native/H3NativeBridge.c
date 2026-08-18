@@ -454,13 +454,34 @@ int h3ddle_zimage_supports_canvas(int pixels) {
 
 int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            const char *prompt, int pixels, int steps,
-                           unsigned long long seed, unsigned char *rgb,
+                           unsigned long long seed,
+                           const unsigned char *source_rgb, float strength,
+                           unsigned char *rgb,
                            h3ddle_zimage_step on_step, void *opaque,
                            char *error, size_t error_size) {
     if (!rgb) {
         snprintf(error, error_size, "somewhere to put the picture is required");
         return 0;
     }
+    const size_t area = (size_t)pixels * pixels;
+    const size_t count = (size_t)3 * area;
+
+    /* Interleaved 8-bit up to channel-major [-1, 1]: the exact inverse of the
+     * post-processing below, so a picture handed back in arrives as the
+     * generator left it. */
+    float *source = NULL;
+    if (source_rgb) {
+        source = malloc(count * sizeof(float));
+        if (!source) {
+            snprintf(error, error_size, "out of memory for the source picture");
+            return 0;
+        }
+        for (size_t index = 0; index < area; index++)
+            for (int channel = 0; channel < 3; channel++)
+                source[(size_t)channel * area + index] =
+                    (float)source_rgb[index * 3 + channel] / 255.0f * 2.0f - 1.0f;
+    }
+
     const zimage_request request = {
         .package = package_directory,
         .shaders = shaders,
@@ -468,16 +489,20 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
         .pixels = pixels,
         .steps = steps,
         .seed = seed,
+        .source = source,
+        .strength = strength,
     };
-    const size_t count = (size_t)3 * pixels * pixels;
     float *planes = malloc(count * sizeof(float));
     if (!planes) {
+        free(source);
         snprintf(error, error_size, "out of memory for a %d pixel picture", pixels);
         return 0;
     }
     zimage_bridge_context bridge = {on_step, opaque};
-    if (!zimage_generate(&request, planes, zimage_bridge_step, &bridge,
-                         error, error_size)) {
+    const int rendered = zimage_generate(&request, planes, zimage_bridge_step,
+                                        &bridge, error, error_size);
+    free(source);
+    if (!rendered) {
         free(planes);
         return 0;
     }
@@ -485,7 +510,6 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
      * post-processing: halve, centre, clamp. Clamping after the shift rather
      * than before is the difference between a correct picture and a blown-out
      * one. */
-    const size_t area = (size_t)pixels * pixels;
     for (size_t index = 0; index < area; index++)
         for (int channel = 0; channel < 3; channel++) {
             float value = planes[(size_t)channel * area + index] * 0.5f + 0.5f;
@@ -567,13 +591,14 @@ static float *resample_stereo(const float *in, uint32_t in_frames, int in_rate,
     return out;
 }
 
-int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
-                    char *error, size_t error_size) {
+int h3ddle_ltx_plan(int width, int height, int frames, int fps,
+                    double *seconds, char *error, size_t error_size) {
     ltx_request request = {0};
     request.package = "";
     request.shaders = "";
     request.prompt = "";
-    request.pixels = pixels;
+    request.width = width;
+    request.height = height;
     request.frames = frames;
     request.fps = fps;
     ltx_shape shape;
@@ -585,7 +610,8 @@ int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
 }
 
 int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
-                        const char *prompt, int pixels, int frames, int fps,
+                        const char *prompt, int width, int height,
+                        int frames, int fps,
                         int steps, unsigned long long seed,
                         const char *first_frame, const char *last_frame,
                         const char *const *references, int reference_count,
@@ -625,7 +651,8 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
     request.package = package_directory;
     request.shaders = shaders;
     request.prompt = prompt;
-    request.pixels = pixels;
+    request.width = width;
+    request.height = height;
     request.frames = frames;
     request.fps = fps;
     request.steps = steps;
@@ -639,8 +666,8 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
     float *audio = malloc(shape.audio_floats * sizeof(*audio));
     if (!planes || !audio) {
         free(planes); free(audio);
-        snprintf(error, error_size, "out of memory for %d frames of %d square",
-                 shape.frames, shape.pixels);
+        snprintf(error, error_size, "out of memory for %d frames of %dx%d",
+                 shape.frames, shape.width, shape.height);
         return 0;
     }
     ltx_bridge_context bridge = {on_step, opaque};
@@ -655,7 +682,7 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
      * clamp *after* the shift rather than before. The planes are per frame
      * here, so the channel stride is one frame's area rather than the whole
      * clip's. */
-    const size_t area = (size_t)shape.pixels * shape.pixels;
+    const size_t area = (size_t)shape.width * shape.height;
     unsigned char *rgb = malloc((size_t)shape.frames * area * 3);
     if (!rgb) {
         free(planes); free(audio);
@@ -689,7 +716,7 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
         return 0;
     }
     const int wrote = h3_avwriter_write_av_rgb24_f32(
-        output_path, rgb, shape.frames, shape.pixels, shape.pixels,
+        output_path, rgb, shape.frames, shape.width, shape.height,
         fps > 0 ? fps : LTX_DEFAULT_FPS, track, (int)track_frames, 2,
         LTX_CONTAINER_RATE, error, error_size);
     free(rgb);

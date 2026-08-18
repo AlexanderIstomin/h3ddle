@@ -125,6 +125,40 @@ int zimage_generate(const zimage_request *request, float *image,
     qwen_weights_close(encoder);
     h3_tokenizer_ids_free(ids);
 
+    /* ---- the picture to work from, if there is one ------------------- */
+    /* In the same gap, and for the same reason: the autoencoder wants a
+     * hundred and twenty-eight channels at the full picture, which is two
+     * gigabytes at 1024 square, and there is no sense holding that while
+     * fourteen more are mapped. */
+    const size_t source_count = (size_t)ZIMAGE_LATENT_CHANNELS * side * side;
+    float *source_latent = NULL;
+    if (request->source) {
+        snprintf(path, sizeof(path), "%s/vae_encoder.safetensors",
+                 request->package);
+        qwen_weights *vae = qwen_weights_open(path, error, error_size);
+        source_latent = vae ? malloc(source_count * sizeof(float)) : NULL;
+        if (!vae || !source_latent) {
+            free(caption); free(source_latent);
+            if (vae) qwen_weights_close(vae);
+            return fail(error, error_size,
+                        "this package has no picture encoder, so it can only "
+                        "render from a prompt");
+        }
+        if (progress) progress("image VAE", 0, 1, context);
+        const int encoded_source = zimage_vae_encode(
+            vae, request->source, request->pixels, source_latent, NULL, NULL);
+        qwen_weights_close(vae);
+        if (!encoded_source) {
+            free(caption); free(source_latent);
+            return fail(error, error_size, "cannot read the picture");
+        }
+        /* The mirror of what the decoder undoes on the way out. */
+        for (size_t index = 0; index < source_count; index++)
+            source_latent[index] =
+                (source_latent[index] - ZIMAGE_VAE_SHIFT) * ZIMAGE_VAE_SCALING;
+        if (progress) progress("image VAE", 1, 1, context);
+    }
+
     /* ---- sample ------------------------------------------------------ */
     snprintf(path, sizeof(path), "%s/transformer.safetensors", request->package);
     /* Opening is a mapping and costs nothing; what follows is the GPU sizing
@@ -170,10 +204,6 @@ int zimage_generate(const zimage_request *request, float *image,
         qwen_weights_close(transformer);
         return fail(error, error_size, "out of memory sizing the sampler");
     }
-    uint64_t state = request->seed ? request->seed : 0x2545F4914F6CDD1DULL;
-    for (size_t index = 0; index < latent_count; index++)
-        latent[index] = normal(&state);
-
     /* The reference's linspace(1, 1/N, N), then a *static* shift of 3. The
      * `mu` it also computes is dead code under use_dynamic_shifting false. A
      * terminal zero is appended so the last step lands on the picture rather
@@ -186,8 +216,36 @@ int zimage_generate(const zimage_request *request, float *image,
     }
     sigmas[steps] = 0.0f;
 
+    /* Where the schedule starts. Text to image starts at the top, where
+     * sigma is exactly 1 and the latent is entirely noise; a picture to work
+     * from starts partway down, and the strength chooses how far. */
+    int first = 0;
+    if (source_latent) {
+        float strength = request->strength;
+        if (!(strength > 0.0f)) strength = 0.0f;
+        if (strength > 1.0f) strength = 1.0f;
+        first = (int)((1.0f - strength) * (float)steps + 0.5f);
+        if (first < 0) first = 0;
+        if (first > steps) first = steps;
+    }
+
+    uint64_t state = request->seed ? request->seed : 0x2545F4914F6CDD1DULL;
+    /* The forward process of a rectified flow, which is a straight line: at
+     * sigma the sample is that far from the picture towards pure noise. At
+     * sigma 1 this is noise and the picture drops out, which is exactly text
+     * to image, so the two paths are the same arithmetic. */
+    const float sigma = sigmas[first];
+    for (size_t index = 0; index < latent_count; index++) {
+        const float noise = normal(&state);
+        latent[index] = source_latent
+            ? (1.0f - sigma) * source_latent[index] + sigma * noise
+            : noise;
+    }
+    free(source_latent);
+
+    const int remaining = steps - first;
     int cancelled = 0, ok = 1;
-    for (int step = 0; step < steps && ok && !cancelled; step++) {
+    for (int step = first; step < steps && ok && !cancelled; step++) {
         /* The model is fed 1 - sigma, not sigma. */
         const float timestep =
             (TRAIN_STEPS - sigmas[step] * TRAIN_STEPS) / TRAIN_STEPS;
@@ -200,7 +258,8 @@ int zimage_generate(const zimage_request *request, float *image,
         const float dt = sigmas[step + 1] - sigmas[step];
         for (size_t index = 0; index < latent_count; index++)
             latent[index] += dt * -velocity[index];
-        if (progress && !progress("denoise", step + 1, steps, context))
+        if (progress &&
+            !progress("denoise", step + 1 - first, remaining, context))
             cancelled = 1;
     }
     zimage_dit_release(&dit);

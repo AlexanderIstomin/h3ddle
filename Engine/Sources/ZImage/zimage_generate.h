@@ -28,6 +28,20 @@ typedef struct {
     int pixels;
     int steps;              /* 0 takes ZIMAGE_DEFAULT_STEPS */
     uint64_t seed;
+
+    /* img2img. `source` is a picture to work from: 3 * pixels * pixels floats,
+     * channel-major, in [-1, 1] — the same layout and range this call returns,
+     * so a render can be fed straight back in. It must already be the
+     * generation size; resampling belongs to the caller, which knows what the
+     * user actually framed. NULL renders from the prompt alone.
+     *
+     * `strength` is how much of it to discard: 1 keeps nothing and is text to
+     * image, 0 keeps everything and returns the picture back. It selects where
+     * the schedule starts, so at eight steps it moves in eighths and the
+     * effective value is rounded to the step it lands on. Ignored when
+     * `source` is NULL. */
+    const float *source;
+    float strength;
 } zimage_request;
 
 /* Called as the run proceeds. Returning zero abandons the generation, which

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import H3ddleEngineProtocol
+import H3ddleGeneration
 
 @Suite("Engine JSON-lines protocol")
 struct EngineProtocolTests {
@@ -81,15 +82,40 @@ struct EngineProtocolTests {
     }
   }
 
-  /// The canvas has to be a multiple of the VAE's spatial factor. 512 and 384
-  /// are in; 500 is not, and the app refuses it rather than the engine failing
-  /// after loading thirty-eight gigabytes.
-  @Test("Only canvases the video VAE can express are offered")
+  /// Both sides have to be a multiple of the VAE's spatial factor, and that is
+  /// the *only* rule — the model has no aspect ratio it insists on, and its own
+  /// released example is 960x544 rather than a square.
+  @Test("Only frames the video VAE can express are offered")
   func videoCanvasSupport() {
-    #expect(EngineVideoOptions.supports(canvas: 512))
-    #expect(EngineVideoOptions.supports(canvas: 384))
-    #expect(!EngineVideoOptions.supports(canvas: 500))
-    #expect(!EngineVideoOptions.supports(canvas: 0))
+    #expect(EngineVideoOptions.supports(width: 960, height: 544))
+    #expect(EngineVideoOptions.supports(width: 544, height: 960))
+    #expect(EngineVideoOptions.supports(width: 512, height: 512))
+    #expect(!EngineVideoOptions.supports(width: 500, height: 544))
+    #expect(!EngineVideoOptions.supports(width: 960, height: 500))
+    #expect(!EngineVideoOptions.supports(width: 0, height: 0))
+    // Every tier the studio offers, at every aspect a project can be in, must
+    // pass the engine's own rule. This is the check that would have caught a
+    // "720p" that rendered 720 — which is not a multiple of 32.
+    for tier in LTXResolution.allCases {
+      for aspect in [16.0 / 9, 9.0 / 16, 1.0, 4.0 / 5, 3.0 / 2] {
+        let frame = tier.frame(aspect: aspect)
+        #expect(EngineVideoOptions.supports(width: frame.width,
+                                            height: frame.height))
+      }
+    }
+  }
+
+  /// The tiers name a short edge and the aspect decides the rest, so one
+  /// choice reads the same in a landscape project and a portrait one.
+  @Test("A tier keeps its short edge and takes its shape from the project")
+  func videoTierShape() {
+    #expect(LTXResolution.p1080.frame(aspect: 16.0 / 9) == (1920, 1088))
+    #expect(LTXResolution.p1080.frame(aspect: 9.0 / 16) == (1088, 1920))
+    #expect(LTXResolution.p480.frame(aspect: 1.0) == (480, 480))
+    // 720 and 1080 are not multiples of 32; the tiers keep the familiar name
+    // and render the nearest frame the decoder can express.
+    #expect(LTXResolution.p720.shortEdge == 704)
+    #expect(LTXResolution.p1080.shortEdge == 1088)
   }
 
   /// Absent settings mean H3, which is what `.image` meant before a second
@@ -237,6 +263,39 @@ struct EngineProtocolTests {
       from: EngineLineCodec.encode(refs)
     )
     #expect(decodedRefs.referenceImageURLs.map(\.lastPathComponent) == ["a.png", "b.png"])
+  }
+
+  /// A field that fails to encode reads as the default at the far end, and
+  /// the default here is a full repaint — the picture silently ignored rather
+  /// than an error anyone would notice.
+  @Test("The strength of a source picture survives a round trip")
+  func sourceStrengthRoundTrip() throws {
+    let request = EngineGenerationRequest(
+      kind: .image,
+      prompt: "p",
+      duration: 1,
+      seed: 42,
+      sourceStrength: 0.35,
+      firstFrameURL: URL(fileURLWithPath: "/tmp/in.png"),
+      outputURL: URL(fileURLWithPath: "/tmp/o.png")
+    )
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(request)
+    )
+    #expect(decoded.sourceStrength == 0.35)
+    #expect(decoded.firstFrameURL?.lastPathComponent == "in.png")
+
+    /* Absent is distinct from zero: nothing to work from, rather than a
+     * picture to keep entirely. */
+    let plain = EngineGenerationRequest(
+      kind: .image, prompt: "p", duration: 1,
+      outputURL: URL(fileURLWithPath: "/tmp/o.png"))
+    let decodedPlain = try EngineLineCodec.decode(
+      EngineGenerationRequest.self,
+      from: EngineLineCodec.encode(plain)
+    )
+    #expect(decodedPlain.sourceStrength == nil)
   }
 
   @Test("Canvas size overrides survive a round trip")

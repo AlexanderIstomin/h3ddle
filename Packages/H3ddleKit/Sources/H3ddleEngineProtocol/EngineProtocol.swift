@@ -179,10 +179,12 @@ public struct EngineVideoOptions: Hashable, Codable, Sendable {
     return steps * frameStep + 1
   }
 
-  /// Whether this canvas is renderable, so the app can refuse before loading
-  /// thirty-eight gigabytes.
-  public static func supports(canvas pixels: Int) -> Bool {
-    pixels >= pixelMultiple && pixels % pixelMultiple == 0
+  /// Whether this frame is renderable, so the app can refuse before loading
+  /// thirty-eight gigabytes. Both sides, independently — the model has no
+  /// aspect ratio it insists on, only a multiple it insists on.
+  public static func supports(width: Int, height: Int) -> Bool {
+    width >= pixelMultiple && width % pixelMultiple == 0
+      && height >= pixelMultiple && height % pixelMultiple == 0
   }
 }
 
@@ -434,6 +436,12 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Random-stream seed for the native generators; nil keeps the engine
   /// default (42). Identical seed + settings reproduce a generation.
   public var seed: UInt64?
+  /// How much of a supplied picture to discard when a still model works from
+  /// one, 0 through 1. At 1 nothing of it survives and the render is the same
+  /// as having sent no picture at all; at 0 it comes back as it went in. It
+  /// chooses where the sampler starts, so it moves in whole steps — an eighth
+  /// at a time on the turbo checkpoint's eight. Nil takes the engine default.
+  public var sourceStrength: Double?
   /// Overrides the quality preset's square canvas when both are set.
   public var canvasWidth: Int?
   public var canvasHeight: Int?
@@ -471,6 +479,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
     seed: UInt64? = nil,
+    sourceStrength: Double? = nil,
     canvasWidth: Int? = nil,
     canvasHeight: Int? = nil,
     firstFrameURL: URL? = nil,
@@ -494,6 +503,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
     self.seed = seed
+    self.sourceStrength = sourceStrength
     self.canvasWidth = canvasWidth
     self.canvasHeight = canvasHeight
     self.firstFrameURL = firstFrameURL
@@ -519,6 +529,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case previewDenoise
     case useBetaSchedule
     case seed
+    case sourceStrength
     case canvasWidth
     case canvasHeight
     case firstFrameURL
@@ -550,6 +561,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     useBetaSchedule =
       try container.decodeIfPresent(Bool.self, forKey: .useBetaSchedule) ?? false
     seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
+    sourceStrength = try container.decodeIfPresent(
+      Double.self, forKey: .sourceStrength)
     canvasWidth = try container.decodeIfPresent(Int.self, forKey: .canvasWidth)
     canvasHeight = try container.decodeIfPresent(Int.self, forKey: .canvasHeight)
     firstFrameURL = try container.decodeIfPresent(URL.self, forKey: .firstFrameURL)
@@ -577,6 +590,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)
     try container.encodeIfPresent(seed, forKey: .seed)
+    try container.encodeIfPresent(sourceStrength, forKey: .sourceStrength)
     try container.encodeIfPresent(canvasWidth, forKey: .canvasWidth)
     try container.encodeIfPresent(canvasHeight, forKey: .canvasHeight)
     try container.encodeIfPresent(firstFrameURL, forKey: .firstFrameURL)

@@ -102,6 +102,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           previewDenoise: request.previewDenoise,
           useBetaSchedule: request.useBetaSchedule,
           seed: request.seed,
+          sourceStrength: request.sourceStrength,
           canvasWidth: request.canvasWidth,
           canvasHeight: request.canvasHeight,
           firstFrameURL: request.firstFrameURL,

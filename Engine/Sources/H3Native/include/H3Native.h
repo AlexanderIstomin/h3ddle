@@ -51,9 +51,15 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
  * cancels. */
 typedef int (*h3ddle_zimage_step)(const char *phase, int completed, int total,
                                   void *opaque);
+/* `source_rgb`, when given, is a picture to work from: interleaved 8-bit RGB,
+ * `pixels` square, the same layout `rgb` receives — so a render can be handed
+ * straight back. `strength` is how much of it to discard, 1 keeping nothing
+ * and matching a NULL source. Framing and resampling belong to the caller. */
 int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            const char *prompt, int pixels, int steps,
-                           unsigned long long seed, unsigned char *rgb,
+                           unsigned long long seed,
+                           const unsigned char *source_rgb, float strength,
+                           unsigned char *rgb,
                            h3ddle_zimage_step on_step, void *opaque,
                            char *error, size_t error_size);
 /* Whether this build renders `pixels` square; the token count must be a
@@ -72,8 +78,10 @@ int h3ddle_zimage_supports_canvas(int pixels);
  * tower and the DiT do not fit in memory together -- about 37 GB -- so holding
  * anything resident is not on offer.
  *
- * `pixels` must be a multiple of 32 and `frames` must be 8k+1; both are what
- * the video VAE can express rather than preferences. `h3ddle_ltx_plan` answers
+ * Both sides must be a multiple of 32 and `frames` must be 8k+1; those are
+ * what the video VAE can express rather than preferences. Square is allowed
+ * and is not what the model is demonstrated at -- its own released example
+ * renders 960x544. `h3ddle_ltx_plan` answers
  * that question, and the clip's duration in seconds, without loading a byte.
  *
  * `on_step` names the stage -- "text encoder", "connector", "denoise",
@@ -82,8 +90,8 @@ int h3ddle_zimage_supports_canvas(int pixels);
  * cancelled call returns zero with an empty `error`. */
 typedef int (*h3ddle_ltx_step)(const char *phase, int completed, int total,
                                void *opaque);
-int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
-                    char *error, size_t error_size);
+int h3ddle_ltx_plan(int width, int height, int frames, int fps,
+                    double *seconds, char *error, size_t error_size);
 /* `first_frame` and `last_frame` may be NULL; `references` is an array of
  * `reference_count` paths placed evenly through the clip. Each is encoded by
  * the video VAE and joins the DiT's sequence, so the rendered frame resembles
@@ -91,7 +99,8 @@ int h3ddle_ltx_plan(int pixels, int frames, int fps, double *seconds,
  * At most `H3DDLE_LTX_MAX_CONDITIONING` in total. */
 #define H3DDLE_LTX_MAX_CONDITIONING 4
 int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
-                        const char *prompt, int pixels, int frames, int fps,
+                        const char *prompt, int width, int height,
+                        int frames, int fps,
                         int steps, unsigned long long seed,
                         const char *first_frame, const char *last_frame,
                         const char *const *references, int reference_count,

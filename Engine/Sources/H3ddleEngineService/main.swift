@@ -691,17 +691,15 @@ private final class EngineRuntime: @unchecked Sendable {
           EngineOutput.fail(command, message: "This engine cannot run LTX-2.5")
           return
         }
-        let pixels = request.canvasWidth ?? 0
-        guard pixels == (request.canvasHeight ?? pixels) else {
-          EngineOutput.fail(command, message: "LTX renders square clips only")
-          return
-        }
+        let width = request.canvasWidth ?? 0
+        let height = request.canvasHeight ?? 0
         let frames = EngineVideoOptions.frames(forSeconds: request.duration)
         var seconds = 0.0
         var reason = [CChar](repeating: 0, count: 512)
         guard
           h3ddle_ltx_plan(
-            Int32(pixels), Int32(frames), Int32(EngineVideoOptions.fps),
+            Int32(width), Int32(height), Int32(frames),
+            Int32(EngineVideoOptions.fps),
             &seconds, &reason, reason.count) != 0
         else {
           EngineOutput.fail(command, message: String(cString: reason))
@@ -749,17 +747,18 @@ private final class EngineRuntime: @unchecked Sendable {
               + "256, 512, 768, 1024, 1280, 1536 and 2048 it can")
           return
         }
-        /* Refused rather than dropped. This model conditions on the prompt
-         * alone, so a request carrying pictures cannot be answered as asked
-         * — and a picture that ignores the reference it was given looks like
-         * a bad model rather than a rejected request. */
-        guard request.firstFrameURL == nil, request.lastFrameURL == nil,
-          request.referenceImageURLs.isEmpty
+        /* A start frame is the picture to work from and is honoured. The
+         * other two still are not: this model conditions on the prompt and
+         * on what it is started from, and nothing else, so an end frame or a
+         * reference cannot be answered as asked. Refused rather than dropped
+         * — a picture that ignores what it was given reads as a bad model
+         * rather than a rejected request. */
+        guard request.lastFrameURL == nil, request.referenceImageURLs.isEmpty
         else {
           EngineOutput.fail(
             command,
-            message: "Z-Image renders from the prompt alone; it cannot take "
-              + "start or end frames or reference images")
+            message: "Z-Image can start from a picture, but it cannot take an "
+              + "end frame or reference images")
           return
         }
       } else {
@@ -908,7 +907,8 @@ private final class EngineRuntime: @unchecked Sendable {
     packageDirectory: URL,
     callbackContext: GenerationCallbackContext
   ) {
-    let pixels = request.canvasWidth ?? 512
+    let width = request.canvasWidth ?? 864
+    let height = request.canvasHeight ?? 480
     /* Rounded to the nearest renderable length here as well as in the app, so
      * a request that arrived from somewhere else still gets a clip rather than
      * a refusal. */
@@ -933,7 +933,8 @@ private final class EngineRuntime: @unchecked Sendable {
                     packagePath,
                     shaders,
                     prompt,
-                    Int32(pixels),
+                    Int32(width),
+                    Int32(height),
                     Int32(frames),
                     Int32(EngineVideoOptions.fps),
                     Int32(options.steps ?? 0),
@@ -986,6 +987,48 @@ private final class EngineRuntime: @unchecked Sendable {
   /// gigabytes is not cheap to reload, but the decoder alone wants twelve of
   /// working buffers at the larger canvases, and holding the model resident
   /// would compete with H3 for the memory that actually constrains this app.
+  /// A picture at exactly the size the model renders, which is square.
+  ///
+  /// Anything else is cropped to its middle first rather than squashed: a
+  /// portrait squeezed to a square comes back as a subtly wrong-shaped face,
+  /// which reads as the model being poor rather than the framing being lost.
+  /// Cropping is the lesser harm and the one the user can see coming.
+  private func squarePixels(from url: URL, side: Int) -> [UInt8]? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+    let edge = min(image.width, image.height)
+    guard edge > 0,
+      let cropped = image.cropping(
+        to: CGRect(
+          x: (image.width - edge) / 2, y: (image.height - edge) / 2,
+          width: edge, height: edge))
+    else { return nil }
+
+    var pixels = [UInt8](repeating: 0, count: 4 * side * side)
+    let drawn: Bool = pixels.withUnsafeMutableBytes { raw in
+      guard let context = CGContext(
+        data: raw.baseAddress, width: side, height: side,
+        bitsPerComponent: 8, bytesPerRow: 4 * side,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+      else { return false }
+      context.interpolationQuality = .high
+      context.draw(cropped, in: CGRect(x: 0, y: 0, width: side, height: side))
+      return true
+    }
+    guard drawn else { return nil }
+
+    /* RGBX down to RGB, which is what the engine takes. */
+    var rgb = [UInt8](repeating: 0, count: 3 * side * side)
+    for index in 0..<(side * side) {
+      rgb[index * 3] = pixels[index * 4]
+      rgb[index * 3 + 1] = pixels[index * 4 + 1]
+      rgb[index * 3 + 2] = pixels[index * 4 + 2]
+    }
+    return rgb
+  }
+
   private func runZImage(
     _ request: EngineGenerationRequest,
     options: EngineImageOptions,
@@ -997,23 +1040,44 @@ private final class EngineRuntime: @unchecked Sendable {
     var error = [CChar](repeating: 0, count: 512)
     var rgb = [UInt8](repeating: 0, count: 3 * pixels * pixels)
     let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+
+    var source: [UInt8]? = nil
+    if let frame = request.firstFrameURL {
+      guard let squared = squarePixels(from: frame, side: pixels) else {
+        EngineOutput.fail(
+          command, message: "That picture cannot be read as an image")
+        return
+      }
+      source = squared
+    }
+    /* Measured on this checkpoint rather than taken from the usual half-way
+     * convention, which is far too low here: at 0.65 an apple asked to become
+     * a pear stayed an apple, and at 0.30 a picture came back untouched. The
+     * blend region is 0.7 to 0.95, and a default inside it is the difference
+     * between a control that appears to work and one that appears ignored. */
+    let strength = Float(request.sourceStrength ?? 0.85)
     let produced = packageDirectory.path.withCString { packagePath in
       request.prompt.withCString { prompt in
         "h3_shaders.metal".withCString { shaders in
           rgb.withUnsafeMutableBufferPointer { pixelBuffer in
-            h3ddle_zimage_generate(
+            (source ?? []).withUnsafeBufferPointer { sourceBuffer in
+            let sourcePointer = source == nil ? nil : sourceBuffer.baseAddress
+            return h3ddle_zimage_generate(
               packagePath,
               shaders,
               prompt,
               Int32(pixels),
               Int32(options.steps ?? 0),
               request.seed ?? 42,
+              sourcePointer,
+              source == nil ? 1.0 : strength,
               pixelBuffer.baseAddress,
               zimageStepCallback,
               opaque,
               &error,
               error.count
             )
+            }
           }
         }
       }
