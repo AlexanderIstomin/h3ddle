@@ -20,10 +20,15 @@ new Metal**, which is most of why it was worth porting.
 | file | what |
 |------|------|
 | `ltx_audio.c` | audio VAE decoder and BigVGAN vocoder: latent → 16 kHz stereo |
+| `ltx_video.c` | video VAE decoder: latent → frames, 8× in time and 32× in space |
 
-Still to move out of `Vendor/h3.c/tests/`, where they currently work as
-standalone drivers: the DiT sampler (`ltx_generate.c`), the video VAE decoder
-(`ltx_decode.c`), and the Gemma tower plus embeddings connector.
+Both decoders are here; the halves that make a latent are not. Still to move
+out of `Vendor/h3.c/tests/`, where they work as standalone drivers: the DiT
+sampler (`ltx_generate.c`) and the Gemma tower plus embeddings connector.
+
+The video VAE's **encoder** is deliberately not carried over. It exists to
+condition on an existing clip, which nothing calls yet, and leaving it in the
+driver keeps the module to what the service needs.
 
 ## The order of operations, and why it is not one process yet
 
@@ -98,8 +103,9 @@ directly:
         -framework MetalPerformanceShaders \
         -framework MetalPerformanceShadersGraph -framework Accelerate -lm
 
-`ltx_audio_check` decodes a real latent and writes a WAV to be compared **byte
-for byte** with the one `h3_ltx_audio_decode` writes for the same file. The
+`ltx_audio_check` and `ltx_video_check` decode a real latent and write a WAV
+and a frame dump to be compared **byte for byte** with the ones
+`h3_ltx_audio_decode` and `h3_ltx_decode` write for the same file. The
 arithmetic did not change in the move, so anything but identical bytes is the
 lift's fault — which is the failure mode worth guarding, since an error latch
 that short-circuits one branch early yields a plausible waveform from a
