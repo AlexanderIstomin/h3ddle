@@ -22,10 +22,12 @@ new Metal**, which is most of why it was worth porting.
 | `ltx_audio.c` | audio VAE decoder and BigVGAN vocoder: latent → 16 kHz stereo |
 | `ltx_video.c` | video VAE decoder: latent → frames, 8× in time and 32× in space |
 | `ltx_connector.c` | the tower's features → DiT context, 8 blocks per stream |
+| `ltx_text.c` | Gemma 4 12B int8, 48 layers, and the feature aggregation |
 
-Still to move out of `Vendor/h3.c/tests/`, where they work as standalone
-drivers: the **Gemma tower** (`test_real_ltx_text.c`, 461 lines of engine code
-under its anchor machinery) and the **DiT sampler** (`ltx_generate.c`).
+One stage left: the **DiT sampler**, still a standalone driver at
+`Vendor/h3.c/tests/ltx_generate.c`. It is also where `ltx_generate()` will
+live, since the load-run-free sequencing the memory constraint forces is its
+problem to own.
 
 The video VAE's **encoder** is deliberately not carried over. It exists to
 condition on an existing clip, which nothing calls yet, and leaving it in the

@@ -71,6 +71,7 @@ let package = Package(
         "Sources/LTX/ltx_audio.c",
         "Sources/LTX/ltx_video.c",
         "Sources/LTX/ltx_connector.c",
+        "Sources/LTX/ltx_text.c",
         "Sources/H3Native/H3NativeAudio.m",
       ],
       publicHeadersPath: "Sources/H3Native/include",
