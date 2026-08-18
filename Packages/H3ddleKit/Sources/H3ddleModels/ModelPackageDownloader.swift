@@ -354,11 +354,11 @@ public actor ModelPackageDownloader {
     }
   }
 
-  /// Bytes this install actually has to fetch. A file already present in
-  /// another installed package, or at the manifest's declared local candidate
-  /// path, hardlinks into place instead of downloading — so a package that
-  /// only adds one weight file to an existing install costs that file alone,
-  /// not the sum of its parts.
+  /// Bytes this install actually has to fetch. A file already present in this
+  /// package's own previous install, in another installed package, or at the
+  /// manifest's declared local candidate path, hardlinks into place instead of
+  /// downloading — so a package that only adds one weight file to an existing
+  /// install costs that file alone, not the sum of its parts.
   public func pendingByteCount(for manifest: ModelPackageManifest) -> Int64 {
     manifest.files.reduce(into: 0) { total, file in
       if !isLocallySatisfiable(file, in: manifest) { total += file.byteCount }
@@ -373,7 +373,17 @@ public actor ModelPackageDownloader {
       file.localCandidatePath.map {
         (try? fileSize(at: URL(fileURLWithPath: $0))) == file.byteCount
       } ?? false
+    // The package's own previous install, which `acquireLocalCopy` reaches for
+    // first and which every other clause here forgot. Its absence is what made
+    // an update that adds one accessory file quote the whole package: the
+    // thirteen gigabytes that were never going to move counted as pending, and
+    // being asked to download a model that is already installed is
+    // indistinguishable from the app having lost it.
+    let installedHere = store.installedURL(for: manifest)
+      .appendingPathComponent(file.path, isDirectory: false)
+    let alreadyInPlace = (try? fileSize(at: installedHere)) == file.byteCount
     return hasLocalCandidate
+      || alreadyInPlace
       || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
       // Counted here as well as used above, so the size the app quotes before
       // the download is the size the download actually is. Quoting 38.69 GB and
@@ -433,23 +443,30 @@ public actor ModelPackageDownloader {
     progress: @escaping ProgressHandler
   ) async throws -> Bool {
     let fileManager = FileManager.default
-    var candidates: [URL] = []
+    /// `trusted` marks bytes this app itself verified when it wrote them, and
+    /// that nothing since could have changed. Only one source qualifies, and
+    /// it matters: without it, adding a single accessory file to a manifest
+    /// re-hashes every gigabyte already on disk, so a 168 MB addition reads
+    /// as a fourteen-gigabyte download and takes as long as one.
+    var candidates: [(url: URL, trusted: Bool)] = []
     if let localPath = file.localCandidatePath {
-      candidates.append(URL(fileURLWithPath: localPath))
+      candidates.append((URL(fileURLWithPath: localPath), false))
     }
     // An update reuses the bytes it already has: unchanged files hardlink
     // out of the existing install instead of downloading again.
     let installed = store.installedURL(for: manifest)
       .appendingPathComponent(file.path, isDirectory: false)
     if FileManager.default.fileExists(atPath: installed.path) {
-      candidates.append(installed)
+      candidates.append((installed, fileIsUnchangedInPlace(file, manifest: manifest)))
     }
     candidates.append(
       contentsOf: installedCandidates(sha256: file.sha256, excludingPackage: manifest.id)
+        .map { ($0, false) }
     )
-    candidates.append(contentsOf: huggingFaceCacheCandidates(sha256: file.sha256))
+    candidates.append(
+      contentsOf: huggingFaceCacheCandidates(sha256: file.sha256).map { ($0, false) })
 
-    for candidate in candidates {
+    for (candidate, trusted) in candidates {
       try Task.checkCancellation()
       guard try fileSize(at: candidate) == file.byteCount else { continue }
       let scratch = destination.appendingPathExtension("local")
@@ -473,11 +490,13 @@ public actor ModelPackageDownloader {
           totalBytes: manifest.totalByteCount
         )
       )
-      do {
-        try await verify(file, at: scratch)
-      } catch {
-        try? fileManager.removeItem(at: scratch)
-        continue
+      if !trusted {
+        do {
+          try await verify(file, at: scratch)
+        } catch {
+          try? fileManager.removeItem(at: scratch)
+          continue
+        }
       }
       if fileManager.fileExists(atPath: destination.path) {
         try fileManager.removeItem(at: destination)
@@ -540,6 +559,31 @@ public actor ModelPackageDownloader {
       }
     }
     return candidates
+  }
+
+  /// Whether this exact file is already installed for this package under the
+  /// same name, size and digest that the new manifest asks for.
+  ///
+  /// The installed manifest is the record of what was verified on the way in.
+  /// If it names the same three things, the bytes on disk passed their digest
+  /// when they were written, and hardlinking them cannot have altered them —
+  /// so re-hashing proves nothing that was not already proved. Any other
+  /// source is still hashed, including files taken from another package or
+  /// from the Hugging Face cache, where the digest is a claim rather than
+  /// something this app watched happen.
+  private func fileIsUnchangedInPlace(
+    _ file: ModelPackageFile, manifest: ModelPackageManifest
+  ) -> Bool {
+    let manifestURL = store.installedURL(for: manifest)
+      .appendingPathComponent(ModelPackageStore.installedManifestName, isDirectory: false)
+    guard
+      let data = try? Data(contentsOf: manifestURL),
+      let installed = try? JSONDecoder().decode(ModelPackageManifest.self, from: data),
+      installed.id == manifest.id, installed.revision == manifest.revision
+    else { return false }
+    return installed.files.contains {
+      $0.path == file.path && $0.byteCount == file.byteCount && $0.sha256 == file.sha256
+    }
   }
 
   private func installedCandidates(sha256: String, excludingPackage: String) -> [URL] {

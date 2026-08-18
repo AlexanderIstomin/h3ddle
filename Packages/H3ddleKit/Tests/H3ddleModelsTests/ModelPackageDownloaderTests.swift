@@ -276,6 +276,118 @@ struct ModelPackageDownloaderTests {
     #expect(decoded.files.map(\.sha256) == ModelCatalog.minimaxH3Int8.files.map(\.sha256))
   }
 
+  /// What the user is told before they agree to anything. An update that adds
+  /// one small file to an installed package must quote that file, not the
+  /// package — being asked to download something already on disk is
+  /// indistinguishable from the app having lost it.
+  @Test("An update quotes only the bytes it will actually fetch")
+  func updateQuotesOnlyTheNewBytes() async throws {
+    let payload = Data(repeating: 7, count: 4096)
+    let extra = Data(repeating: 9, count: 32)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let before = makeManifest(payload: payload)
+    _ = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: FixtureTransport(payload: payload),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(before)
+
+    var files = before.files
+    files.append(
+      ModelPackageFile(
+        role: .imageVAE,
+        path: "weights/extra.safetensors",
+        byteCount: Int64(extra.count),
+        sha256: SHA256.hash(data: extra).map { String(format: "%02x", $0) }.joined()
+      )
+    )
+    let after = ModelPackageManifest(
+      id: before.id, displayName: before.displayName, detail: before.detail,
+      repository: before.repository, revision: before.revision,
+      licenseName: before.licenseName, licenseURL: before.licenseURL,
+      minimumUnifiedMemoryBytes: before.minimumUnifiedMemoryBytes,
+      compatibility: before.compatibility, files: files
+    )
+
+    let downloader = ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: RefusingTransport(),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    )
+    let pending = await downloader.pendingByteCount(for: after)
+    #expect(after.totalByteCount == Int64(payload.count + extra.count))
+    #expect(pending == Int64(extra.count))
+  }
+
+  /// Adding one accessory file to a manifest must not cost a re-download, and
+  /// must not cost a re-hash of everything already on disk either — on the
+  /// real Z-Image package that was fourteen gigabytes of digesting to gain
+  /// 168 MB, which reads to the user as being asked to download the model
+  /// again.
+  ///
+  /// The corruption below is how the skip is made observable: the installed
+  /// bytes are replaced with different bytes of the same length, and they
+  /// survive the update untouched. That is the tradeoff stated out loud —
+  /// bytes this app verified when it wrote them are taken on trust when they
+  /// are hardlinked in place, and only files arriving from anywhere else are
+  /// hashed again.
+  @Test("Adding a file to a manifest reuses the rest without re-hashing it")
+  func addingAFileDoesNotRehashTheRest() async throws {
+    let payload = Data("original transformer bytes".utf8)
+    let extra = Data("the accessory file".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let before = makeManifest(payload: payload)
+    let installed = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: FixtureTransport(payload: payload),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(before)
+
+    let existing = installed.appendingPathComponent("weights/model.safetensors")
+    let tampered = Data("TAMPERED transformer bytes".utf8)
+    #expect(tampered.count == payload.count)
+    try tampered.write(to: existing)
+
+    var files = before.files
+    files.append(
+      ModelPackageFile(
+        role: .imageVAE,
+        path: "weights/extra.safetensors",
+        byteCount: Int64(extra.count),
+        sha256: SHA256.hash(data: extra).map { String(format: "%02x", $0) }.joined()
+      )
+    )
+    let after = ModelPackageManifest(
+      id: before.id,
+      displayName: before.displayName,
+      detail: before.detail,
+      repository: before.repository,
+      revision: before.revision,
+      licenseName: before.licenseName,
+      licenseURL: before.licenseURL,
+      minimumUnifiedMemoryBytes: before.minimumUnifiedMemoryBytes,
+      compatibility: before.compatibility,
+      files: files
+    )
+
+    let updated = try await ModelPackageDownloader(
+      store: ModelPackageStore(rootURL: root),
+      transport: FixtureTransport(payload: extra),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(after)
+
+    /* The new file arrived. */
+    #expect(
+      try Data(contentsOf: updated.appendingPathComponent("weights/extra.safetensors")) == extra)
+    /* The old one was carried across as-is rather than digested again. */
+    #expect(
+      try Data(contentsOf: updated.appendingPathComponent("weights/model.safetensors")) == tampered)
+  }
+
   @Test("Shared files hardlink from installed packages instead of downloading")
   func reusesInstalledFiles() async throws {
     let sharedPayload = Data("shared encoder bytes".utf8)
