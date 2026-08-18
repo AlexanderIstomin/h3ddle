@@ -139,6 +139,62 @@ public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   }
 }
 
+/// H3's own canvas and duration rules, transcribed from the released
+/// pipeline's `adapt_canvas` and its latent-length grid.
+///
+/// Both were being ignored, and the model does not fail loudly when they are:
+/// asked for a canvas or a length it was never trained on it returns a
+/// confident, well-made video of something else entirely. Measured here at 73
+/// frames, roughly half of seeds came back with no relation to the prompt —
+/// the same period-drama interior whatever the prompt said, at four passes and
+/// at twelve, on the base checkpoint and the turbo one, and with the prompt
+/// written to the vendor's own guide.
+public enum H3Canvas {
+  /// The short edge is *always* this. A caller's width and height choose the
+  /// ratio and nothing else — which is what the reference does, and why every
+  /// tier below 768 was drawing off-canvas.
+  public static let shortEdge = 768
+  /// Area ceiling; the reference scales the whole canvas down to meet it
+  /// rather than clamping one axis.
+  public static let maximumPixels = 768 * 1344
+
+  public static func dimensions(aspect: Double) -> (width: Int, height: Int) {
+    guard aspect.isFinite, aspect > 0 else { return (shortEdge, shortEdge) }
+    var width = aspect >= 1 ? Double(shortEdge) * aspect : Double(shortEdge)
+    var height = aspect >= 1 ? Double(shortEdge) : Double(shortEdge) / aspect
+    let area = width * height
+    if area > Double(maximumPixels) {
+      let scale = (Double(maximumPixels) / area).squareRoot()
+      width *= scale
+      height *= scale
+    }
+    return (Self.snapped(width), Self.snapped(height))
+  }
+
+  private static func snapped(_ value: Double) -> Int {
+    max(32, Int((value / 32).rounded()) * 32)
+  }
+}
+
+/// The frame grid and the range the model was trained on.
+public enum H3Duration {
+  public static let fps = 24.0
+  public static let chunk = 17
+  /// 17k+5. 124 frames is the released pipeline's default and the bottom of
+  /// the range it documents as trained; 362 is the top. We offered 22.
+  public static let minimumFrames = 124
+  public static let maximumFrames = 362
+
+  public static func aligned(frames: Int) -> Int {
+    var value = max(minimumFrames, frames)
+    while (value - 5) % chunk != 0 { value += 1 }
+    return min(value, maximumFrames)
+  }
+
+  public static var minimumSeconds: Double { Double(minimumFrames) / fps }
+  public static var maximumSeconds: Double { Double(maximumFrames) / fps }
+}
+
 public enum GenerationPreset: String, CaseIterable, Codable, Sendable, Identifiable {
   case preview
   case standard

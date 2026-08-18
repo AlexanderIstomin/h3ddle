@@ -10,8 +10,12 @@ struct GenerationStudioView: View {
   let kind: GenerationKind
 
   private static let h3FPS = 24.0
-  private static let h3MinimumFrames = 22
-  private static let h3FrameChunk = 17
+  /// The bottom of the range the model was trained on, not the shortest clip
+  /// the grid can express. Below it H3 drifts off prompt — at 73 frames about
+  /// half of seeds came back unrelated to what was asked, and the app used to
+  /// start at 22.
+  private static let h3MinimumFrames = H3Duration.minimumFrames
+  private static let h3FrameChunk = H3Duration.chunk
 
   @State private var stage = StudioStage.compose
   @State private var resultIDAtStart: UUID?
@@ -718,7 +722,11 @@ struct GenerationStudioView: View {
             get: { model.studioSettings.alignedDurationStep },
             set: { model.studioSettings.alignedDurationStep = $0 }
           ),
-          in: 0...20,
+          // Derived from the trained range rather than a round number: the
+          // top used to be step 20, which is 464 frames, a hundred past what
+          // the model has ever been asked to draw.
+          in: 0...Double((H3Duration.maximumFrames - H3Duration.minimumFrames)
+                         / H3Duration.chunk),
           step: 1
         )
         .tint(H3Color.accent)
@@ -1247,10 +1255,15 @@ struct GenerationStudioView: View {
     // A model built for stills brings its own square ladder; the video one is
     // a short edge that the project's aspect ratio widens, which is the pair
     // this renderer refuses.
+    // H3 draws on one canvas: a 768 short edge, area-capped, the ratio taken
+    // from the project. The quality ladder used to name the short edge as well,
+    // down to 352, which is off-canvas for this model and is where it stops
+    // following the prompt. Passes and blocks still vary by tier; the canvas
+    // does not.
     let size: (width: Int, height: Int) =
       kind == .image && model.imageEngine == .zImage
       ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
-      : knobs.canvas.dimensions(aspect: Double(model.studioAspect.fraction))
+      : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction))
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,

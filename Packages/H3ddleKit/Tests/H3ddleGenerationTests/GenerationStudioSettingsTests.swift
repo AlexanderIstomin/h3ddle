@@ -104,6 +104,36 @@ struct GenerationCanvasTests {
     #expect(GenerationCanvas.p480.dimensions(aspect: .nan) == (480, 480))
   }
 
+  /// Transcribed from the released pipeline. These are the numbers the model
+  /// was trained on, and the app was outside both of them.
+  @Test("H3's canvas matches the reference's adapt_canvas")
+  func h3CanvasMatchesReference() {
+    // 16:9 nominal is 1365x768, over the area cap, and scales to 1344x768.
+    #expect(H3Canvas.dimensions(aspect: 16.0 / 9) == (1344, 768))
+    #expect(H3Canvas.dimensions(aspect: 9.0 / 16) == (768, 1344))
+    #expect(H3Canvas.dimensions(aspect: 1.0) == (768, 768))
+    // The short edge never depends on what the caller asked for.
+    for aspect in [16.0 / 9, 4.0 / 5, 1.0, 9.0 / 16, 3.0 / 2] {
+      let size = H3Canvas.dimensions(aspect: aspect)
+      #expect(min(size.width, size.height) == H3Canvas.shortEdge)
+      #expect(size.width * size.height <= H3Canvas.maximumPixels)
+      #expect(size.width % 32 == 0 && size.height % 32 == 0)
+    }
+  }
+
+  @Test("Durations land on the 17k+5 grid inside the trained range")
+  func h3DurationStaysInRange() {
+    #expect(H3Duration.aligned(frames: 5) == 124)
+    #expect(H3Duration.aligned(frames: 73) == 124, "73 was below the trained range")
+    #expect(H3Duration.aligned(frames: 124) == 124)
+    #expect(H3Duration.aligned(frames: 125) == 141)
+    #expect(H3Duration.aligned(frames: 9999) == H3Duration.maximumFrames)
+    for frames in stride(from: 124, through: 362, by: 17) {
+      #expect(H3Duration.aligned(frames: frames) == frames)
+      #expect((frames - 5) % 17 == 0)
+    }
+  }
+
   /// The snapshot writes its own coding keys, so a new knob has to be added
   /// in four places and reaches the wire only if every one of them agrees.
   /// A round trip is the cheapest way to catch the one that was missed.
