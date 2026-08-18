@@ -145,12 +145,27 @@ int zimage_generate(const zimage_request *request, float *image,
                         "render from a prompt");
         }
         if (progress) progress("image VAE", 0, 1, context);
-        const int encoded_source = zimage_vae_encode(
-            vae, request->source, request->pixels, source_latent, NULL, NULL);
+        /* On the device where there is one. The CPU path is correct and far
+         * too slow to put in front of a render — 176 s at 1024 square against
+         * about four on the GPU — and it runs before the first denoising step,
+         * so every second of it is spent with the bar standing still. */
+        int encoded_source = 0;
+        if (request->shaders) {
+            zimage_vae_gpu *gpu_vae = zimage_vae_gpu_create_encoder(
+                request->shaders, path, NULL, request->pixels, error, error_size);
+            encoded_source = gpu_vae && zimage_vae_gpu_encode(
+                gpu_vae, request->source, request->pixels, source_latent,
+                error, error_size);
+            if (gpu_vae) zimage_vae_gpu_release(gpu_vae);
+        } else {
+            encoded_source = zimage_vae_encode(
+                vae, request->source, request->pixels, source_latent, NULL, NULL);
+        }
         qwen_weights_close(vae);
         if (!encoded_source) {
             free(caption); free(source_latent);
-            return fail(error, error_size, "cannot read the picture");
+            if (error && !*error) fail(error, error_size, "cannot read the picture");
+            return 0;
         }
         /* The mirror of what the decoder undoes on the way out. */
         for (size_t index = 0; index < source_count; index++)

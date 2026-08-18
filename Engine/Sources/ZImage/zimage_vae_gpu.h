@@ -35,4 +35,18 @@ void zimage_vae_gpu_release(zimage_vae_gpu *vae);
 int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent, int side,
                           float *image, char *error, size_t error_size);
 
+/* The same autoencoder the other way, for working from a picture. Built
+ * separately because it holds different weights, and `max_side` is the
+ * *picture's* side here where the decoder's is the latent's.
+ *
+ * `image` is [3][side][side] and `latent` receives [16][side/8][side/8], both
+ * channel-major, matching the CPU pair exactly. Released with the same call. */
+zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
+                                              const char *encoder,
+                                              h3_gpu *device, int max_side,
+                                              char *error, size_t error_size);
+int zimage_vae_gpu_encode(zimage_vae_gpu *vae, const float *image,
+                          int image_side, float *latent,
+                          char *error, size_t error_size);
+
 #endif
