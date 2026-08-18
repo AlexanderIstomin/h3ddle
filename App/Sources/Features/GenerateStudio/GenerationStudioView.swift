@@ -222,8 +222,21 @@ struct GenerationStudioView: View {
         }
       }
 
-      if kind == .video {
+      // H3's trained prompt schema, composed into labelled sections it was
+      // taught to read. LTX takes one prose prompt and denoises its soundtrack
+      // from that — `H3StructuredPrompt.compose` is skipped for any engine
+      // with its own package, so these two fields were being collected and
+      // dropped on the floor.
+      if kind == .video, !isLTX {
         audioDesignSection
+      }
+      if isLTX {
+        Text("The soundtrack comes from the prompt above — this model "
+          + "denoises picture and sound together, so describe what should be "
+          + "heard in the same sentence as what should be seen.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
 
       if kind == .audio, model.audioMode == .speech {
@@ -622,11 +635,12 @@ struct GenerationStudioView: View {
           }
 
           // Every knob in here describes an H3 pass — DiT layers, core reuse,
-          // how many frames a still is kept from. A package with its own
-          // engine reads none of them, so the image lane shows them only
-          // while H3 is the model drawing.
+          // how many frames a still is kept from, and the presets that set
+          // them together. A package with its own engine reads none of them,
+          // so both lanes show this only while H3 is the model drawing.
           if usesNativeSettings,
-            kind == .video || (kind == .image && model.imageEngine == .h3)
+            (kind == .video && model.videoEngine == .h3)
+              || (kind == .image && model.imageEngine == .h3)
           {
             generationControls
           }
@@ -634,6 +648,12 @@ struct GenerationStudioView: View {
           if usesNativeSettings, kind == .image, model.imageEngine == .zImage {
             imageResolutionControls
             imagePassesControls
+            seedControls
+          }
+
+          if usesNativeSettings, isLTX {
+            ltxResolutionControls
+            ltxPassesControls
             seedControls
           }
 
@@ -1085,34 +1105,6 @@ struct GenerationStudioView: View {
         }
       }
 
-      if isLTX {
-        labeled("STEPS") {
-          HStack {
-            Slider(
-              value: Binding(
-                get: { Double(knobs.denoisingSteps) },
-                set: { steps in
-                  model.updateStudioKnobs { $0.denoisingSteps = Int(steps) }
-                }
-              ),
-              in: 1...16,
-              step: 1
-            )
-            .tint(H3Color.accent)
-            .accessibilityIdentifier("generation-ltx-steps")
-            Text("\(knobs.denoisingSteps)")
-              .font(.system(size: 11, weight: .medium, design: .monospaced))
-              .foregroundStyle(H3Color.textSecondary)
-              .frame(width: 28, alignment: .trailing)
-          }
-          Text("This checkpoint is step-distilled and was released at eight. "
-            + "Fewer trades detail for time; more buys very little.")
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        seedControls
-      } else {
       labeled("DENOISING PASSES") {
         HStack {
           Slider(
@@ -1208,7 +1200,42 @@ struct GenerationStudioView: View {
       }
 
       seedControls
+    }
+  }
+
+  /// LTX's only sampler knob. H3's column has nine and this engine reads one of
+  /// them, so it gets its own control rather than a filtered version of that.
+  private var ltxPassesControls: some View {
+    labeled("STEPS") {
+      HStack(spacing: 10) {
+        Slider(
+          value: Binding(
+            get: { Double(model.studioSettings.knobs.denoisingSteps) },
+            set: { value in
+              model.updateStudioKnobs { $0.denoisingSteps = Int(value.rounded()) }
+            }
+          ),
+          in: 1...16,
+          step: 1
+        )
+        .tint(H3Color.accent)
+        Text("\(model.studioSettings.knobs.denoisingSteps)")
+          .font(.system(size: 11, weight: .medium, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary)
+          .frame(width: 22, alignment: .trailing)
+        Button("Reset") {
+          model.updateStudioKnobs { $0.denoisingSteps = 8 }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11))
+        .foregroundStyle(H3Color.textSecondary)
       }
+      .accessibilityIdentifier("generation-ltx-steps")
+      Text("This checkpoint is step-distilled and was released at eight. Fewer "
+        + "trades detail for time; more buys very little.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
