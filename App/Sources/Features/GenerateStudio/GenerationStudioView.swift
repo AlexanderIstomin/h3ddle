@@ -725,18 +725,23 @@ struct GenerationStudioView: View {
           // Derived from the trained range rather than a round number: the
           // top used to be step 20, which is 464 frames, a hundred past what
           // the model has ever been asked to draw.
-          in: 0...Double((H3Duration.maximumFrames - H3Duration.minimumFrames)
-                         / H3Duration.chunk),
+          in: 0...Double(supportedLength.stepCount),
           step: 1
         )
         .tint(H3Color.accent)
       } else {
         Slider(
           value: Binding(
-            get: { model.studioSettings.duration },
+            // Read through the floor as well as written, so the label and
+            // the slider agree with what will actually be requested. The
+            // stored default is three seconds, which video no longer allows.
+            get: { max(model.studioSettings.duration, minimumDuration) },
             set: { model.studioSettings.duration = $0 }
           ),
-          in: 1...maximumDuration
+          // Video keeps the trained floor even on this path. It is reached
+          // when no H3 tree has validated yet, and it used to start at one
+          // second — a length the model has never been asked to draw.
+          in: minimumDuration...maximumDuration
         )
         .tint(H3Color.accent)
       }
@@ -1395,14 +1400,27 @@ struct GenerationStudioView: View {
   /// The audio mode only decides this on the audio tab. It is one setting
   /// shared by every tab, so consulting it elsewhere hands video whichever
   /// ceiling the audio tab was last left on.
-  private var maximumDuration: Double {
-    guard kind == .audio else { return 15 }
-    switch model.audioMode {
-    // A ceiling rather than a length: speech stops when the line is spoken,
-    // so this only decides how long a runaway is allowed to run.
-    case .speech: return 60
-    case .music, .soundEffects: return 120
+  /// What the model on this lane will actually generate. Asked of the engine
+  /// rather than hardcoded per tab, so a lane cannot offer a length its model
+  /// has never been trained to produce.
+  private var supportedLength: SupportedLength {
+    switch kind {
+    case .video: .h3Video
+    case .image: .still
+    case .audio:
+      switch model.audioMode {
+      // A ceiling rather than a length: speech stops when the line is spoken,
+      // so this only decides how long a runaway is allowed to run.
+      case .speech: .speechCeiling
+      case .music, .soundEffects: .stableAudio
+      }
     }
+  }
+
+  private var minimumDuration: Double { supportedLength.minimumSeconds }
+
+  private var maximumDuration: Double {
+    supportedLength.maximumSeconds
   }
 
   private var usesAlignedH3Duration: Bool {
@@ -1412,7 +1430,12 @@ struct GenerationStudioView: View {
   private var requestedDuration: Double {
     if kind == .image { return 3 }
     if kind == .audio, model.audioMode == .speech { return speechCeiling }
-    guard usesAlignedH3Duration else { return model.studioSettings.duration }
+    guard usesAlignedH3Duration else {
+      // Resolved rather than trusted: the slider is bounded, a restored
+      // project's stored duration is not, and neither is a length typed by
+      // any other caller.
+      return supportedLength.resolved(model.studioSettings.duration)
+    }
     return (Double(alignedFrames) - 0.5) / Self.h3FPS
   }
 
