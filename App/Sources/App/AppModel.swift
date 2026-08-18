@@ -93,6 +93,11 @@ struct ModelChoice: Identifiable, Equatable {
   var directory: URL?
   var generationProfile: ModelGenerationProfile
   var capability: ModelCapability
+  /// Which engine renders a clip from this package. Both video engines write
+  /// video with a soundtrack, so nothing about the *output* separates them —
+  /// only the package does, which is why this is resolved from the folder and
+  /// carried rather than asked for while drawing.
+  var videoEngine: VideoGenerationEngine = .h3
   /// What the download costs, shown before the choice is made rather than
   /// in the confirmation that follows it. Zero for a folder already on disk.
   var downloadBytes: Int64
@@ -168,6 +173,7 @@ final class AppModel {
     ModelCatalog.stableAudio3SmallMusic,
     ModelCatalog.qwen3TTSSpeech,
     ModelCatalog.zImageTurbo,
+    ModelCatalog.ltx25,
   ]
   var managedStatuses: [String: ManagedPackageStatus] = [:]
   /// What each package still has to fetch, which is less than it weighs
@@ -595,11 +601,15 @@ final class AppModel {
     phaseTimeline = GenerationPhaseTimeline()
     let audioEngine = kind == .audio ? audioMode.engine : .h3
     let imageEngine: ImageGenerationEngine = kind == .image ? self.imageEngine : .h3
-    let ownPackage = audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
+    let videoEngine: VideoGenerationEngine = kind == .video ? self.videoEngine : .h3
+    let ownPackage =
+      audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
+      || videoEngine.usesOwnPackage
     /// Frames and references are H3's conditioning; no other engine here
-    /// reads a picture. Video always qualifies — its `imageEngine` is `.h3`
-    /// because the question does not arise.
-    let acceptsImageInputs = kind != .audio && imageEngine == .h3
+    /// reads a picture. The engine *refuses* a request carrying them rather
+    /// than dropping them, so this has to be right on the way out.
+    let acceptsImageInputs =
+      kind != .audio && imageEngine == .h3 && videoEngine.acceptsReferenceInputs
     // Speech and sound effects run in one phase and report no pass counter,
     // so their phase fraction is the run's rather than a band within it.
     // Rebuilt per run: a second generation from an already-open studio never
@@ -696,6 +706,7 @@ final class AppModel {
       kind: kind,
       audioEngine: audioEngine,
       imageEngine: imageEngine,
+      videoEngine: videoEngine,
       // The duration is a ceiling for speech, not a target: the model stops
       // when the line is spoken.
       // Always present for speech, even with no clip: a nil reference means
@@ -729,14 +740,16 @@ final class AppModel {
       lastFrameURL: acceptsImageInputs ? studioEndFrame?.url : nil,
       referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : []
     )
-    // The audio models and Z-Image load their own packages; the H3 directory
-    // would be the wrong tree entirely.
+    // The audio models, Z-Image and LTX all load their own packages; the H3
+    // directory would be the wrong tree entirely.
     let nativeModelDirectory =
       imageEngine.usesOwnPackage
       ? imagePackageDirectory
-      : (audioEngine.usesOwnPackage
-        ? audioPackageDirectory
-        : (usesNativeEngine(for: kind) ? modelDirectory : nil))
+      : (videoEngine.usesOwnPackage
+        ? videoPackageDirectory
+        : (audioEngine.usesOwnPackage
+          ? audioPackageDirectory
+          : (usesNativeEngine(for: kind) ? modelDirectory : nil)))
     let provider: any GenerationProvider =
       if let nativeModelDirectory {
         EngineGenerationProvider(
@@ -1018,7 +1031,11 @@ final class AppModel {
 
   func usesNativeEngine(for kind: GenerationKind) -> Bool {
     switch kind {
-    case .video: nativeVideoGenerationIsReady
+    // An LTX package answers for itself; the H3 readiness check asks whether
+    // an H3 tree validated, which is the wrong question for it.
+    case .video:
+      videoEngine == .ltx
+        ? videoPackageDirectory != nil : nativeVideoGenerationIsReady
     // An image package answers for itself; the H3 readiness check asks
     // whether an H3 tree validated, which is the wrong question for it.
     case .image:
@@ -1393,6 +1410,21 @@ final class AppModel {
     return usable.first { $0.capability == .video } ?? usable.first
   }
 
+  /// Which engine renders a clip, read off the chosen model rather than kept
+  /// beside it. Unlike the still lane this cannot be decided by capability —
+  /// both video engines are `.video` packages — so it comes from what the
+  /// folder holds.
+  var videoEngine: VideoGenerationEngine {
+    selectedModelChoice?.videoEngine ?? .h3
+  }
+
+  /// Where the chosen clip package lives when its engine loads a package of
+  /// its own rather than an H3 tree. Nil for H3, which wants `modelDirectory`.
+  var videoPackageDirectory: URL? {
+    guard videoEngine.usesOwnPackage else { return nil }
+    return selectedModelChoice?.directory
+  }
+
   /// Which engine renders a still, read off the chosen model rather than
   /// kept beside it. A package built for stills brings its own engine;
   /// anything else is H3 keeping a frame out of a very short clip.
@@ -1573,6 +1605,7 @@ final class AppModel {
         directory: managedStatuses[manifest.id]?.installedURL,
         generationProfile: manifest.generationProfile,
         capability: manifest.capability,
+        videoEngine: manifest.id == ModelCatalog.ltx25.id ? .ltx : .h3,
         downloadBytes: pendingDownloadBytes(for: manifest),
         requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
         installedBytes: manifest.totalByteCount,
@@ -1608,6 +1641,12 @@ final class AppModel {
             // on the wrong schedule with no visible sign.
             generationProfile: ModelFolderInspection.generationProfile(at: url),
             capability: capability,
+            // And which video engine, on the same terms: LTX lays its four
+            // files out in a way nothing else here does. Without this a
+            // hand-added LTX folder would be handed to H3, which would fail
+            // to validate it as an H3 tree and say so unhelpfully.
+            videoEngine: capability == .video
+              && ModelFolderInspection.holdsLTX(at: url) ? .ltx : .h3,
             downloadBytes: 0,
             requiredMemoryBytes: 0,
             installedBytes: 0,

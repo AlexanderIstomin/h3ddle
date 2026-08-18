@@ -231,10 +231,11 @@ struct GenerationStudioView: View {
       }
 
       // H3 keeps a frame out of a very short clip, so anchors and references
-      // apply to its stills as much as to its video. Z-Image takes a prompt
-      // and nothing else — its request carries no image input at all — so
-      // offering these would collect pictures it silently discards.
-      if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
+      // apply to its stills as much as to its video. Z-Image and LTX take a
+      // prompt and nothing else — and the engine *refuses* a request carrying
+      // pictures rather than dropping them, so offering these would collect
+      // conditioning that turns the generation into an error.
+      if kind != .audio, !promptOnlyModel {
         frameAnchorSection
         referenceSection
         if let note = conditioningNote {
@@ -551,6 +552,16 @@ struct GenerationStudioView: View {
     model.generationPrompt.replaceSubrange(match, with: token + " ")
   }
 
+  /// Models that render from the prompt alone: no anchors, no references, and
+  /// a square canvas. Both of them refuse a request carrying pictures rather
+  /// than quietly dropping them, so this gates what the studio offers as well
+  /// as what it sends — a control that collects conditioning the engine will
+  /// reject is worse than one that is not there.
+  private var promptOnlyModel: Bool {
+    (kind == .image && model.imageEngine == .zImage)
+      || (kind == .video && model.videoEngine == .ltx)
+  }
+
   private var conditioningNote: String? {
     // Start/end frames ride the FL2VA transformer every package ships, so the
     // optimized single-file build handles them; only ordered references need
@@ -582,7 +593,7 @@ struct GenerationStudioView: View {
           // Hidden rather than shown-and-ignored while a square-only model is
           // drawing: offering a ratio the renderer cannot honour is how the
           // lane came to fail with "renders square canvases only".
-          if kind != .audio, !(kind == .image && model.imageEngine == .zImage) {
+          if kind != .audio, !promptOnlyModel {
             labeled("ASPECT RATIO") {
               HStack(spacing: 9) {
                 ForEach(ProgramAspectRatio.allCases) { ratio in
@@ -1268,7 +1279,7 @@ struct GenerationStudioView: View {
     // following the prompt. Passes and blocks still vary by tier; the canvas
     // does not.
     let size: (width: Int, height: Int) =
-      kind == .image && model.imageEngine == .zImage
+      promptOnlyModel
       ? (knobs.imageCanvas.side, knobs.imageCanvas.side)
       : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction))
     model.generate(

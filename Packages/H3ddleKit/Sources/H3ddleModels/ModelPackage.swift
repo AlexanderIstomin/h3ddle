@@ -418,6 +418,74 @@ public enum ModelCatalog {
     ] + sharedMinimaxH3Files
   )
 
+  /// LTX-2.5, mirrored rather than repackaged: Lightricks publishes these four
+  /// files in the identical Comfy INT8 ConvRot format h3.c already reads, so
+  /// there was no conversion to do. Every SHA-256 below matches upstream.
+  ///
+  /// The mirror exists because the source repository is gated, and a gated
+  /// repository cannot be fetched on a user's behalf — the download builds a
+  /// plain URL with no token. The complete Community License Agreement travels
+  /// with the weights in the mirror, which is what Section 3.2 requires.
+  ///
+  /// Deliberately a subset: 38.69 GB against upstream's ~180. The BF16 and
+  /// NVFP4 transformers, the non-distilled `dev` checkpoint, the LoRA, the
+  /// latent upscalers and the duration head are all absent, because the app
+  /// runs the distilled checkpoint at eight steps and has no stage-2 ladder.
+  public static let ltx25 = ModelPackageManifest(
+    id: "h3ddle-ltx-2-5-int8-v1",
+    displayName: "LTX-2.5 · Distilled",
+    detail:
+      "Video with a soundtrack the model denoises beside the picture rather "
+      + "than adding afterwards. 22B distilled, eight steps, 24 fps. A 2.7-second "
+      + "clip at 512² takes about six and a half minutes on an M1 Pro; the "
+      + "prompt is all it takes — no reference images, keyframes or previews.",
+    repository: "PulpCut/LTX-2.5-INT8-ConvRot-safetensors",
+    revision: "d28e7aae3bfdb47184682838cd11989f1c8aa5dc",
+    licenseName: "LTX-2.x Community License Agreement",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/PulpCut/LTX-2.5-INT8-ConvRot-safetensors/blob/main/LICENSE"
+    )!,
+    // Measured, not estimated: a 2.7-second clip at 512² peaks at 5.23 GB of
+    // physical footprint (5.05 GB RSS — the two agreeing is what says Metal's
+    // unified buffers are counted). The package weighs 38.69 GB and never has
+    // more than one 388 MB transformer block resident, because the tower and
+    // the DiT cannot both fit and are loaded, run and freed in turn. 16 GB
+    // leaves the app and the system room around that.
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    generationProfile: .turbo,
+    capability: .video,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "diffusion_models/"
+          + "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+        byteCount: 21_504_034_224,
+        sha256: "c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334"
+      ),
+      ModelPackageFile(
+        role: .textEncoder,
+        path: "text_encoders/"
+          + "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        byteCount: 15_372_969_374,
+        sha256: "6ce688a0aa98a5fa36a9f1e6c3f42152a498cc2b53ee8c15674c64244f91487f"
+      ),
+      ModelPackageFile(
+        role: .videoVAE,
+        path: "vae/ltx-2.5-video-vae-conv-bf16.safetensors",
+        byteCount: 1_452_269_922,
+        sha256: "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d"
+      ),
+      ModelPackageFile(
+        role: .audioVAE,
+        path: "vae/ltx-2.5-audio-vae-bf16.safetensors",
+        byteCount: 364_866_540,
+        sha256: "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5"
+      ),
+    ]
+  )
+
   /// The lightx2v turbo distillation merged into the pruned INT8 transformer
   /// by `Scripts/convert-turbo-package.py`, hosted on Hugging Face. A local
   /// conversion output installs instantly when present; every shared file

@@ -110,6 +110,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     kind: GenerationKind,
     audioEngine: AudioGenerationEngine = .h3,
     imageEngine: ImageGenerationEngine = .h3,
+    videoEngine: VideoGenerationEngine = .h3,
     speech: EngineSpeechOptions? = nil,
     prompt: String,
     duration: TimeInterval,
@@ -131,6 +132,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.kind = kind
     self.audioEngine = audioEngine
     self.imageEngine = imageEngine
+    self.videoEngine = videoEngine
     self.speech = speech
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     self.duration = max(0, duration)
