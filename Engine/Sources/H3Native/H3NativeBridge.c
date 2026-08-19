@@ -438,6 +438,8 @@ int h3ddle_qwen_generate(const char *package_directory, const char *text,
 
 typedef struct {
     h3ddle_zimage_step on_step;
+    h3_frame_callback on_preview;
+    unsigned char *preview_rgb;
     void *opaque;
 } zimage_bridge_context;
 
@@ -448,6 +450,30 @@ static int zimage_bridge_step(const char *phase, int step, int steps,
     return bridge->on_step(phase, step, steps, bridge->opaque);
 }
 
+static int zimage_bridge_preview(const float *image, int width, int height,
+                                 int step, int steps, void *context) {
+    zimage_bridge_context *bridge = context;
+    if (!bridge->on_preview) return 0;
+    const size_t values = (size_t)width * height * 3;
+    for (size_t index = 0; index < values; index++) {
+        float value = image[index];
+        if (value < 0.0f) value = 0.0f;
+        if (value > 1.0f) value = 1.0f;
+        bridge->preview_rgb[index] = (unsigned char)(value * 255.0f + 0.5f);
+    }
+    const h3_frame frame = {
+        .width = width,
+        .height = height,
+        .stride = width * 3,
+        .rgb = bridge->preview_rgb,
+        .frame_index = 0,
+        .frame_count = 1,
+        .denoise_step = step - 1,
+        .denoise_steps = steps,
+    };
+    return bridge->on_preview(&frame, bridge->opaque);
+}
+
 int h3ddle_zimage_supports_frame(int width, int height) {
     return zimage_supports_frame(width, height);
 }
@@ -456,9 +482,16 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            const char *prompt, int width, int height, int steps,
                            unsigned long long seed,
                            const unsigned char *source_rgb, float strength,
-                           unsigned char *rgb,
-                           h3ddle_zimage_step on_step, void *opaque,
+                           int preview_denoise, unsigned char *rgb,
+                           h3ddle_zimage_step on_step,
+                           h3_frame_callback on_preview, void *opaque,
                            char *error, size_t error_size) {
+    if (!shaders || !shaders[0]) {
+        snprintf(error, error_size,
+                 "Z-Image generation requires Metal shaders; CPU fallback "
+                 "is disabled");
+        return 0;
+    }
     if (!rgb) {
         snprintf(error, error_size, "somewhere to put the picture is required");
         return 0;
@@ -500,9 +533,16 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                  width, height);
         return 0;
     }
-    zimage_bridge_context bridge = {on_step, opaque};
-    const int rendered = zimage_generate(&request, planes, zimage_bridge_step,
-                                        &bridge, error, error_size);
+    zimage_bridge_context bridge = {
+        .on_step = on_step,
+        .on_preview = on_preview,
+        .preview_rgb = rgb,
+        .opaque = opaque,
+    };
+    const int rendered = zimage_generate(
+        &request, planes, zimage_bridge_step,
+        preview_denoise && on_preview ? zimage_bridge_preview : NULL,
+        &bridge, error, error_size);
     free(source);
     if (!rendered) {
         free(planes);

@@ -3,7 +3,8 @@ import Foundation
 import H3ddleEngineProtocol
 
 /// A long-lived helper process. Handshake compiles Metal once, inspect loads
-/// the H3 context, and later generates reuse that process until `shutdown()`,
+/// the H3 context, and later H3 generations reuse that process until
+/// `shutdown()`, idle/memory eviction, an independent model needs the memory,
 /// a hard cancel, or the helper exiting.
 public final class EngineSession: EngineInspecting, @unchecked Sendable {
   public let executableURL: URL

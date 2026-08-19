@@ -456,6 +456,14 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public var modelDirectory: URL?
   public var outputURL: URL
 
+  /// Z-Image owns an independent multi-gigabyte package. Keeping H3's cached
+  /// context beside it can force unified-memory compression or swapping, so
+  /// the helper drops H3 before allocating anything for this request. Legacy
+  /// still requests have no `image` options and continue to reuse H3.
+  public var releasesResidentH3Context: Bool {
+    kind == .image && image?.model == .zImage
+  }
+
   public init(
     kind: EngineGenerationKind,
     prompt: String,

@@ -691,20 +691,21 @@ struct GenerationStudioView: View {
           // how many frames a still is kept from, and the presets that set
           // them together. A package with its own engine reads none of them,
           // so both lanes show this only while H3 is the model drawing.
-          if usesNativeSettings,
+          if hasModelSettings,
             (kind == .video && model.videoEngine == .h3)
               || (kind == .image && model.imageEngine == .h3)
           {
             generationControls
           }
 
-          if usesNativeSettings, kind == .image, model.imageEngine == .zImage {
+          if hasModelSettings, kind == .image, model.imageEngine == .zImage {
             imageResolutionControls
             imagePassesControls
+            denoisingPreviewControl
             seedControls
           }
 
-          if usesNativeSettings, isLTX {
+          if hasModelSettings, isLTX {
             ltxResolutionControls
             ltxPassesControls
             seedControls
@@ -713,13 +714,13 @@ struct GenerationStudioView: View {
           // Both are keyed on the audio mode, which every tab shares — so
           // without the kind test they follow the audio tab's setting onto
           // video and stills, where neither model is being run.
-          if usesNativeSettings, kind == .audio,
+          if hasModelSettings, kind == .audio,
             model.audioMode == .music || model.audioMode == .soundEffects
           {
             soundEffectControls
           }
 
-          if usesNativeSettings, kind == .audio, model.audioMode == .speech {
+          if hasModelSettings, kind == .audio, model.audioMode == .speech {
             speechControls
           }
 
@@ -734,7 +735,7 @@ struct GenerationStudioView: View {
 
       VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
-          if usesNativeSettings, kind != .audio {
+          if hasModelSettings, kind != .audio {
             Button {
               // A composition check: same seed, canvas, and model, minimum
               // passes — the full render follows the same trajectory.
@@ -1259,23 +1260,27 @@ struct GenerationStudioView: View {
       .tint(H3Color.accent)
       .accessibilityIdentifier("generation-block-cache")
 
-      if kind != .audio {
-        Toggle(isOn: $model.previewDenoise) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Denoising preview")
-              .font(.system(size: 12, weight: .semibold))
-            Text("Decode a still after every pass so you can cancel early.")
-              .font(.system(size: 10))
-              .foregroundStyle(H3Color.textSecondary)
-          }
-        }
-        .toggleStyle(.switch)
-        .tint(H3Color.accent)
-        .accessibilityIdentifier("generation-preview-toggle")
-      }
+      denoisingPreviewControl
 
       seedControls
     }
+  }
+
+  /// H3 and Z-Image use different tiny decoders, but the offer is identical:
+  /// show the current trajectory after every pass and allow an early cancel.
+  private var denoisingPreviewControl: some View {
+    Toggle(isOn: $model.previewDenoise) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Denoising preview")
+          .font(.system(size: 12, weight: .semibold))
+        Text("Decode a still after every pass so you can cancel early.")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+    }
+    .toggleStyle(.switch)
+    .tint(H3Color.accent)
+    .accessibilityIdentifier("generation-preview-toggle")
   }
 
   /// LTX's only sampler knob. H3's column has nine and this engine reads one of
@@ -1499,7 +1504,7 @@ struct GenerationStudioView: View {
       blockCache: blockCache,
       fastStill: fastStill,
       previewDenoise: model.previewDenoise,
-      seed: usesNativeSettings ? model.studioSettings.seed : nil,
+      seed: hasModelSettings ? model.studioSettings.seed : nil,
       canvasWidth: kind == .audio ? nil : size.width,
       canvasHeight: kind == .audio ? nil : size.height
     )
@@ -1601,9 +1606,11 @@ struct GenerationStudioView: View {
     Double(alignedFrames) / Self.h3FPS
   }
 
-  private var usesNativeSettings: Bool {
-    model.usesNativeEngine(for: kind)
-  }
+  /// Settings describe the selected installed model even while its engine is
+  /// still validating. Readiness decides which provider can run; tying the
+  /// controls to it made the whole section disappear on first open and only
+  /// return after a model-picker change retriggered validation.
+  private var hasModelSettings: Bool { hasUsableModel }
 
   /// Fifteen seconds is H3's ceiling, where every extra second costs a
   /// transformer pass over more frames. Stable Audio was trained to two

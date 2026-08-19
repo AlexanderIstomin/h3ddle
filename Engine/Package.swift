@@ -63,6 +63,8 @@ let package = Package(
         "Sources/ZImage/zimage_dit.c",
         "Sources/ZImage/zimage_gpu.c",
         "Sources/ZImage/zimage_encoder.c",
+        "Sources/ZImage/zimage_encoder_gpu.c",
+        "Sources/ZImage/zimage_tae.c",
         "Sources/ZImage/zimage_vae.c",
         "Sources/ZImage/zimage_vae_gpu.c",
         // LTX-2.5, on the same footing again. It borrows h3.c's GPU layer
@@ -86,6 +88,10 @@ let package = Package(
         .headerSearchPath("Sources/LTX"),
         // h3_ffmpeg.c uses SSIZE_MAX, whose SDK expansion requires LONG_MAX.
         .unsafeFlags(["-include", "limits.h"]),
+        // Xcode embeds the helper from a SwiftPM debug build. Keep Swift and
+        // debug symbols untouched, but do not run native model arithmetic at
+        // Clang's -O0 default during generation.
+        .unsafeFlags(["-O2"], .when(configuration: .debug)),
       ],
       linkerSettings: [
         .linkedFramework("Foundation"),
@@ -110,6 +116,10 @@ let package = Package(
         "H3Native",
         .product(name: "H3ddleEngineProtocol", package: "H3ddleKit"),
       ]
+    ),
+    .testTarget(
+      name: "H3NativeTests",
+      dependencies: ["H3Native"]
     ),
   ],
   swiftLanguageModes: [.v6],

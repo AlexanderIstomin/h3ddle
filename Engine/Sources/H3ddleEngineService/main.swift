@@ -1081,8 +1081,10 @@ private final class EngineRuntime: @unchecked Sendable {
               request.seed ?? 42,
               sourcePointer,
               source == nil ? 1.0 : strength,
+              request.previewDenoise ? 1 : 0,
               pixelBuffer.baseAddress,
               zimageStepCallback,
+              request.previewDenoise ? generationFrameCallback : nil,
               opaque,
               &error,
               error.count
@@ -1220,6 +1222,15 @@ private final class EngineRuntime: @unchecked Sendable {
         }
       }
       EngineResourceWatch.shared.noteActivity()
+    }
+
+    /* Z-Image has its own text encoder, DiT and VAE. Drop the cached H3
+     * context before even allocating Z's output/source buffers; on unified
+     * memory, letting both packages overlap turns otherwise valid renders
+     * into memory compression or swap-bound work. `activeContext` is already
+     * set, so model inspection and resource-watch eviction cannot race this. */
+    if request.releasesResidentH3Context {
+      EngineModelStore.shared.release()
     }
 
     if request.kind == .soundEffect {

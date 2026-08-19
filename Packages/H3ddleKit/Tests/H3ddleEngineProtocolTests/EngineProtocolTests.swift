@@ -130,6 +130,28 @@ struct EngineProtocolTests {
     #expect(decoded.image == nil)
   }
 
+  @Test("Only Z-Image stills release the resident H3 context")
+  func zImageRequiresExclusiveModelMemory() {
+    let output = URL(fileURLWithPath: "/tmp/x.png")
+    let zImage = EngineGenerationRequest(
+      kind: .image, prompt: "x", duration: 0,
+      image: EngineImageOptions(model: .zImage), outputURL: output)
+    let h3 = EngineGenerationRequest(
+      kind: .image, prompt: "x", duration: 0,
+      image: EngineImageOptions(model: .h3), outputURL: output)
+    let legacyH3 = EngineGenerationRequest(
+      kind: .image, prompt: "x", duration: 0, outputURL: output)
+    let ltx = EngineGenerationRequest(
+      kind: .video, prompt: "x", duration: 1,
+      video: EngineVideoOptions(model: .ltx),
+      outputURL: URL(fileURLWithPath: "/tmp/x.mp4"))
+
+    #expect(zImage.releasesResidentH3Context)
+    #expect(!h3.releasesResidentH3Context)
+    #expect(!legacyH3.releasesResidentH3Context)
+    #expect(!ltx.releasesResidentH3Context)
+  }
+
   @Test("Commands round trip without losing job identity")
   func commandRoundTrip() throws {
     let jobID = UUID()

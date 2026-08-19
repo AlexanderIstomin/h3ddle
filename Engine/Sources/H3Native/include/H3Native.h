@@ -36,16 +36,19 @@ int h3ddle_sa3_generate(const char *package_directory, const char *prompt,
  *
  * The package is loaded and released per call. At 14 GB that is not cheap,
  * but holding it resident would compete with H3 for exactly the memory that
- * constrains this app, and the decoder alone wants 12 GB of working buffers
- * at 1536 pixels.
+ * constrains this app. The decoder alone wants about 5.8 GiB of layer-shaped
+ * working buffers at 1536 pixels.
  *
  * `rgb` receives width * height * 3 bytes, interleaved and 8-bit, which is
- * what the service's PNG encoder already takes. `shaders` may be NULL to stay
- * on the CPU, which is correct and roughly twenty times slower.
+ * what the service's PNG encoder already takes. `shaders` is required:
+ * production generation never falls back silently to the CPU.
  *
  * `on_step` fires once per sampler step and returns zero to abandon the
- * generation; that is how cancellation reaches the sampler. A cancelled call
- * returns zero with an empty `error`. */
+ * generation; that is how cancellation reaches the sampler. When
+ * `preview_denoise` is set, `on_preview` receives a cheap TAEF1 decode after
+ * each completed pass and follows H3's frame convention: non-zero cancels.
+ * Preview failures do not fail the final render. A cancelled call returns zero
+ * with an empty `error`. */
 /* `phase` names the stage — "text encoder", "transformer", "denoise",
  * "image VAE" — and `completed`/`total` count within it. Returning zero
  * cancels. */
@@ -59,8 +62,9 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            const char *prompt, int width, int height, int steps,
                            unsigned long long seed,
                            const unsigned char *source_rgb, float strength,
-                           unsigned char *rgb,
-                           h3ddle_zimage_step on_step, void *opaque,
+                           int preview_denoise, unsigned char *rgb,
+                           h3ddle_zimage_step on_step,
+                           h3_frame_callback on_preview, void *opaque,
                            char *error, size_t error_size);
 /* Whether this build renders this frame. Both sides must be a multiple of 16
  * and their token count a multiple of 32 — the reference pads instead, and

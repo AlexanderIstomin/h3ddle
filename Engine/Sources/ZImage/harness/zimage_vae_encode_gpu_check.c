@@ -48,16 +48,17 @@ int main(int argc, char **argv) {
     qwen_weights *weights = qwen_weights_open(argv[1], problem, sizeof(problem));
     if (!weights) { fprintf(stderr, "cpu weights: %s\n", problem); return 1; }
     double began = now();
-    if (!zimage_vae_encode(weights, image, side, host, NULL, NULL)) {
+    if (!zimage_vae_encode(weights, image, side, side, host, NULL, NULL)) {
         fprintf(stderr, "cpu encode failed\n"); return 1;
     }
     const double cpu_seconds = now() - began;
 
     zimage_vae_gpu *gpu = zimage_vae_gpu_create_encoder(
-        argv[2], argv[1], NULL, side, problem, sizeof(problem));
+        argv[2], argv[1], NULL, side, side, problem, sizeof(problem));
     if (!gpu) { fprintf(stderr, "gpu: %s\n", problem); return 1; }
     began = now();
-    if (!zimage_vae_gpu_encode(gpu, image, side, device, problem, sizeof(problem))) {
+    if (!zimage_vae_gpu_encode(gpu, image, side, side, device, problem,
+                               sizeof(problem))) {
         fprintf(stderr, "gpu encode: %s\n", problem); return 1;
     }
     const double gpu_seconds = now() - began;

@@ -65,9 +65,10 @@ public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifia
 /// therefore has nothing to act on and is hidden while such a model is
 /// picked, rather than being offered and quietly ignored.
 ///
-/// The ladder stops at 1536 because the decoder holds 256 channels at the
-/// full picture — about 12 GB there — and starts at 512 because below it the
-/// model stops following the prompt reliably.
+/// The ladder stops at 1536 because the decoder's layer-shaped workspaces use
+/// about 5.8 GiB there (before weights and the rest of the pipeline), and
+/// starts at 512 because below it the model stops following the prompt
+/// reliably.
 public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   case p512
   case p768

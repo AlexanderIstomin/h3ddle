@@ -87,12 +87,12 @@ static void apply_rope(float *x, const float *cosines, const float *sines,
  * (rotate_half), where Z-Image pairs adjacent channels. Attention is invariant
  * to permuting the head dimension of q and k *together*, so sending channel 2i
  * to slot i and 2i+1 to slot i+64 makes the engine's kernel compute exactly
- * Z-Image's rotation — no new kernel, just a permutation of the q and k row
- * blocks of the fused qkv at load, and of the two norm weights with them.
+ * Z-Image's rotation. The production GPU boundary reads the corresponding
+ * source channels directly, so the qkv and norm weights stay untouched.
  *
  * Built with -DZIMAGE_ROPE_ROTATE_HALF this takes that path instead, permuting
- * the activations after the projection rather than the weights before it,
- * which is the same thing one row at a time. If the forward still matches its
+ * the activations after the projection, which is the same ordering one row at
+ * a time. If the forward still matches its
  * golden, the trick holds on real weights and real data and not only on paper.
  * v is deliberately left alone, and nothing is un-permuted afterwards: the dot
  * product is unchanged, so the attention output already is. */

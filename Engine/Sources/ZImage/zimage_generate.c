@@ -2,6 +2,7 @@
 #include "zimage_dit.h"
 #include "zimage_encoder.h"
 #include "zimage_gpu.h"
+#include "zimage_tae.h"
 #include "zimage_vae.h"
 #include "zimage_vae_gpu.h"
 #include "h3_tokenizer.h"
@@ -65,9 +66,10 @@ static float normal(uint64_t *state) {
     return (float)(sqrt(-2.0 * log(values[0])) * cos(2.0 * M_PI * values[1]));
 }
 
-int zimage_generate(const zimage_request *request, float *image,
-                    zimage_progress progress, void *context,
-                    char *error, size_t error_size) {
+static int generate_with_backend(const zimage_request *request, float *image,
+                                 int use_metal, zimage_progress progress,
+                                 zimage_preview preview, void *context,
+                                 char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!request || !request->package || !request->prompt || !image)
         return fail(error, error_size, "a package, a prompt and somewhere to "
@@ -113,15 +115,28 @@ int zimage_generate(const zimage_request *request, float *image,
     snprintf(path, sizeof(path), "%s/text_encoder.safetensors", request->package);
     if (progress) progress("text encoder", 0, ZIMAGE_ENCODER_USED, context);
     qwen_weights *encoder = qwen_weights_open(path, error, error_size);
-    float *caption = encoder ? malloc(count * ZIMAGE_CAP_DIM * sizeof(float)) : NULL;
-    encode_relay relay = { .progress = progress, .context = context };
-    if (!encoder || !caption ||
-        !zimage_encode(encoder, ids, (int)count, caption, relay_encode_tick,
-                       &relay, error, error_size)) {
-        free(caption);
-        if (encoder) qwen_weights_close(encoder);
+    if (!encoder) {
         h3_tokenizer_ids_free(ids);
-        return encoder ? 0 : fail(error, error_size, "cannot read the text encoder");
+        return 0;
+    }
+    float *caption = malloc(count * ZIMAGE_CAP_DIM * sizeof(float));
+    if (!caption) {
+        qwen_weights_close(encoder);
+        h3_tokenizer_ids_free(ids);
+        return fail(error, error_size, "out of memory sizing the caption");
+    }
+    encode_relay relay = { .progress = progress, .context = context };
+    const int encoder_ok = use_metal
+        ? zimage_encode_metal(encoder, request->shaders, ids, (int)count,
+                              caption, relay_encode_tick, &relay,
+                              error, error_size)
+        : zimage_encode(encoder, ids, (int)count, caption, relay_encode_tick,
+                        &relay, error, error_size);
+    if (!encoder_ok) {
+        free(caption);
+        qwen_weights_close(encoder);
+        h3_tokenizer_ids_free(ids);
+        return 0;
     }
     /* Closed before the transformer opens: between them they map over twenty
      * gigabytes, and nothing needs the encoder again. */
@@ -154,7 +169,7 @@ int zimage_generate(const zimage_request *request, float *image,
          * about four on the GPU — and it runs before the first denoising step,
          * so every second of it is spent with the bar standing still. */
         int encoded_source = 0;
-        if (request->shaders) {
+        if (use_metal) {
             zimage_vae_gpu *gpu_vae = zimage_vae_gpu_create_encoder(
                 request->shaders, path, NULL, request->height, request->width,
                 error, error_size);
@@ -191,7 +206,7 @@ int zimage_generate(const zimage_request *request, float *image,
     if (!transformer) { free(caption); return 0; }
 
     zimage_gpu *device = NULL;
-    if (request->shaders) {
+    if (use_metal) {
         const int sequence = (latent_height / ZIMAGE_PATCH) *
                              (latent_width / ZIMAGE_PATCH) + 512;
         device = zimage_gpu_create(request->shaders, path, sequence,
@@ -266,6 +281,28 @@ int zimage_generate(const zimage_request *request, float *image,
     }
     free(source_latent);
 
+    /* TAEF1 speaks the transformer's current latent directly and costs only
+     * a tiny weight file plus its convolution buffers. Preview setup and
+     * decode errors are deliberately non-fatal: a damaged optional preview
+     * must not discard a full generation that can still use the image VAE. */
+    zimage_tae *preview_decoder = NULL;
+    float *preview_image = NULL;
+    if (preview && use_metal) {
+        char preview_error[512];
+        snprintf(path, sizeof(path), "%s/vae_approx/taef1.safetensors",
+                 request->package);
+        preview_decoder = zimage_tae_create(
+            request->shaders, path, latent_height, latent_width,
+            preview_error, sizeof(preview_error));
+        if (preview_decoder)
+            preview_image = malloc((size_t)request->width * request->height *
+                                   3 * sizeof(*preview_image));
+        if (!preview_image) {
+            zimage_tae_release(preview_decoder);
+            preview_decoder = NULL;
+        }
+    }
+
     const int remaining = steps - first;
     int cancelled = 0, ok = 1;
     for (int step = first; step < steps && ok && !cancelled; step++) {
@@ -284,14 +321,30 @@ int zimage_generate(const zimage_request *request, float *image,
         if (progress &&
             !progress("denoise", step + 1 - first, remaining, context))
             cancelled = 1;
+        if (!cancelled && preview_decoder) {
+            char preview_error[512];
+            if (zimage_tae_decode(preview_decoder, latent, preview_image,
+                                  preview_error, sizeof(preview_error))) {
+                if (preview(preview_image, request->width, request->height,
+                            step + 1 - first, remaining, context))
+                    cancelled = 1;
+            } else {
+                zimage_tae_release(preview_decoder);
+                preview_decoder = NULL;
+                free(preview_image);
+                preview_image = NULL;
+            }
+        }
     }
+    zimage_tae_release(preview_decoder);
+    free(preview_image);
     zimage_dit_release(&dit);
     qwen_weights_close(transformer);
     free(velocity); free(sigmas);
     /* The transformer's device tensors are dead now and the decoder's buffers
-     * are the largest in the pipeline — 256 channels at the full picture, five
-     * of them, which is 12 GB at 1536 pixels. Holding both is what puts a
-     * ceiling on the canvas. */
+     * are the largest in the pipeline. Their layer-shaped capacities total
+     * about 5.8 GiB at 1536 pixels. Holding both is what puts a ceiling on the
+     * canvas. */
     if (device) zimage_gpu_release(device);
     if (!ok || cancelled) { free(latent); return 0; }
 
@@ -307,7 +360,7 @@ int zimage_generate(const zimage_request *request, float *image,
      * step — so without this the bar sits full while the picture is still
      * being made. */
     if (progress) progress("image VAE", 0, 1, context);
-    if (request->shaders) {
+    if (use_metal) {
         zimage_vae_gpu *vae = zimage_vae_gpu_create(request->shaders, path, NULL,
                                                     latent_height, latent_width,
                                                     error, error_size);
@@ -325,4 +378,24 @@ int zimage_generate(const zimage_request *request, float *image,
     }
     free(latent);
     return ok;
+}
+
+int zimage_generate(const zimage_request *request, float *image,
+                    zimage_progress progress, zimage_preview preview,
+                    void *context,
+                    char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!request || !request->shaders || !request->shaders[0])
+        return fail(error, error_size,
+                    "Z-Image generation requires Metal shaders; CPU fallback "
+                    "is disabled");
+    return generate_with_backend(request, image, 1, progress, preview, context,
+                                 error, error_size);
+}
+
+int zimage_generate_cpu_reference(const zimage_request *request, float *image,
+                                  zimage_progress progress, void *context,
+                                  char *error, size_t error_size) {
+    return generate_with_backend(request, image, 0, progress, NULL, context,
+                                 error, error_size);
 }

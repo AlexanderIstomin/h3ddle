@@ -6,12 +6,13 @@
  * evidence about what ships.
  *
  *   ./zimage_render <package> <prompt> <width> <height> <steps> <out.bin>
- *                   [shaders]
+ *                   <shaders|--cpu-reference>
  */
 #include "zimage_generate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 static double now(void) {
@@ -32,14 +33,15 @@ static int report(const char *phase, int step, int steps, void *context) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 7) {
+    if (argc < 8) {
         fprintf(stderr, "usage: %s <package> <prompt> <width> <height> <steps> "
-                        "<out.bin> [shaders]\n", argv[0]);
+                        "<out.bin> <shaders|--cpu-reference>\n", argv[0]);
         return 2;
     }
+    const int cpu_reference = strcmp(argv[7], "--cpu-reference") == 0;
     const zimage_request request = {
         .package = argv[1],
-        .shaders = argc > 7 ? argv[7] : NULL,
+        .shaders = cpu_reference ? NULL : argv[7],
         .prompt = argv[2],
         .width = atoi(argv[3]),
         .height = atoi(argv[4]),
@@ -53,7 +55,12 @@ int main(int argc, char **argv) {
     char error[512] = {0};
     const double began = now();
     started = began;
-    if (!zimage_generate(&request, image, report, NULL, error, sizeof(error))) {
+    const int rendered = cpu_reference
+        ? zimage_generate_cpu_reference(&request, image, report, NULL,
+                                        error, sizeof(error))
+        : zimage_generate(&request, image, report, NULL, NULL,
+                          error, sizeof(error));
+    if (!rendered) {
         fprintf(stderr, "%s\n", *error ? error : "cancelled");
         return 1;
     }

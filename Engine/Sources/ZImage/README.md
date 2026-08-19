@@ -5,22 +5,28 @@ reads the package `Scripts/convert-z-image-package.py` builds.
 
 ## What runs where
 
-The thirty-four DiT blocks and the VAE decoder run on the GPU. The embedders,
-the head, the sampler and the tokenizer stay on the CPU: together they are well
-under one percent of the arithmetic, and moving them would double the new code
-for no measurable return. The sequence crosses the bus once per step in each
-direction — 63 MB at 4128 tokens, a couple of milliseconds.
+The Qwen3-4B prompt encoder, thirty-four DiT blocks and VAE run on the GPU.
+The prompt encoder streams one layer of BF16 weights at a time so its complete
+checkpoint does not have to remain device-resident beside the image model. The
+CPU `qwen_block_forward` path remains as a shaderless reference harness only;
+production does not silently fall back to it when Metal fails.
+The same boundary covers the DiT and VAE: `zimage_generate` requires Metal,
+while the full host implementation is reachable only through the explicitly
+named `zimage_generate_cpu_reference` harness entry point.
 
-The text encoder is Qwen3-4B and runs on `qwen_block_forward` from
-`../Qwen3TTS` unchanged. That block is shape-general across its third model
-now: H3's encoder at 5120 wide, the TTS talker at 1024, this at 2560.
+The small DiT embedders, head, sampler and tokenizer stay on the CPU: together
+they are well under one percent of the arithmetic. The DiT sequence crosses
+the bus once per step in each direction — 63 MB at 4128 tokens, a couple of
+milliseconds.
 
 | file | what |
 |------|------|
 | `zimage_block.c`   | one S3-DiT block, CPU, f32 — the reference the GPU is gated against |
 | `zimage_dit.c`     | embedders, head, unpatchify; runs blocks on CPU or device |
 | `zimage_gpu.c`     | the thirty-four blocks on Metal |
-| `zimage_encoder.c` | Qwen3-4B, 35 of 36 layers (see below) |
+| `zimage_encoder.c` | CPU reference for Qwen3-4B, 35 of 36 layers (see below) |
+| `zimage_encoder_gpu.c` | production Qwen3-4B prompt encoder on Metal |
+| `zimage_tae.c` | TAEF1 live denoising-preview decoder on Metal |
 | `zimage_vae.c` | the autoencoder both ways: decode for every render, encode for img2img |
 | `zimage_vae.c`     | the decoder, CPU, f32 — the reference |
 | `zimage_vae_gpu.c` | the decoder on Metal |
@@ -47,9 +53,10 @@ joint-attention models.
 one and assuming the other gives a wrong picture with no error anywhere.
 
 **The rope pairs adjacent channels**, where `qwen_block_forward` pairs i with
-i + head_dim/2. On the GPU this is a permutation of the q and k rows at load
-rather than a kernel, because attention is invariant to permuting the head
-dimension of q and k together.
+i + head_dim/2. The GPU's Z-Image QKV boundary reads adjacent pairs directly
+but writes them in the engine's half-paired order, because attention is
+invariant to permuting the head dimension of q and k together. The checkpoint
+weights therefore load unchanged.
 
 **The sampler**: sigmas are the pipeline's `linspace(1, 1/N, N)` then a *static*
 shift of 3.0 — the `mu` the reference computes is dead code under
@@ -64,6 +71,7 @@ produce, at f32, before the next stage was built:
 | stage | RMS relative |
 |-------|--------------|
 | text encoder, 36 layers | 4.49e-06 |
+| text encoder, Metal vs f32 CPU, 35 layers | 6.51e-03 |
 | VAE decoder, CPU | 1.47e-06 |
 | VAE decoder, GPU | 1.80e-06 |
 | one S3-DiT layer | 5.6e-07 |
@@ -89,8 +97,33 @@ the repository. Build one directly, for example:
         -framework MetalPerformanceShaders \
         -framework MetalPerformanceShadersGraph -framework Accelerate -lm
 
-## Not done
+The prompt encoder has a CPU-versus-Metal correctness and timing harness:
 
-Nothing is wired to the engine protocol or the app yet — this is the port, not
-the feature. The sampler and the head are CPU code inside `zimage_dit.c` rather
-than a service entry point.
+    clang -O2 -fblocks -fobjc-arc -o zimage_encoder_gpu_compare \
+        harness/zimage_encoder_gpu_compare.c zimage_encoder.c \
+        zimage_encoder_gpu.c ../Qwen3TTS/qwen_block.c \
+        ../Qwen3TTS/qwen_weights.c ../../Vendor/h3.c/h3_gpu.m \
+        ../../Vendor/h3.c/h3_safetensors.c \
+        -I../Qwen3TTS -I../../Vendor/h3.c -I. \
+        -framework Foundation -framework Metal \
+        -framework MetalPerformanceShaders \
+        -framework MetalPerformanceShadersGraph -framework Accelerate -lm
+
+The preview decoder has a model-backed dispatch and output-range smoke test:
+
+    clang -O2 -fobjc-arc -o zimage_tae_check \
+        harness/zimage_tae_check.c zimage_tae.c \
+        ../../Vendor/h3.c/h3_gpu.m ../../Vendor/h3.c/h3_weights.c \
+        ../../Vendor/h3.c/h3_safetensors.c \
+        -I../../Vendor/h3.c -I. \
+        -framework Foundation -framework Metal \
+        -framework MetalPerformanceShaders \
+        -framework MetalPerformanceShadersGraph -framework Accelerate -lm
+
+    ./zimage_tae_check /path/to/taef1.safetensors \
+        ../../Vendor/h3.c/h3_shaders.metal
+
+## Deliberate CPU work
+
+The sampler and small DiT embedders and head remain CPU code inside
+`zimage_dit.c`. The prompt encoder, DiT blocks and VAE use Metal in the app.

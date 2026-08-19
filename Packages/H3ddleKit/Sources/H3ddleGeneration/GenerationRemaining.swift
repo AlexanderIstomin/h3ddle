@@ -40,6 +40,14 @@ public enum GenerationRemaining {
   ) -> Double? {
     guard let fraction = denoiseFraction(phase: phase, phaseFraction: phaseFraction)
     else { return nil }
+    return overallProgress(denoiseFraction: fraction)
+  }
+
+  /// Maps a run-wide denoising fraction into the denoising band. H3 emits
+  /// these between its more detailed per-block events as a bare `denoise`
+  /// phase, while fully GPU-resident runs call the phase `denoise enqueue`.
+  public static func overallProgress(denoiseFraction: Double) -> Double {
+    let fraction = min(max(denoiseFraction, 0), 1)
     return preparationShare + (decodeProgress - preparationShare) * fraction
   }
 
