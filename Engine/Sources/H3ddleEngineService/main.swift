@@ -549,12 +549,6 @@ private func zimageStepCallback(
     ? 1 : 0
 }
 
-/// LTX reports the same way Z-Image does, with one difference that matters:
-/// its tick is asked *between blocks* so a cancel lands inside one rather than
-/// at the end of a step, and a step is well over half a minute. So the same
-/// step number arrives forty-eight times, and reporting it as a fraction would
-/// make the bar stutter backwards. The step counter goes in the phase name and
-/// the fraction stays whole, exactly as above.
 /// Borrow an array of Swift strings as a C array of C strings for the duration
 /// of a call. `withCString` nests one at a time and the engine wants them all
 /// at once, so this walks the list recursively rather than nesting by hand.
@@ -586,12 +580,7 @@ private func ltxStepCallback(
   let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
     .takeUnretainedValue()
   let name = phase.map { String(cString: $0) } ?? "denoise"
-  guard name == "denoise" else {
-    return context.progress(phase: name, completed: completed, total: total) == 0
-      ? 1 : 0
-  }
-  return context.progress(
-    phase: "denoise step \(completed)/\(total)", completed: 1, total: 1) == 0
+  return context.progress(phase: name, completed: completed, total: total) == 0
     ? 1 : 0
 }
 
@@ -718,6 +707,31 @@ private final class EngineRuntime: @unchecked Sendable {
             message: "LTX takes at most \(H3DDLE_LTX_MAX_CONDITIONING) "
               + "conditioning pictures, including start and end frames; "
               + "\(conditioning) were given")
+          return
+        }
+        let estimatedMemory = EngineVideoOptions.estimatedLTXPeakMemoryBytes(
+          width: width,
+          height: height,
+          frames: frames,
+          conditioningPictures: conditioning
+        )
+        let safeMemory = EngineVideoOptions.safeLTXMemoryBudget(
+          physicalMemory: ProcessInfo.processInfo.physicalMemory)
+        guard estimatedMemory <= safeMemory || request.allowsLTXMemoryOvercommit else {
+          let gibibyte = 1_073_741_824.0
+          let estimatedGiB = Double(estimatedMemory) / gibibyte
+          let safeGiB = Double(safeMemory) / gibibyte
+          EngineOutput.fail(
+            command,
+            message: String(
+              format: "LTX %d×%d for %d frames with %d conditioning "
+                + "picture%@ is estimated to need %.1f GiB of unified "
+                + "memory; this Mac's safe generation budget is %.1f GiB. "
+                + "Lower the resolution or duration.",
+              width, height, frames, conditioning,
+              conditioning == 1 ? "" : "s", estimatedGiB, safeGiB
+            )
+          )
           return
         }
       } else {
@@ -1224,13 +1238,15 @@ private final class EngineRuntime: @unchecked Sendable {
       EngineResourceWatch.shared.noteActivity()
     }
 
-    /* Z-Image has its own text encoder, DiT and VAE. Drop the cached H3
-     * context before even allocating Z's output/source buffers; on unified
-     * memory, letting both packages overlap turns otherwise valid renders
-     * into memory compression or swap-bound work. `activeContext` is already
-     * set, so model inspection and resource-watch eviction cannot race this. */
-    if request.releasesResidentH3Context {
+    /* Z-Image and LTX each own independent multi-gigabyte packages. Drop all
+     * other model caches before allocating their output/source buffers; on
+     * unified memory, overlapping packages turn otherwise valid renders into
+     * compression or swap-bound work. `activeContext` is already set, so
+     * model inspection and resource-watch eviction cannot race this. */
+    if request.requiresExclusiveModelMemory {
       EngineModelStore.shared.release()
+      h3ddle_sa3_release()
+      h3ddle_qwen_release()
     }
 
     if request.kind == .soundEffect {

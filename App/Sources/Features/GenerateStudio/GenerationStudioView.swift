@@ -6,6 +6,15 @@ import H3ddleGeneration
 import ImageIO
 import SwiftUI
 
+private struct PendingMemoryIntensiveGeneration: Identifiable {
+  let id = UUID()
+  let denoisingSteps: Int
+  let coreReuse: Int
+  let blockCache: Bool
+  let fastStill: Bool
+  let warning: String
+}
+
 struct GenerationStudioView: View {
   @Bindable var model: AppModel
   let kind: GenerationKind
@@ -24,6 +33,7 @@ struct GenerationStudioView: View {
   @State private var modelPickerFrame: CGRect = .zero
   @State private var studioBodyFrame: CGRect = .zero
   @State private var summaryCopied = false
+  @State private var pendingMemoryIntensiveGeneration: PendingMemoryIntensiveGeneration?
 
   var body: some View {
     ZStack {
@@ -62,6 +72,22 @@ struct GenerationStudioView: View {
       } else {
         stage = .compose
       }
+    }
+    .alert(item: $pendingMemoryIntensiveGeneration) { pending in
+      Alert(
+        title: Text("This generation may freeze your Mac"),
+        message: Text(pending.warning),
+        primaryButton: .destructive(Text("Generate Anyway")) {
+          startGeneration(
+            denoisingSteps: pending.denoisingSteps,
+            coreReuse: pending.coreReuse,
+            blockCache: pending.blockCache,
+            fastStill: pending.fastStill,
+            allowsLTXMemoryOvercommit: true
+          )
+        },
+        secondaryButton: .cancel()
+      )
     }
   }
 
@@ -925,9 +951,13 @@ struct GenerationStudioView: View {
   /// pixel, which is the fit absorbing noise rather than measuring anything.
   /// Two parameters over three points is the honest version.
   private func ltxMinutes(_ tier: LTXResolution) -> Double {
-    let latentFrames = (ltxFrames - 1) / 8 + 1
-    let cells = tier.cellsPerFrame(aspect: studioAspect)
-    return (40.3 + 0.0195 * Double(latentFrames * cells * knobs.denoisingSteps)) / 60
+    let frame = tier.frame(aspect: studioAspect)
+    return (GenerationDurationEstimate.ltx(
+      width: frame.width,
+      height: frame.height,
+      frames: ltxFrames,
+      denoisingSteps: knobs.denoisingSteps
+    ) ?? 0) / 60
   }
 
   /// The project's aspect as a plain fraction, which is what both engines'
@@ -985,7 +1015,7 @@ struct GenerationStudioView: View {
       Menu {
         ForEach(ImageCanvas.allCases) { canvas in
           Button("\(canvas.label)  ·  "
-            + "~\(minutesLabel(canvas.approximateMinutes(aspect: studioAspect)))") {
+            + "~\(minutesLabel(imageMinutes(canvas)))") {
             model.updateStudioKnobs { $0.imageCanvas = canvas }
           }
         }
@@ -1011,13 +1041,20 @@ struct GenerationStudioView: View {
       .menuIndicator(.hidden)
       Text("Square only in this build, so the project's aspect ratio does "
         + "not apply. About "
-        + "\(minutesLabel(knobs.imageCanvas.approximateMinutes(aspect: studioAspect))) "
+        + "\(minutesLabel(imageMinutes(knobs.imageCanvas))) "
         + "on an M1 Pro; the first render after launch takes longer.")
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityIdentifier("image-resolution")
+  }
+
+  private func imageMinutes(_ canvas: ImageCanvas) -> Double {
+    canvas.approximateMinutes(
+      aspect: studioAspect,
+      denoisingSteps: knobs.denoisingSteps
+    )
   }
 
   private func minutesLabel(_ minutes: Double) -> String {
@@ -1475,11 +1512,10 @@ struct GenerationStudioView: View {
 
   private func startGeneration(
     denoisingSteps: Int, coreReuse: Int, blockCache: Bool = false,
-    fastStill: Bool = false
+    fastStill: Bool = false,
+    allowsLTXMemoryOvercommit: Bool = false
   ) {
     modelMenuOpen = false
-    resultIDAtStart = model.latestStudioResult?.id
-    stage = .run
     // A model built for stills brings its own square ladder; the video one is
     // a short edge that the project's aspect ratio widens, which is the pair
     // this renderer refuses.
@@ -1494,6 +1530,20 @@ struct GenerationStudioView: View {
       : (promptOnlyModel
         ? knobs.imageCanvas.frame(aspect: studioAspect)
         : knobs.canvas.frame(aspect: studioAspect))
+    if isLTX, !allowsLTXMemoryOvercommit,
+      let warning = ltxMemoryWarning(width: size.width, height: size.height)
+    {
+      pendingMemoryIntensiveGeneration = PendingMemoryIntensiveGeneration(
+        denoisingSteps: denoisingSteps,
+        coreReuse: coreReuse,
+        blockCache: blockCache,
+        fastStill: fastStill,
+        warning: warning
+      )
+      return
+    }
+    resultIDAtStart = model.latestStudioResult?.id
+    stage = .run
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
@@ -1504,9 +1554,39 @@ struct GenerationStudioView: View {
       blockCache: blockCache,
       fastStill: fastStill,
       previewDenoise: model.previewDenoise,
+      allowsLTXMemoryOvercommit: allowsLTXMemoryOvercommit,
       seed: hasModelSettings ? model.studioSettings.seed : nil,
       canvasWidth: kind == .audio ? nil : size.width,
       canvasHeight: kind == .audio ? nil : size.height
+    )
+  }
+
+  private func ltxMemoryWarning(width: Int, height: Int) -> String? {
+    let conditioningPictures =
+      (model.studioStartFrame == nil ? 0 : 1)
+      + (model.studioEndFrame == nil ? 0 : 1)
+      + model.studioReferenceImages.count
+    let estimatedMemory = EngineVideoOptions.estimatedLTXPeakMemoryBytes(
+      width: width,
+      height: height,
+      frames: ltxFrames,
+      conditioningPictures: conditioningPictures
+    )
+    let safeMemory = EngineVideoOptions.safeLTXMemoryBudget(
+      physicalMemory: ProcessInfo.processInfo.physicalMemory)
+    guard estimatedMemory > safeMemory else { return nil }
+
+    let gibibyte = 1_073_741_824.0
+    let estimate = Double(estimatedMemory) / gibibyte
+    let budget = Double(safeMemory) / gibibyte
+    let pictures = conditioningPictures == 1 ? "picture" : "pictures"
+    return String(
+      format: "This %d×%d, %d-frame request with %d conditioning %@ is "
+        + "estimated to need %.1f GiB of unified memory, above this Mac's "
+        + "%.1f GiB safe budget. macOS may become unresponsive, generation "
+        + "may take much longer, or the engine may fail. Close other apps "
+        + "before continuing.",
+      width, height, ltxFrames, conditioningPictures, pictures, estimate, budget
     )
   }
 

@@ -29,8 +29,11 @@
  */
 #include "ltx_video.h"
 
+#include "ltx_tiling.h"
+
 #include "h3_safetensors.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -48,7 +51,18 @@ enum {
     PACKED_CHANNELS = IMAGE_CHANNELS * PATCH * PATCH,
     WIDEST_CHANNELS = 1024,
     BLOCKS = 9,
-    KERNEL = 3
+    KERNEL = 3,
+    /* LTX's reference single-GPU defaults, expressed on the latent grid:
+     * 80 output frames / 24 overlap at 8x temporal scale, and 768 / 64
+     * pixels at 32x spatial scale. The mapped temporal tile is at most 81
+     * frames because every tile after the first carries one causal context
+     * cell. */
+    TEMPORAL_TILE = 80 / 8,
+    TEMPORAL_OVERLAP = 24 / 8,
+    SPATIAL_TILE = 768 / LTX_VIDEO_SPATIAL,
+    SPATIAL_OVERLAP = 64 / LTX_VIDEO_SPATIAL,
+    /* conv_in, 18 residual layers, four upsamplers, norm, head and readback. */
+    DECODE_UNITS = 26
 };
 
 #define PIXEL_NORM_EPSILON 1e-8f
@@ -65,6 +79,14 @@ uint32_t ltx_video_pixel_frames(uint32_t latent_frames) {
 enum { RETIRE_MAX = 32 };
 
 typedef struct {
+    ltx_video_tick tick;
+    void *context;
+    int completed;
+    int total;
+    int cancelled;
+} decode_progress;
+
+typedef struct {
     h3_gpu *gpu;
     const h3_weight_store *store;
     h3_gpu_tensor *ones;
@@ -74,6 +96,7 @@ typedef struct {
     /* Tensors the open command buffer still reads. See `retire`. */
     h3_gpu_tensor *retired[RETIRE_MAX];
     int retired_count;
+    decode_progress *progress;
 } run;
 
 static void oops(run *r, const char *format, ...) {
@@ -128,6 +151,20 @@ static void drain(run *r) {
     for (int index = 0; index < r->retired_count; index++)
         h3_gpu_tensor_free(r->retired[index]);
     r->retired_count = 0;
+}
+
+static void complete_decode_unit(run *r) {
+    if (r->failed || !r->progress) return;
+    decode_progress *progress = r->progress;
+    progress->completed++;
+    if (progress->tick &&
+        !progress->tick(progress->completed, progress->total,
+                        progress->context)) {
+        /* Cancellation is deliberately an empty error. `ltx_generate` and the
+         * service already distinguish it from a failed decoder that way. */
+        progress->cancelled = 1;
+        r->failed = 1;
+    }
 }
 
 static float from_bf16(uint16_t value) {
@@ -779,10 +816,11 @@ int ltx_video_encode(h3_gpu *gpu, const h3_weight_store *store,
     return !r.failed;
 }
 
-int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
-                     const float *latent, uint32_t frames, uint32_t height,
-                     uint32_t width, float *pixels,
-                     char *error, size_t error_size) {
+static int decode_untiled(h3_gpu *gpu, const h3_weight_store *store,
+                          const float *latent, uint32_t frames, uint32_t height,
+                          uint32_t width, float *pixels,
+                          decode_progress *progress,
+                          char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!gpu || !store || !latent || !pixels || !frames || !height || !width) {
         if (error && error_size)
@@ -793,6 +831,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
     }
     run r = {0};
     r.gpu = gpu; r.store = store; r.error = error; r.error_size = error_size;
+    r.progress = progress;
 
     shape at = {frames, height, width, LATENT_CHANNELS};
     h3_gpu_tensor *x = NULL;
@@ -842,15 +881,20 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         h3_gpu_tensor_free(x);
         x = out;
         at.channels = WIDEST_CHANNELS;
+        complete_decode_unit(&r);
     }
 
     for (int index = 0; index < BLOCKS && !r.failed; index++) {
         const vae_block *plan = &DECODE[index];
-        if (plan->layers)
-            for (int layer = 0; layer < plan->layers; layer++)
+        if (plan->layers) {
+            for (int layer = 0; layer < plan->layers && !r.failed; layer++) {
                 resnet(&r, "decoder", index, layer, x, at, 0);
-        else
+                complete_decode_unit(&r);
+            }
+        } else {
             x = upsample(&r, index, plan, x, &at);
+            complete_decode_unit(&r);
+        }
     }
 
     {
@@ -861,6 +905,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         drain(&r);
         h3_gpu_tensor_free(x);
         x = normed;
+        complete_decode_unit(&r);
     }
     {
         conv3d tail;
@@ -875,6 +920,7 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
         h3_gpu_tensor_free(x);
         x = out;
         at.channels = PACKED_CHANNELS;
+        complete_decode_unit(&r);
     }
 
     /* Three temporal doublings with a discarded leading frame at each, which
@@ -886,9 +932,243 @@ int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
 
     float *host = download(&r, x, volume(at));
     h3_gpu_tensor_free(x);
-    if (!r.failed) unpatchify(host, pixels, at);
+    if (!r.failed) {
+        unpatchify(host, pixels, at);
+        complete_decode_unit(&r);
+    }
     free(host);
 
     h3_gpu_tensor_free(r.ones);
     return !r.failed;
+}
+
+/* --------------------------------------------------------------- tiling */
+
+static int multiply_size(size_t left, size_t right, size_t *result) {
+    if (left && right > SIZE_MAX / left) return 0;
+    *result = left * right;
+    return 1;
+}
+
+static float *allocate_floats(size_t count) {
+    size_t bytes = 0;
+    return multiply_size(count, sizeof(float), &bytes) ? malloc(bytes) : NULL;
+}
+
+static float *extract_latent_tile(const float *latent, uint32_t full_height,
+                                  uint32_t full_width, ltx_tile_interval time,
+                                  ltx_tile_interval rows,
+                                  ltx_tile_interval columns) {
+    const uint32_t depth = time.end - time.start;
+    const uint32_t height = rows.end - rows.start;
+    const uint32_t width = columns.end - columns.start;
+    size_t count = depth;
+    if (!multiply_size(count, height, &count) ||
+        !multiply_size(count, width, &count) ||
+        !multiply_size(count, LATENT_CHANNELS, &count)) return NULL;
+    float *tile = allocate_floats(count);
+    if (!tile) return NULL;
+
+    const size_t channels = LATENT_CHANNELS;
+    for (uint32_t d = 0; d < depth; d++)
+        for (uint32_t h = 0; h < height; h++) {
+            const size_t source =
+                (((size_t)(time.start + d) * full_height + rows.start + h) *
+                  full_width + columns.start) * channels;
+            const size_t target =
+                (((size_t)d * height + h) * width) * channels;
+            memcpy(tile + target, latent + source,
+                   (size_t)width * channels * sizeof(*tile));
+        }
+    return tile;
+}
+
+static float *make_mask(ltx_tile_interval interval, int temporal) {
+    const uint32_t length = interval.end - interval.start;
+    float *mask = allocate_floats(length);
+    if (!mask) return NULL;
+    for (uint32_t index = 0; index < length; index++)
+        mask[index] = ltx_tile_mask(length, interval.left_ramp,
+                                    interval.right_ramp, temporal, index);
+    return mask;
+}
+
+static int accumulate_pixel_tile(float *pixels, uint32_t full_depth,
+                                 uint32_t full_height, uint32_t full_width,
+                                 const float *tile,
+                                 ltx_tile_interval time,
+                                 ltx_tile_interval rows,
+                                 ltx_tile_interval columns) {
+    const uint32_t depth = time.end - time.start;
+    const uint32_t height = rows.end - rows.start;
+    const uint32_t width = columns.end - columns.start;
+    float *time_mask = make_mask(time, 1);
+    float *row_mask = make_mask(rows, 0);
+    float *column_mask = make_mask(columns, 0);
+    if (!time_mask || !row_mask || !column_mask) {
+        free(time_mask); free(row_mask); free(column_mask);
+        return 0;
+    }
+
+    for (uint32_t channel = 0; channel < IMAGE_CHANNELS; channel++)
+        for (uint32_t d = 0; d < depth; d++)
+            for (uint32_t h = 0; h < height; h++) {
+                const float plane_weight = time_mask[d] * row_mask[h];
+                const size_t source =
+                    (((size_t)channel * depth + d) * height + h) * width;
+                const size_t target =
+                    (((size_t)channel * full_depth + time.start + d) *
+                      full_height + rows.start + h) * full_width + columns.start;
+                for (uint32_t w = 0; w < width; w++)
+                    pixels[target + w] += tile[source + w] *
+                                          plane_weight * column_mask[w];
+            }
+    free(time_mask); free(row_mask); free(column_mask);
+    return 1;
+}
+
+int ltx_video_decode_progress(h3_gpu *gpu, const h3_weight_store *store,
+                              const float *latent, uint32_t frames,
+                              uint32_t height, uint32_t width, float *pixels,
+                              ltx_video_tick tick, void *tick_context,
+                              char *error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    if (!gpu || !store || !latent || !pixels || !frames || !height || !width)
+        return decode_untiled(gpu, store, latent, frames, height, width, pixels,
+                              NULL, error, error_size);
+
+    const size_t time_count = ltx_tile_axis(frames, TEMPORAL_TILE,
+                                            TEMPORAL_OVERLAP, 1, NULL, 0);
+    const size_t row_count = ltx_tile_axis(height, SPATIAL_TILE,
+                                           SPATIAL_OVERLAP, 0, NULL, 0);
+    const size_t column_count = ltx_tile_axis(width, SPATIAL_TILE,
+                                              SPATIAL_OVERLAP, 0, NULL, 0);
+    if (!time_count || !row_count || !column_count) {
+        if (error && error_size) snprintf(error, error_size,
+                                           "cannot plan video VAE tiles");
+        return 0;
+    }
+    size_t tile_count = 0;
+    if (!multiply_size(time_count, row_count, &tile_count) ||
+        !multiply_size(tile_count, column_count, &tile_count) ||
+        tile_count > INT_MAX / DECODE_UNITS) {
+        if (error && error_size) snprintf(error, error_size,
+                                           "video VAE has too many tiles");
+        return 0;
+    }
+    decode_progress progress = {
+        .tick = tick,
+        .context = tick_context,
+        .completed = 0,
+        .total = (int)tile_count * DECODE_UNITS,
+        .cancelled = 0,
+    };
+    if (progress.tick && !progress.tick(0, progress.total, progress.context)) {
+        progress.cancelled = 1;
+        return 0;
+    }
+    if (tile_count == 1)
+        return decode_untiled(gpu, store, latent, frames, height, width, pixels,
+                              &progress, error, error_size);
+
+    ltx_tile_interval *times = malloc(time_count * sizeof(*times));
+    ltx_tile_interval *rows = malloc(row_count * sizeof(*rows));
+    ltx_tile_interval *columns = malloc(column_count * sizeof(*columns));
+    if (!times || !rows || !columns ||
+        !ltx_tile_axis(frames, TEMPORAL_TILE, TEMPORAL_OVERLAP, 1,
+                       times, time_count) ||
+        !ltx_tile_axis(height, SPATIAL_TILE, SPATIAL_OVERLAP, 0,
+                       rows, row_count) ||
+        !ltx_tile_axis(width, SPATIAL_TILE, SPATIAL_OVERLAP, 0,
+                       columns, column_count)) {
+        free(times); free(rows); free(columns);
+        if (error && error_size) snprintf(error, error_size,
+                                           "cannot allocate video VAE tile plan");
+        return 0;
+    }
+
+    const uint32_t full_depth = ltx_video_pixel_frames(frames);
+    const uint32_t full_height = height * LTX_VIDEO_SPATIAL;
+    const uint32_t full_width = width * LTX_VIDEO_SPATIAL;
+    size_t output_count = IMAGE_CHANNELS;
+    if (!multiply_size(output_count, full_depth, &output_count) ||
+        !multiply_size(output_count, full_height, &output_count) ||
+        !multiply_size(output_count, full_width, &output_count)) {
+        free(times); free(rows); free(columns);
+        if (error && error_size) snprintf(error, error_size,
+                                           "video VAE output is too large");
+        return 0;
+    }
+    size_t output_bytes = 0;
+    if (!multiply_size(output_count, sizeof(*pixels), &output_bytes)) {
+        free(times); free(rows); free(columns);
+        if (error && error_size) snprintf(error, error_size,
+                                           "video VAE output is too large");
+        return 0;
+    }
+    memset(pixels, 0, output_bytes);
+
+    int ok = 1;
+    for (size_t t = 0; ok && t < time_count; t++)
+        for (size_t h = 0; ok && h < row_count; h++)
+            for (size_t w = 0; ok && w < column_count; w++) {
+                const ltx_tile_interval output_time =
+                    ltx_tile_output(times[t], 8, 1);
+                const ltx_tile_interval output_rows =
+                    ltx_tile_output(rows[h], LTX_VIDEO_SPATIAL, 0);
+                const ltx_tile_interval output_columns =
+                    ltx_tile_output(columns[w], LTX_VIDEO_SPATIAL, 0);
+                const uint32_t tile_frames = times[t].end - times[t].start;
+                const uint32_t tile_height = rows[h].end - rows[h].start;
+                const uint32_t tile_width = columns[w].end - columns[w].start;
+                float *tile_latent = extract_latent_tile(
+                    latent, height, width, times[t], rows[h], columns[w]);
+                size_t tile_pixel_count = IMAGE_CHANNELS;
+                ok = tile_latent &&
+                     multiply_size(tile_pixel_count,
+                                   ltx_video_pixel_frames(tile_frames),
+                                   &tile_pixel_count) &&
+                     multiply_size(tile_pixel_count,
+                                   (size_t)tile_height * LTX_VIDEO_SPATIAL,
+                                   &tile_pixel_count) &&
+                     multiply_size(tile_pixel_count,
+                                   (size_t)tile_width * LTX_VIDEO_SPATIAL,
+                                   &tile_pixel_count);
+                float *tile_pixels = ok ? allocate_floats(tile_pixel_count) : NULL;
+                if (!tile_pixels) ok = 0;
+                char detail[512] = {0};
+                if (ok)
+                    ok = decode_untiled(gpu, store, tile_latent, tile_frames,
+                                        tile_height, tile_width, tile_pixels,
+                                        &progress, detail, sizeof(detail));
+                if (ok)
+                    ok = accumulate_pixel_tile(
+                        pixels, full_depth, full_height, full_width, tile_pixels,
+                        output_time, output_rows, output_columns);
+                free(tile_latent); free(tile_pixels);
+                if (!ok && !progress.cancelled && error && error_size) {
+                    if (detail[0])
+                        snprintf(error, error_size,
+                                 "video VAE tile %zu/%zu: %s",
+                                 t * row_count * column_count +
+                                     h * column_count + w + 1,
+                                 time_count * row_count * column_count, detail);
+                    else
+                        snprintf(error, error_size,
+                                 "out of memory decoding video VAE tile %zu/%zu",
+                                 t * row_count * column_count +
+                                     h * column_count + w + 1,
+                                 time_count * row_count * column_count);
+                }
+            }
+    free(times); free(rows); free(columns);
+    return ok;
+}
+
+int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
+                     const float *latent, uint32_t frames, uint32_t height,
+                     uint32_t width, float *pixels,
+                     char *error, size_t error_size) {
+    return ltx_video_decode_progress(gpu, store, latent, frames, height, width,
+                                     pixels, NULL, NULL, error, error_size);
 }

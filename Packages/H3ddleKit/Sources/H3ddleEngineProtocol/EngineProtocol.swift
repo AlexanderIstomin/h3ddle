@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 15
+  public static let currentVersion = 16
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -159,6 +159,13 @@ public struct EngineVideoOptions: Hashable, Codable, Sendable {
   /// It compresses 8x in time and cannot produce the seven leading frames,
   /// so a clip is 8k+1 frames: 17, 33, 65, 97.
   public static let frameStep = 8
+  /// LTX streams one transformer block at a time, but activations and the
+  /// decoded float video still scale with the full token grid. This fixed
+  /// allowance and per-token term are deliberately conservative fits to the
+  /// measured 65-frame, 512-square working set. They are a safety estimate,
+  /// not a promise about the allocator's exact peak.
+  private static let ltxFixedWorkingSetBytes: UInt64 = 5 * 1_073_741_824
+  private static let ltxBytesPerVideoToken: UInt64 = 224 * 1_024
 
   public var model: EngineVideoModel
   /// Overrides the model's released schedule when set. Ignored by H3, which
@@ -185,6 +192,52 @@ public struct EngineVideoOptions: Hashable, Codable, Sendable {
   public static func supports(width: Int, height: Int) -> Bool {
     width >= pixelMultiple && width % pixelMultiple == 0
       && height >= pixelMultiple && height % pixelMultiple == 0
+  }
+
+  /// Conservative peak unified-memory estimate for one LTX render. Every
+  /// conditioning picture appends one spatial frame to the DiT sequence for
+  /// all 48 blocks, while the native bridge also holds the decoded RGB float
+  /// video until it is written.
+  public static func estimatedLTXPeakMemoryBytes(
+    width: Int,
+    height: Int,
+    frames: Int,
+    conditioningPictures: Int = 0
+  ) -> UInt64 {
+    guard supports(width: width, height: height), frames > 0 else { return .max }
+    let latentFrames = UInt64((frames - 1) / frameStep + 1)
+    let spatialCells = saturatedProduct([
+      UInt64(width / pixelMultiple), UInt64(height / pixelMultiple),
+    ])
+    let videoTokens = saturatedProduct([
+      latentFrames + UInt64(max(0, conditioningPictures)), spatialCells,
+    ])
+    let tokenWorkingSet = saturatedProduct([videoTokens, ltxBytesPerVideoToken])
+    let decodedVideo = saturatedProduct([
+      UInt64(width), UInt64(height), UInt64(frames), 3, 4,
+    ])
+    return saturatedSum([ltxFixedWorkingSetBytes, tokenWorkingSet, decodedVideo])
+  }
+
+  /// Leaves one quarter of unified memory to macOS, the app, and transient
+  /// allocations. Requests above this threshold are likely to compress or
+  /// swap the whole machine even if the allocation itself eventually works.
+  public static func safeLTXMemoryBudget(physicalMemory: UInt64) -> UInt64 {
+    (physicalMemory / 4) * 3
+  }
+
+  private static func saturatedProduct(_ values: [UInt64]) -> UInt64 {
+    values.reduce(1) { result, value in
+      let product = result.multipliedReportingOverflow(by: value)
+      return product.overflow ? .max : product.partialValue
+    }
+  }
+
+  private static func saturatedSum(_ values: [UInt64]) -> UInt64 {
+    values.reduce(0) { result, value in
+      let sum = result.addingReportingOverflow(value)
+      return sum.overflow ? .max : sum.partialValue
+    }
   }
 }
 
@@ -453,15 +506,20 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public var image: EngineImageOptions?
   /// Which model renders a clip, and its own settings. Absent keeps H3.
   public var video: EngineVideoOptions?
+  /// The app showed the unified-memory warning and the user explicitly chose
+  /// to continue. False by default so non-interactive clients cannot
+  /// accidentally push an oversized LTX request through the safety check.
+  public var allowsLTXMemoryOvercommit: Bool
   public var modelDirectory: URL?
   public var outputURL: URL
 
-  /// Z-Image owns an independent multi-gigabyte package. Keeping H3's cached
-  /// context beside it can force unified-memory compression or swapping, so
-  /// the helper drops H3 before allocating anything for this request. Legacy
-  /// still requests have no `image` options and continue to reuse H3.
-  public var releasesResidentH3Context: Bool {
-    kind == .image && image?.model == .zImage
+  /// Z-Image and LTX own independent multi-gigabyte packages. Keeping any
+  /// other model cache beside them can force unified-memory compression or
+  /// swapping, so the service clears resident packages before allocating the
+  /// request. Legacy requests continue to reuse H3.
+  public var requiresExclusiveModelMemory: Bool {
+    (kind == .image && image?.model == .zImage)
+      || (kind == .video && video?.model == .ltx)
   }
 
   public init(
@@ -486,6 +544,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     speech: EngineSpeechOptions? = nil,
     image: EngineImageOptions? = nil,
     video: EngineVideoOptions? = nil,
+    allowsLTXMemoryOvercommit: Bool = false,
     modelDirectory: URL? = nil,
     outputURL: URL
   ) {
@@ -510,6 +569,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.speech = speech
     self.image = image
     self.video = video
+    self.allowsLTXMemoryOvercommit = allowsLTXMemoryOvercommit
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
   }
@@ -536,6 +596,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case speech
     case image
     case video
+    case allowsLTXMemoryOvercommit
     case modelDirectory
     case outputURL
   }
@@ -570,6 +631,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     speech = try container.decodeIfPresent(EngineSpeechOptions.self, forKey: .speech)
     image = try container.decodeIfPresent(EngineImageOptions.self, forKey: .image)
     video = try container.decodeIfPresent(EngineVideoOptions.self, forKey: .video)
+    allowsLTXMemoryOvercommit =
+      try container.decodeIfPresent(Bool.self, forKey: .allowsLTXMemoryOvercommit) ?? false
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
   }
@@ -599,6 +662,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encodeIfPresent(speech, forKey: .speech)
     try container.encodeIfPresent(image, forKey: .image)
     try container.encodeIfPresent(video, forKey: .video)
+    if allowsLTXMemoryOvercommit {
+      try container.encode(true, forKey: .allowsLTXMemoryOvercommit)
+    }
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
   }

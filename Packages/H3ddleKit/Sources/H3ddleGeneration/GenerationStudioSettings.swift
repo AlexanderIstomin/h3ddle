@@ -135,9 +135,16 @@ public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   /// launch runs longer than any of these while 14 GB of weights are read
   /// from disk for the first time; a measured 1024 came in at 322s cold
   /// against 234s warm.
-  public func approximateMinutes(aspect: Double) -> Double {
-    // 25.9s of fixed cost plus 50.9ms a token, from the two measured ends.
-    (25.9 + 0.0509 * Double(tokens(aspect: aspect))) / 60
+  public func approximateMinutes(
+    aspect: Double,
+    denoisingSteps: Int = 8
+  ) -> Double {
+    let frame = self.frame(aspect: aspect)
+    return (GenerationDurationEstimate.zImage(
+      width: frame.width,
+      height: frame.height,
+      denoisingSteps: denoisingSteps
+    ) ?? 0) / 60
   }
 }
 
@@ -385,6 +392,136 @@ public enum LTXResolution: String, CaseIterable, Codable, Sendable, Identifiable
         let frame = self.frame(aspect: aspect)
         return (frame.width / 32) * (frame.height / 32)
     }
+}
+
+/// Coarse end-to-end projections used until an active generation has measured
+/// enough of its own work to produce a better ETA.
+///
+/// These are deliberately hardware baselines, not capability promises. The
+/// long-running visual models use warm M1 Pro measurements recorded alongside
+/// their native implementations. The small audio models use their documented
+/// faster-than-real-time operating rates. Every value is replaced by live
+/// phase timing as soon as the progress tracker has a stable sample.
+public enum GenerationDurationEstimate {
+  /// Z-Image at eight steps is fitted to measured 512- and 1536-pixel renders.
+  /// Recorded phase timings put roughly one quarter of the wait in denoising;
+  /// only that share follows a non-default step count.
+  public static func zImage(
+    width: Int,
+    height: Int,
+    denoisingSteps: Int
+  ) -> TimeInterval? {
+    guard width >= 16, height >= 16,
+      width % 16 == 0, height % 16 == 0,
+      denoisingSteps > 0
+    else { return nil }
+    let tokens = (width / 16) * (height / 16)
+    guard tokens % 32 == 0 else { return nil }
+    // 25.9s fixed plus 50.9ms/token at the released eight-step schedule.
+    let eightStepSeconds = 25.9 + 0.0509 * Double(tokens)
+    let stepScale = 0.75 + 0.25 * Double(denoisingSteps) / 8
+    return eightStepSeconds * stepScale
+  }
+
+  /// LTX is fitted to three warm end-to-end runs. Its DiT cost is linear in
+  /// latent cells times latent frames times steps at the sizes offered here.
+  public static func ltx(
+    width: Int,
+    height: Int,
+    frames: Int,
+    denoisingSteps: Int
+  ) -> TimeInterval? {
+    guard EngineVideoOptions.supports(width: width, height: height),
+      frames > 0,
+      denoisingSteps > 0
+    else { return nil }
+
+    let latentFrames = (frames - 1) / EngineVideoOptions.frameStep + 1
+    let cellsPerFrame =
+      (width / EngineVideoOptions.pixelMultiple)
+      * (height / EngineVideoOptions.pixelMultiple)
+    let tokenSteps = Double(latentFrames) * Double(cellsPerFrame)
+      * Double(denoisingSteps)
+    return 40.3 + 0.0195 * tokenSteps
+  }
+
+  /// H3's sampler fit comes from measured 1,625- and 5,095-row M1 Pro runs.
+  /// Its VAE baseline is the measured resident 640x352, 22-frame decode; on a
+  /// machine too small to retain those weights, the recorded streamed decode
+  /// was approximately four times slower.
+  public static func h3(
+    width: Int,
+    height: Int,
+    frames: Int,
+    denoisingSteps: Int,
+    activeDiTLayers: Int,
+    denoiseReuse: Int,
+    coreReuse: Int,
+    blockCache: Bool,
+    physicalMemoryBytes: UInt64
+  ) -> TimeInterval? {
+    guard width >= 32, height >= 32,
+      width % 32 == 0, height % 32 == 0,
+      frames >= 5, (frames - 5) % H3Duration.chunk == 0,
+      denoisingSteps > 0,
+      (35...50).contains(activeDiTLayers),
+      (1...3).contains(denoiseReuse),
+      (1...6).contains(coreReuse)
+    else { return nil }
+
+    let latentFrames = frames == 5
+      ? 2
+      : ((frames - 5) / H3Duration.chunk) * 5 + 2
+    let spatialRows = (width / 32) * (height / 32)
+    let videoRows = Double(latentFrames) * Double(spatialRows)
+    let audioRows = Double(Int((Double(frames) * 40 / H3Duration.fps).rounded()) * 2)
+    // A short prompt is about 16 rows; its exact token count is a small term
+    // beside the hundreds or thousands of audio/video rows.
+    let sequenceRows = 16 + videoRows + audioRows
+    let onePass = 0.0134 * sequenceRows
+      + 0.000001106 * sequenceRows * sequenceRows
+    let layerScale = Double(activeDiTLayers) / 50
+
+    let effectivePasses: Double
+    if blockCache {
+      effectivePasses = Double(denoisingSteps) * 0.60
+    } else if coreReuse > 1 {
+      let full = ceil(Double(denoisingSteps) / Double(coreReuse))
+      // Reused passes still refresh the timestep-dependent heads.
+      effectivePasses = full + 0.10 * (Double(denoisingSteps) - full)
+    } else {
+      effectivePasses = ceil(Double(denoisingSteps) / Double(denoiseReuse))
+    }
+
+    let baselineWork = Double(640 * 352 * 22)
+    let requestedWork = Double(width) * Double(height) * Double(frames)
+    var decode = max(12, 45 * requestedWork / baselineWork)
+    let residentThreshold = UInt64(17) * 1_073_741_824
+    if physicalMemoryBytes < residentThreshold { decode *= 4 }
+
+    // Prompt encoding plus audio decode/mux are small fixed costs beside these
+    // model sizes, but retaining them keeps the number end-to-end.
+    return 12 + onePass * layerScale * effectivePasses + decode
+  }
+
+  /// Stable Audio 3 Small is documented and observed at about twice realtime.
+  /// Fifteen percent of output duration is retained as decode work while the
+  /// denoising share follows the selected step count.
+  public static func stableAudio(
+    duration: TimeInterval,
+    denoisingSteps: Int
+  ) -> TimeInterval? {
+    guard duration.isFinite, duration > 0, denoisingSteps > 0 else { return nil }
+    return max(3, 2 + duration * (0.15 + 0.35 * Double(denoisingSteps) / 8))
+  }
+
+  /// Speech is also faster than realtime. The line's expected spoken length,
+  /// rather than its generous runaway ceiling, is the useful starting point.
+  public static func speech(characterCount: Int) -> TimeInterval? {
+    guard characterCount > 0 else { return nil }
+    let spokenSeconds = Double(characterCount) / 14
+    return max(3, 2 + 0.5 * spokenSeconds)
+  }
 }
 
 public struct GenerationStudioSettings: Hashable, Codable, Sendable {

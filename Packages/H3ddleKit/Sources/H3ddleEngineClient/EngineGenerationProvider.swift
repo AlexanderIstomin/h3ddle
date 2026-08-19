@@ -115,6 +115,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           video: request.kind == .video && request.videoEngine == .ltx
             ? EngineVideoOptions(model: .ltx, steps: request.denoisingSteps)
             : nil,
+          allowsLTXMemoryOvercommit: request.allowsLTXMemoryOvercommit == true,
           modelDirectory: modelDirectory,
           outputURL: outputURL
         )

@@ -294,6 +294,42 @@ struct EngineClientTests {
       #expect(try #require(sent)["kind"] as? String == expected)
     }
   }
+
+  /// Confirmation is an app decision, but the engine owns the final guard.
+  /// The consent bit therefore has to survive both request representations
+  /// rather than stopping at the Generation Studio button.
+  @Test("LTX memory-overcommit consent crosses into the engine request")
+  func ltxMemoryConsentCrossesTheProtocol() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/ltx-package", isDirectory: true)
+    )
+    var sent: [String: Any]?
+    for try await event in provider.events(
+      for: GenerationRequest(
+        kind: .video,
+        videoEngine: .ltx,
+        prompt: "A long coastal tracking shot",
+        duration: 10,
+        canvasWidth: 1248,
+        canvasHeight: 704,
+        allowsLTXMemoryOvercommit: true
+      )
+    ) {
+      if case .progress(let phase, _) = event,
+        let data = phase.data(using: .utf8),
+        let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        sent = decoded
+      }
+    }
+
+    let generation = try #require(sent)
+    #expect(generation["video"] as? [String: String] == ["model": "ltx"])
+    #expect(generation["allowsLTXMemoryOvercommit"] as? Bool == true)
+  }
 }
 
 private func fakeEngineSession(arguments: [String] = []) -> EngineSession {

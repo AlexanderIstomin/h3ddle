@@ -5,6 +5,18 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 "$repository_root/Scripts/check-public-boundary.sh"
 "$repository_root/Scripts/check-untracked-sources.sh"
+
+# The LTX VAE decoder is native C and its tile planner deliberately has no
+# model-weight dependency. Exercise the real planner here: a Swift duplicate
+# could pass while the memory-bound production path drifted.
+ltx_tiling_test="${TMPDIR:-/tmp}/h3ddle-ltx-tiling-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror \
+    "$repository_root/Engine/Sources/LTX/ltx_tiling.c" \
+    "$repository_root/Engine/Tests/LTXTilingTests/ltx_tiling_test.c" \
+    -I"$repository_root/Engine/Sources/LTX" \
+    -o "$ltx_tiling_test"
+"$ltx_tiling_test"
+
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
 swift test --package-path "$repository_root/Packages/H3ddleKit"
 swift test --package-path "$repository_root/Engine"

@@ -64,6 +64,17 @@ tensor rather than sitting beside it as a file, and this copy of it has a
 SentencePiece path reproduces its ids exactly; `h3_gemma_tokenizer_test`
 against the reference `tokenizers` library is what says so.
 
+The video VAE decodes through **overlapping temporal and spatial tiles**. Its
+late F32 feature map is 128 channels at one quarter of the output size; running
+all frames together made that single activation 9.45 GiB for a 361-frame
+1248x704 clip, with several such tensors alive inside a residual block. The
+tile geometry follows LTX's single-GPU defaults: 80 frames with 24 overlapping,
+and 768 pixels with 64 overlapping. Trapezoidal masks add to one at every seam,
+and make the activation ceiling follow the tile rather than clip duration.
+Every submitted decoder operation advances one run-wide VAE counter, including
+across tile boundaries. Besides making the long phase visible, that callback is
+where cancellation lands instead of waiting for the complete decode.
+
 ## Things that are true and not obvious
 
 Each of these cost a real bug, and none was catchable by a component test —

@@ -43,13 +43,23 @@ struct EngineProtocolTests {
       canvasWidth: 512,
       canvasHeight: 512,
       video: EngineVideoOptions(model: .ltx, steps: 8),
+      allowsLTXMemoryOvercommit: true,
       outputURL: URL(fileURLWithPath: "/tmp/clip.mp4")
     )
     let decoded = try EngineLineCodec.decode(
       EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
     #expect(decoded.video?.model == .ltx)
     #expect(decoded.video?.steps == 8)
+    #expect(decoded.allowsLTXMemoryOvercommit)
     #expect(decoded == request)
+  }
+
+  @Test("High-memory consent defaults to denied")
+  func memoryOvercommitDefaultsToDenied() throws {
+    let json = Data(
+      #"{"kind":"video","prompt":"x","duration":1,"quality":"preview","fastStill":false,"blockCache":false,"previewDenoise":false,"useBetaSchedule":false,"outputURL":"file:///tmp/x.mp4"}"#.utf8)
+    let decoded = try JSONDecoder().decode(EngineGenerationRequest.self, from: json)
+    #expect(!decoded.allowsLTXMemoryOvercommit)
   }
 
   /// Absent settings mean H3, which is what `.video` meant before a second
@@ -118,6 +128,29 @@ struct EngineProtocolTests {
     #expect(LTXResolution.p1080.shortEdge == 1088)
   }
 
+  /// The estimate protects unified memory before the native bridge allocates
+  /// a complete float video or starts the 48-block sampler. This is the exact
+  /// 10-second, landscape 720p, one-reference geometry from the reported run;
+  /// it deliberately crosses a 16 GiB Mac's safe budget.
+  @Test("LTX memory preflight scales with geometry and conditioning")
+  func ltxMemoryPreflight() {
+    let gibibyte: UInt64 = 1_073_741_824
+    let baseline = EngineVideoOptions.estimatedLTXPeakMemoryBytes(
+      width: 512, height: 512, frames: 65)
+    let large = EngineVideoOptions.estimatedLTXPeakMemoryBytes(
+      width: 1248, height: 704, frames: 241, conditioningPictures: 1)
+
+    #expect(large > baseline * 2)
+    #expect(large > EngineVideoOptions.safeLTXMemoryBudget(
+      physicalMemory: 16 * gibibyte))
+    #expect(large < EngineVideoOptions.safeLTXMemoryBudget(
+      physicalMemory: 32 * gibibyte))
+    #expect(
+      EngineVideoOptions.estimatedLTXPeakMemoryBytes(
+        width: 1248, height: 704, frames: 241, conditioningPictures: 2)
+        > large)
+  }
+
   /// Absent settings mean H3, which is what `.image` meant before a second
   /// model existed. A client that has never heard of v14 keeps working.
   @Test("A still with no image settings still means H3")
@@ -130,8 +163,8 @@ struct EngineProtocolTests {
     #expect(decoded.image == nil)
   }
 
-  @Test("Only Z-Image stills release the resident H3 context")
-  func zImageRequiresExclusiveModelMemory() {
+  @Test("Independent image and video packages require exclusive model memory")
+  func independentModelsRequireExclusiveModelMemory() {
     let output = URL(fileURLWithPath: "/tmp/x.png")
     let zImage = EngineGenerationRequest(
       kind: .image, prompt: "x", duration: 0,
@@ -146,10 +179,10 @@ struct EngineProtocolTests {
       video: EngineVideoOptions(model: .ltx),
       outputURL: URL(fileURLWithPath: "/tmp/x.mp4"))
 
-    #expect(zImage.releasesResidentH3Context)
-    #expect(!h3.releasesResidentH3Context)
-    #expect(!legacyH3.releasesResidentH3Context)
-    #expect(!ltx.releasesResidentH3Context)
+    #expect(zImage.requiresExclusiveModelMemory)
+    #expect(!h3.requiresExclusiveModelMemory)
+    #expect(!legacyH3.requiresExclusiveModelMemory)
+    #expect(ltx.requiresExclusiveModelMemory)
   }
 
   @Test("Commands round trip without losing job identity")

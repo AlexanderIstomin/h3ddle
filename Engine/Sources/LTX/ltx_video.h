@@ -21,6 +21,10 @@
  * decode to 8(n-1)+1 rather than 8n. */
 uint32_t ltx_video_pixel_frames(uint32_t latent_frames);
 
+/* Decoder work completed across all tiles. Returning zero cancels; the decoder
+ * then returns zero with an empty error, matching the pipeline callback. */
+typedef int (*ltx_video_tick)(int completed, int total, void *context);
+
 /* Frames to a latent: the inverse of the decode below, and what turns a
  * reference picture into something the DiT can be conditioned on.
  *
@@ -47,10 +51,23 @@ int ltx_video_encode(h3_gpu *gpu, const h3_weight_store *store,
  * works in, clipped by the caller rather than rescaled, so a decode that
  * drifted out of range shows up instead of being normalized away.
  *
+ * Larger clips are decoded as overlapping 80-frame / 768-pixel tiles. The
+ * caller still supplies one output buffer, but transient VAE activations are
+ * bounded by the tile rather than the complete clip.
+ *
  * Returns 0 with `error` set on failure. */
 int ltx_video_decode(h3_gpu *gpu, const h3_weight_store *store,
                      const float *latent, uint32_t frames, uint32_t height,
                      uint32_t width, float *pixels,
                      char *error, size_t error_size);
+
+/* The same decode with progress after every actual decoder operation. The
+ * counter spans every tile and never restarts, which gives the app both an ETA
+ * basis and cancellation points during a long VAE. */
+int ltx_video_decode_progress(h3_gpu *gpu, const h3_weight_store *store,
+                              const float *latent, uint32_t frames,
+                              uint32_t height, uint32_t width, float *pixels,
+                              ltx_video_tick tick, void *tick_context,
+                              char *error, size_t error_size);
 
 #endif
