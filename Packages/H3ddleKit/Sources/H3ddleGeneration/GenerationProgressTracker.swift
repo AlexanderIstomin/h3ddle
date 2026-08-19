@@ -51,6 +51,13 @@ public struct GenerationProgressTracker: Equatable, Sendable {
       reached = banded
     } else if !countsPasses {
       reached = min(1, max(0, phaseFraction))
+    } else if phase == "denoise" || phase == "denoise enqueue" {
+      // H3 reports the whole sampler's completed/total count between the
+      // detailed "denoise step N/M transformer" events. It is still inside
+      // denoising, not the decoder phase that follows it.
+      let fraction = min(1, max(0, phaseFraction))
+      denoise = fraction
+      reached = GenerationRemaining.overallProgress(denoiseFraction: fraction)
     } else if denoise == nil {
       // Still preparing, and still measuring how long that is taking.
       preparationElapsed = elapsed

@@ -7,16 +7,16 @@
  * sequence crosses the bus once per step in each direction, which at 4128
  * tokens is 63 MB and a couple of milliseconds.
  *
- * The block maps onto kernels the engine already has. Two rearrangements at
- * load are what make that true:
+ * The block maps onto kernels the engine already has. Two logical layouts are
+ * consumed directly so loading never has to copy multi-gigabyte weights:
  *
- *  - h3_gpu_qkv_rope_f32 pairs channel i with i + head_dim/2 where Z-Image
+ *  - h3_gpu_qkv_rope_bf16 pairs channel i with i + head_dim/2 where Z-Image
  *    pairs adjacent channels. Attention is invariant to permuting the head
- *    dimension of q and k together, so permuting those two row blocks (and
- *    the two norm weights with them) makes the engine's kernel compute
- *    Z-Image's rotation. v is left alone and nothing is un-permuted after;
- *  - h3_gpu_swiglu_f32 reads one fused [gate | up] row, so w1 and w3 are
- *    concatenated into [2 * FFN, DIM].
+ *    dimension of q and k together. The Z-Image QKV boundary reads adjacent
+ *    pairs but writes that same half-paired order, preserving the established
+ *    attention arithmetic without permuting weights;
+ *  - h3_gpu_swiglu_bf16 reads one fused [gate | up] row, so w1 and w3 are
+ *    presented as a virtual concatenation by a paired projection kernel.
  *
  * Both are row-wise, so both survive int8 quantisation untouched: the scales
  * are per output row and ConvRot rotates along the input dimension.

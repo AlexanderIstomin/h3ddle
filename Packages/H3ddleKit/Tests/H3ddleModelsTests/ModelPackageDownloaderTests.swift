@@ -54,6 +54,30 @@ struct ModelPackageDownloaderTests {
     #expect(zImage.contains("eight passes"))
   }
 
+  @Test("Z-Image carries an immutable TAEF1 live-preview decoder")
+  func zImagePreviewDecoder() throws {
+    let manifest = ModelCatalog.zImageTurbo
+    let preview = try #require(
+      manifest.files.first { $0.role == .previewDecoder }
+    )
+
+    #expect(preview.path == "vae_approx/taef1.safetensors")
+    #expect(preview.byteCount == 9_848_636)
+    #expect(
+      preview.sha256
+        == "47a6c2bff850da04b267cab70fe3553fef57255eb9a8e76852baa0a87850e54d"
+    )
+    #expect(preview.sourceRepository == "madebyollin/taef1")
+    #expect(preview.sourceRevision == "b1b2d00e9e440cfbf3dedb34266864da86016ceb")
+    #expect(preview.sourcePath == "diffusion_pytorch_model.safetensors")
+    #expect(
+      manifest.downloadURL(for: preview).absoluteString
+        == "https://huggingface.co/madebyollin/taef1/resolve/"
+          + "b1b2d00e9e440cfbf3dedb34266864da86016ceb/"
+          + "diffusion_pytorch_model.safetensors"
+    )
+  }
+
   @Test("A completed package is verified and installed atomically")
   func installsPackage() async throws {
     let fixture = Data("small model fixture".utf8)

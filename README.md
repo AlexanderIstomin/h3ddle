@@ -103,7 +103,8 @@ whose tensor values match the published distilled release.
 
 **Z-Image-Turbo** — text-to-image and image-to-image generation by Tongyi-MAI,
 Apache-2.0 licensed. H3ddle downloads an INT8 ConvRot repackaging together with
-the official image encoder.
+the official image encoder. Live denoising previews use madebyollin's TAEF1
+decoder, MIT licensed.
 
 **Qwen3-TTS** — reference-voice speech generation by the Qwen team,
 Apache-2.0 licensed. H3ddle downloads a safetensors conversion of the 12 Hz

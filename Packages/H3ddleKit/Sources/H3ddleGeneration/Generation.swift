@@ -44,6 +44,44 @@ public enum ImageGenerationEngine: String, Codable, Sendable {
   public var usesOwnPackage: Bool { self != .h3 }
 }
 
+/// One installed model the image lane can choose between. This small domain
+/// value keeps the default-selection rule independent from SwiftUI and from
+/// how the app discovered the model on disk.
+public struct ImageGenerationModelOption: Sendable {
+  public let id: String
+  public let engine: ImageGenerationEngine
+  public let isSelectedVideoModel: Bool
+
+  public init(
+    id: String,
+    engine: ImageGenerationEngine,
+    isSelectedVideoModel: Bool = false
+  ) {
+    self.id = id
+    self.engine = engine
+    self.isSelectedVideoModel = isSelectedVideoModel
+  }
+}
+
+/// Resolves the image pick without manufacturing a second engine setting.
+/// An explicit installed choice wins; otherwise Z-Image is the default when
+/// present, followed by the selected video model and then any remaining H3
+/// package that supports still generation.
+public enum ImageGenerationModelSelection {
+  public static func preferredID(
+    among options: [ImageGenerationModelOption],
+    selectedID: String?
+  ) -> String? {
+    if let selectedID, options.contains(where: { $0.id == selectedID }) {
+      return selectedID
+    }
+    if let zImage = options.first(where: { $0.engine == .zImage }) {
+      return zImage.id
+    }
+    return options.first(where: \.isSelectedVideoModel)?.id ?? options.first?.id
+  }
+}
+
 /// Which engine renders a clip.
 ///
 /// Both write video with a soundtrack, so nothing about the *output* tells

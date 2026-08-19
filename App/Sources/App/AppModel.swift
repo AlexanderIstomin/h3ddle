@@ -643,10 +643,14 @@ final class AppModel {
         ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
           .displayName ?? "an audio model")
         : (selectedModelChoice?.displayName ?? "a local model folder"))
+    // The audio mode is still `.speech` while the image and video studios are
+    // open. It only describes an own-package run when this is actually audio;
+    // using it unconditionally mislabeled Z-Image and LTX log summaries.
+    let settingsLabel = kind == .audio ? audioMode.label : kind.rawValue
     activeGenerationSettings = Self.settingsDescription(
       kind: kind,
       ownPackage: ownPackage,
-      label: audioMode.label,
+      label: settingsLabel,
       duration: duration,
       quality: quality,
       denoisingSteps: denoisingSteps,
@@ -1455,18 +1459,22 @@ final class AppModel {
     modelChoices.first { $0.id == selectedAudioModelID }
   }
 
-  /// Which model draws a still, resolved rather than merely stored: nothing
-  /// picked follows the video lane's model, so a project that never opened
-  /// this picker renders stills the way it always did.
+  /// Which model draws a still, resolved rather than merely stored. A choice
+  /// the person made wins; otherwise Z-Image is the default when installed,
+  /// with the selected H3 video package retained as the fallback.
   var selectedImageModelChoice: ModelChoice? {
     let usable = installedModelChoices(for: .image)
-    if let chosen = usable.first(where: { $0.id == selectedImageModelID }) {
-      return chosen
-    }
-    if let sameAsVideo = usable.first(where: { $0.id == selectedModelID }) {
-      return sameAsVideo
-    }
-    return usable.first { $0.capability == .video } ?? usable.first
+    let preferredID = ImageGenerationModelSelection.preferredID(
+      among: usable.map {
+        ImageGenerationModelOption(
+          id: $0.id,
+          engine: $0.capability == .image ? .zImage : .h3,
+          isSelectedVideoModel: $0.id == selectedModelID
+        )
+      },
+      selectedID: selectedImageModelID
+    )
+    return usable.first { $0.id == preferredID }
   }
 
   /// Which engine renders a clip, read off the chosen model rather than kept
@@ -1725,6 +1733,21 @@ final class AppModel {
       }
     }
     modelChoices = choices
+    selectDefaultImageModelIfNeeded()
+  }
+
+  /// A picker click already applies a model's own pass count. Do the same for
+  /// the automatic first choice, or Z-Image would inherit whichever H3 pass
+  /// count was stored even though its distilled default is eight.
+  private func selectDefaultImageModelIfNeeded() {
+    let usable = installedModelChoices(for: .image)
+    guard !usable.contains(where: { $0.id == selectedImageModelID }),
+      let zImage = usable.first(where: { $0.id == ModelCatalog.zImageTurbo.id })
+    else { return }
+    selectedImageModelID = zImage.id
+    if let steps = defaultDenoisingSteps(for: zImage) {
+      updateStudioKnobs { $0.denoisingSteps = steps }
+    }
   }
 
   private func restoreModelLibrary() {

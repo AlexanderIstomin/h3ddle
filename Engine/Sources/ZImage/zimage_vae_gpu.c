@@ -1,7 +1,9 @@
 #include "zimage_vae_gpu.h"
 
 #include <math.h>
+#include <limits.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,8 +47,8 @@ struct zimage_vae_gpu {
     h3_gpu_tensor *to_v, *to_v_bias, *to_out, *to_out_bias;
     resnet up[UP_BLOCKS][RESNETS];
     conv upsampler[UP_BLOCKS - 1];
-    h3_gpu_tensor *work[5];  /* x, normed, query, key, value */
-    size_t work_elements;
+    h3_gpu_tensor *work[5];  /* x, normed, query/branch, key, value */
+    size_t work_elements[5];
 };
 
 static int fail(char *error, size_t error_size, const char *format, ...) {
@@ -55,6 +57,74 @@ static int fail(char *error, size_t error_size, const char *format, ...) {
     vsnprintf(error, error_size, format, arguments);
     va_end(arguments);
     return 0;
+}
+
+static int checked_elements(size_t channels, int height, int width,
+                            size_t *result) {
+    if (channels == 0 || height <= 0 || width <= 0) return 0;
+    const size_t h = (size_t)height, w = (size_t)width;
+    if (h > SIZE_MAX / w) return 0;
+    const size_t pixels = h * w;
+    if (channels > SIZE_MAX / pixels) return 0;
+    *result = channels * pixels;
+    return 1;
+}
+
+/* The five tensors have different peak roles. The decoder's first two hold
+ * the materialized 256-channel final-resolution upsample, while the branch is
+ * only 128 channels there and key/value exist only for latent-size attention. */
+static int decoder_workspace_plan(int latent_height, int latent_width,
+                                  size_t elements[5]) {
+    return checked_elements(256u * 64u, latent_height, latent_width,
+                            &elements[0]) &&
+           checked_elements(256u * 64u, latent_height, latent_width,
+                            &elements[1]) &&
+           checked_elements(128u * 64u, latent_height, latent_width,
+                            &elements[2]) &&
+           checked_elements(MID_CHANNELS, latent_height, latent_width,
+                            &elements[3]) &&
+           checked_elements(MID_CHANNELS, latent_height, latent_width,
+                            &elements[4]);
+}
+
+/* The encoder's first three tensors peak at 128 channels over the input.
+ * Key/value are needed only after the three downsamplers have reduced each
+ * dimension by eight. */
+static int encoder_workspace_plan(int image_height, int image_width,
+                                  size_t elements[5]) {
+    if (image_height <= 0 || image_width <= 0 || image_height % 8 != 0 ||
+        image_width % 8 != 0)
+        return 0;
+    return checked_elements(DOWN_CHANNELS[0], image_height, image_width,
+                            &elements[0]) &&
+           checked_elements(DOWN_CHANNELS[0], image_height, image_width,
+                            &elements[1]) &&
+           checked_elements(DOWN_CHANNELS[0], image_height, image_width,
+                            &elements[2]) &&
+           checked_elements(MID_CHANNELS, image_height / 8, image_width / 8,
+                            &elements[3]) &&
+           checked_elements(MID_CHANNELS, image_height / 8, image_width / 8,
+                            &elements[4]);
+}
+
+static int allocate_workspace(zimage_vae_gpu *vae, const size_t elements[5],
+                              const char *direction, char *error,
+                              size_t error_size) {
+    for (int index = 0; index < 5; index++) {
+        vae->work[index] = h3_gpu_tensor_new_f32(vae->gpu, elements[index]);
+        if (!vae->work[index])
+            return fail(error, error_size, "out of GPU memory for the %s",
+                        direction);
+        vae->work_elements[index] = elements[index];
+    }
+    return 1;
+}
+
+static int workspace_fits(const zimage_vae_gpu *vae,
+                          const size_t elements[5]) {
+    for (int index = 0; index < 5; index++)
+        if (elements[index] > vae->work_elements[index]) return 0;
+    return 1;
 }
 
 /* The autoencoder ships bf16 and runs f32 (`force_upcast`), so widen once on
@@ -147,19 +217,17 @@ zimage_vae_gpu *zimage_vae_gpu_create(const char *shaders, const char *decoder,
     vae->store = h3_weight_store_open(decoder, error, error_size);
     if (!vae->gpu || !vae->store) { zimage_vae_gpu_release(vae); return NULL; }
 
-    /* The widest the stack gets: the third upsample carries 256 channels at
-     * the full picture size, and nothing later exceeds it. */
-    const size_t peak = (size_t)256 * (size_t)(max_height * 8) *
-                        (size_t)(max_width * 8);
-    for (int index = 0; index < 5; index++) {
-        vae->work[index] = h3_gpu_tensor_new_f32(vae->gpu, peak);
-        if (!vae->work[index]) {
-            fail(error, error_size, "out of GPU memory for the decoder");
-            zimage_vae_gpu_release(vae);
-            return NULL;
-        }
+    size_t workspace[5];
+    if (!decoder_workspace_plan(max_height, max_width, workspace)) {
+        fail(error, error_size, "invalid decoder dimensions %d x %d",
+             max_height, max_width);
+        zimage_vae_gpu_release(vae);
+        return NULL;
     }
-    vae->work_elements = peak;
+    if (!allocate_workspace(vae, workspace, "decoder", error, error_size)) {
+        zimage_vae_gpu_release(vae);
+        return NULL;
+    }
 
     vae->conv_in = take_conv(vae, "decoder.conv_in", -1, -1, MID_CHANNELS,
                              LATENT_CHANNELS, 3, 1, error, error_size);
@@ -333,8 +401,13 @@ int zimage_vae_gpu_decode(zimage_vae_gpu *vae, const float *latent,
                           float *image, char *error, size_t error_size) {
     if (vae->is_encoder)
         return fail(error, error_size, "this autoencoder was built to encode");
+    size_t workspace[5];
+    if (!decoder_workspace_plan(height_in, width_in, workspace) ||
+        height_in > INT_MAX / 8 || width_in > INT_MAX / 8)
+        return fail(error, error_size, "invalid decoder dimensions %d x %d",
+                    height_in, width_in);
     const int final_height = height_in * 8, final_width = width_in * 8;
-    if ((size_t)256 * final_height * final_width > vae->work_elements)
+    if (!workspace_fits(vae, workspace))
         return fail(error, error_size, "%d is larger than this was sized for",
                     height_in, width_in);
 
@@ -431,19 +504,17 @@ zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
     vae->store = h3_weight_store_open(encoder, error, error_size);
     if (!vae->gpu || !vae->store) { zimage_vae_gpu_release(vae); return NULL; }
 
-    /* Widest at the start: 128 channels at the whole picture. Every later
-     * stage doubles the channels only after quartering the area. */
-    const size_t peak = (size_t)DOWN_CHANNELS[0] * (size_t)max_height *
-                        (size_t)max_width;
-    for (int index = 0; index < 5; index++) {
-        vae->work[index] = h3_gpu_tensor_new_f32(vae->gpu, peak);
-        if (!vae->work[index]) {
-            fail(error, error_size, "out of GPU memory for the encoder");
-            zimage_vae_gpu_release(vae);
-            return NULL;
-        }
+    size_t workspace[5];
+    if (!encoder_workspace_plan(max_height, max_width, workspace)) {
+        fail(error, error_size, "invalid encoder dimensions %d x %d",
+             max_height, max_width);
+        zimage_vae_gpu_release(vae);
+        return NULL;
     }
-    vae->work_elements = peak;
+    if (!allocate_workspace(vae, workspace, "encoder", error, error_size)) {
+        zimage_vae_gpu_release(vae);
+        return NULL;
+    }
 
     vae->conv_in = take_conv(vae, "encoder.conv_in", -1, -1, DOWN_CHANNELS[0],
                              IMAGE_CHANNELS, 3, 1, error, error_size);
@@ -525,40 +596,16 @@ zimage_vae_gpu *zimage_vae_gpu_create_encoder(const char *shaders,
  * has a same-padded stride-1 convolution and no asymmetric zero pad — but the
  * two are exactly related: sampling a same-padded stride-1 result at the odd
  * offsets gives the strided one, since both read `in[2y + ky][2x + kx]`. So
- * the convolution runs at full size and every other pixel is kept.
- *
- * Keeping them costs a trip through the host, which is the price of not
- * writing a kernel for one op; it moves half a gigabyte at the first block and
- * a fraction of a second, against the 176 seconds this whole path replaces. */
+ * the convolution runs at full size and every other pixel is kept. The gather
+ * is encoded directly after the convolution, so all three downsamplers remain
+ * in one command buffer and no intermediate activation leaves the device. */
 static int run_downsample(zimage_vae_gpu *vae, const conv *c, int height,
                           int width, char *error, size_t error_size) {
     if (!run_conv(vae, c, vae->work[1], vae->work[0], height, width,
                   error, error_size)) return 0;
-    if (!h3_gpu_submit(vae->gpu)) return fail(error, error_size, "cannot submit");
-
-    const int out_height = height / 2, out_width = width / 2;
-    const size_t channels = (size_t)c->out;
-    float *full = malloc((size_t)height * width * channels * sizeof(float));
-    float *kept = malloc((size_t)out_height * out_width * channels * sizeof(float));
-    if (!full || !kept) {
-        free(full); free(kept);
-        return fail(error, error_size, "out of memory halving the picture");
-    }
-    if (!h3_gpu_tensor_read_f32(vae->work[1], full,
-                                (size_t)height * width * channels)) {
-        free(full); free(kept);
-        return fail(error, error_size, "cannot read the picture back");
-    }
-    for (int y = 0; y < out_height; y++)
-        for (int x = 0; x < out_width; x++)
-            memcpy(kept + ((size_t)y * out_width + x) * channels,
-                   full + ((size_t)(y * 2 + 1) * width + (x * 2 + 1)) * channels,
-                   channels * sizeof(float));
-    const int uploaded = h3_gpu_tensor_write_f32(
-        vae->work[0], kept, (size_t)out_height * out_width * channels);
-    free(full); free(kept);
-    if (!uploaded) return fail(error, error_size, "cannot upload the picture");
-    if (!h3_gpu_begin(vae->gpu)) return fail(error, error_size, "cannot begin");
+    OP(h3_gpu_downsample2x_odd_nhwc_f32(
+           vae->gpu, vae->work[0], vae->work[1], (uint32_t)height,
+           (uint32_t)width, (uint32_t)c->out), "downsample gather");
     return 1;
 }
 
@@ -567,8 +614,11 @@ int zimage_vae_gpu_encode(zimage_vae_gpu *vae, const float *image,
                           char *error, size_t error_size) {
     if (!vae->is_encoder)
         return fail(error, error_size, "this autoencoder was built to decode");
-    if ((size_t)DOWN_CHANNELS[0] * image_height * image_width >
-        vae->work_elements)
+    size_t workspace[5];
+    if (!encoder_workspace_plan(image_height, image_width, workspace))
+        return fail(error, error_size, "invalid encoder dimensions %d x %d",
+                    image_height, image_width);
+    if (!workspace_fits(vae, workspace))
         return fail(error, error_size, "%d is larger than this was sized for",
                     image_height, image_width);
 

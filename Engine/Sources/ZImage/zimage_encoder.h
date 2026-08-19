@@ -29,4 +29,13 @@ int zimage_encode(qwen_weights *encoder, const uint32_t *ids, int count,
                   float *out, zimage_encode_tick tick, void *tick_context,
                   char *error, size_t error_size);
 
+/* The production path. Activations remain BF16 on Metal and one layer of
+ * weights is uploaded at a time, so the 4B encoder does not have to coexist
+ * with a second device-resident copy of the whole checkpoint. There is no
+ * implicit CPU fallback: a Metal failure is returned to the caller. */
+int zimage_encode_metal(qwen_weights *encoder, const char *shader_path,
+                        const uint32_t *ids, int count, float *out,
+                        zimage_encode_tick tick, void *tick_context,
+                        char *error, size_t error_size);
+
 #endif

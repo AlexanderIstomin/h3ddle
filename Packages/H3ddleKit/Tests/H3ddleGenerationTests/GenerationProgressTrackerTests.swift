@@ -122,4 +122,28 @@ struct GenerationProgressTrackerTests {
       phase: "denoise step 4/6 transformer", phaseFraction: 0, elapsed: 12)
     #expect(tracker.overall >= atStart)
   }
+
+  /// H3 brackets each detailed transformer pass with a run-wide `denoise`
+  /// event. Mistaking the first completed pass for the following decoder
+  /// phase jumped the bar to 95% as step two began and pinned it there.
+  @Test("H3 run-wide denoise ticks remain inside the denoising band")
+  func h3RunWideDenoiseTicks() {
+    var tracker = GenerationProgressTracker()
+
+    tracker.record(phase: "denoise", phaseFraction: 0, elapsed: 1)
+    tracker.record(
+      phase: "denoise step 1/8 transformer", phaseFraction: 1, elapsed: 2)
+    let afterFirstPass = tracker.overall
+    tracker.record(phase: "denoise", phaseFraction: 1.0 / 8, elapsed: 2)
+    tracker.record(
+      phase: "denoise step 2/8 transformer", phaseFraction: 0, elapsed: 3)
+
+    #expect(tracker.overall == afterFirstPass)
+    #expect(tracker.overall < GenerationRemaining.decodeProgress)
+    #expect(!tracker.isFinishing)
+
+    tracker.record(phase: "denoise", phaseFraction: 1, elapsed: 10)
+    #expect(tracker.overall == GenerationRemaining.decodeProgress)
+    #expect(tracker.isFinishing)
+  }
 }

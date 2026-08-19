@@ -6,6 +6,42 @@ import H3ddleEngineProtocol
 
 @Suite("Generation studio settings")
 struct GenerationStudioSettingsTests {
+  @Test("Z-Image is the image default while explicit choices are retained")
+  func preferredImageModel() {
+    let options = [
+      ImageGenerationModelOption(
+        id: "h3", engine: .h3, isSelectedVideoModel: true),
+      ImageGenerationModelOption(id: "z-image", engine: .zImage),
+    ]
+
+    #expect(
+      ImageGenerationModelSelection.preferredID(
+        among: options, selectedID: nil) == "z-image"
+    )
+    #expect(
+      ImageGenerationModelSelection.preferredID(
+        among: options, selectedID: "h3") == "h3"
+    )
+    #expect(
+      ImageGenerationModelSelection.preferredID(
+        among: options, selectedID: "not-installed") == "z-image"
+    )
+  }
+
+  @Test("The selected H3 video model remains the image fallback")
+  func preferredImageModelWithoutZImage() {
+    let options = [
+      ImageGenerationModelOption(id: "other-h3", engine: .h3),
+      ImageGenerationModelOption(
+        id: "selected-h3", engine: .h3, isSelectedVideoModel: true),
+    ]
+
+    #expect(
+      ImageGenerationModelSelection.preferredID(
+        among: options, selectedID: nil) == "selected-h3"
+    )
+  }
+
   @Test("Only video engines with a still path appear as image models")
   func videoEngineStillSupport() {
     #expect(VideoGenerationEngine.h3.supportsStillGeneration)

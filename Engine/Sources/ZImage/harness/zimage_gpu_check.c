@@ -6,7 +6,9 @@
  * neither legible. Against the int8 reference the only difference left is
  * arithmetic, and it should be at f32 noise.
  *
- *   ./zimage_gpu_check <shaders.metal> <package/transformer.safetensors> <int8-golden>
+ *   ./zimage_gpu_check <shaders.metal> <transformer.safetensors> <int8-golden>
+ *   ./zimage_gpu_check <shaders.metal> <transformer.safetensors> --load-only [tokens]
+ *   ./zimage_gpu_check <shaders.metal> <transformer.safetensors> --synthetic
  */
 #include "zimage_gpu.h"
 #include "zimage_block.h"
@@ -46,12 +48,93 @@ static void compare(const char *label, const float *ours, const float *theirs,
            sqrt(square / (double)count) / sqrt(total / (double)count), worst);
 }
 
+static uint64_t hash_floats(const float *values, size_t count) {
+    const unsigned char *bytes = (const unsigned char *)values;
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t index = 0; index < count * sizeof(*values); index++) {
+        hash ^= bytes[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static int synthetic_run(const char *shaders, const char *weights) {
+    float *cosines = malloc((size_t)SEQUENCE * HALF * sizeof(float));
+    float *sines = malloc((size_t)SEQUENCE * HALF * sizeof(float));
+    float *caption = malloc((size_t)CAP_PADDED * DIM * sizeof(float));
+    float *unified = malloc((size_t)SEQUENCE * DIM * sizeof(float));
+    if (!cosines || !sines || !caption || !unified) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
+    for (size_t index = 0; index < (size_t)SEQUENCE * HALF; index++) {
+        cosines[index] = cosf((float)index * 0.0007f);
+        sines[index] = sinf((float)index * 0.0007f);
+    }
+    for (size_t index = 0; index < (size_t)CAP_PADDED * DIM; index++)
+        caption[index] = 0.15f * sinf((float)index * 0.0013f);
+
+    zimage_gpu *gpu = zimage_gpu_create(shaders, weights, SEQUENCE,
+                                        problem, sizeof(problem));
+    if (!gpu) { fprintf(stderr, "create: %s\n", problem); return 1; }
+    if (!zimage_gpu_refine_context(
+            gpu, caption, CAP_PADDED,
+            cosines + (size_t)IMAGE_TOKENS * HALF,
+            sines + (size_t)IMAGE_TOKENS * HALF,
+            problem, sizeof(problem))) {
+        fprintf(stderr, "context: %s\n", problem);
+        return 1;
+    }
+    for (size_t index = 0; index < (size_t)IMAGE_TOKENS * DIM; index++)
+        unified[index] = 0.2f * cosf((float)index * 0.0009f);
+    memcpy(unified + (size_t)IMAGE_TOKENS * DIM, caption,
+           (size_t)CAP_PADDED * DIM * sizeof(float));
+    float adaln[256];
+    for (int index = 0; index < 256; index++)
+        adaln[index] = 0.1f * sinf((float)index * 0.07f);
+    if (!zimage_gpu_forward(gpu, unified, IMAGE_TOKENS, SEQUENCE, adaln,
+                            cosines, sines, problem, sizeof(problem))) {
+        fprintf(stderr, "forward: %s\n", problem);
+        return 1;
+    }
+    printf("synthetic context %016llx\n",
+           (unsigned long long)hash_floats(caption, (size_t)CAP_PADDED * DIM));
+    printf("synthetic forward %016llx\n",
+           (unsigned long long)hash_floats(unified, (size_t)SEQUENCE * DIM));
+    zimage_gpu_release(gpu);
+    free(cosines); free(sines); free(caption); free(unified);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) {
         fprintf(stderr, "usage: %s <shaders.metal> <transformer.safetensors> "
                         "<int8-golden.safetensors>\n", argv[0]);
         return 2;
     }
+    if (strcmp(argv[3], "--load-only") == 0) {
+        const int tokens = argc > 4 ? atoi(argv[4]) : SEQUENCE;
+        double began = now();
+        zimage_gpu *gpu = zimage_gpu_create(argv[1], argv[2], tokens,
+                                            problem, sizeof(problem));
+        if (!gpu) { fprintf(stderr, "create: %s\n", problem); return 1; }
+        h3_gpu_stats stats;
+        if (!h3_gpu_get_stats(zimage_gpu_device(gpu), &stats)) {
+            fprintf(stderr, "cannot read GPU statistics\n");
+            return 1;
+        }
+        printf("loaded 34 blocks in %.3f s\n", now() - began);
+        printf("  %.3f GiB live, %.3f GiB peak, %.3f GiB cumulatively allocated\n",
+               (double)stats.live_bytes / (1024.0 * 1024.0 * 1024.0),
+               (double)stats.peak_live_bytes / (1024.0 * 1024.0 * 1024.0),
+               (double)stats.allocated_bytes / (1024.0 * 1024.0 * 1024.0));
+        printf("  %llu tensor allocations\n",
+               (unsigned long long)stats.tensor_allocations);
+        zimage_gpu_release(gpu);
+        return 0;
+    }
+    if (strcmp(argv[3], "--synthetic") == 0)
+        return synthetic_run(argv[1], argv[2]);
     qwen_weights *golden = qwen_weights_open(argv[3], problem, sizeof(problem));
     if (!golden) { fprintf(stderr, "golden: %s\n", problem); return 1; }
     const int64_t any[2] = {-1, -1};

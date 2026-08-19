@@ -34,10 +34,11 @@
 typedef struct {
     h3_gpu_tensor *qkv, *qkv_scales;
     h3_gpu_tensor *out, *out_scales;
-    h3_gpu_tensor *w13, *w13_scales;
+    h3_gpu_tensor *w1, *w1_scales;
+    h3_gpu_tensor *w3, *w3_scales;
     h3_gpu_tensor *w2, *w2_scales;
     h3_gpu_tensor *adaln, *adaln_scales, *adaln_bias;
-    uint32_t qkv_group, out_group, w13_group, w2_group, adaln_group;
+    uint32_t qkv_group, out_group, mlp_group, w2_group, adaln_group;
     h3_gpu_tensor *q_norm, *k_norm;
     h3_gpu_tensor *attention_norm1, *attention_norm2;
     h3_gpu_tensor *ffn_norm1, *ffn_norm2;
@@ -81,45 +82,17 @@ static uint16_t narrow(float value) {
     return (uint16_t)(cast.bits >> 16);
 }
 
-/* Channel 2i to slot i and 2i+1 to slot i+64, within each head. Applied to the
- * q and k row blocks of the fused projection and to the two norm weights, it
- * turns the engine's rotate_half into Z-Image's adjacent-pair rotation. */
-static void permuted_index(int *map) {
-    for (int pair = 0; pair < ROPE_HALF; pair++) {
-        map[pair] = 2 * pair;
-        map[pair + ROPE_HALF] = 2 * pair + 1;
-    }
-}
-
-static h3_gpu_tensor *permute_norm(zimage_gpu *z, const char *name,
-                                   char *error, size_t size) {
-    h3_gpu_tensor *plain = load_vector(z, name, HEAD_DIM, error, size);
-    if (!plain) return NULL;
-    uint16_t values[HEAD_DIM], shuffled[HEAD_DIM];
-    int map[HEAD_DIM];
-    permuted_index(map);
-    if (!h3_gpu_tensor_read_bf16(plain, values, HEAD_DIM)) {
-        h3_gpu_tensor_free(plain);
-        return NULL;
-    }
-    for (int index = 0; index < HEAD_DIM; index++) shuffled[index] = values[map[index]];
-    h3_gpu_tensor_free(plain);
-    return h3_gpu_tensor_from_bf16(z->gpu, shuffled, HEAD_DIM);
-}
-
-/* Reads the int8 matrix and its per-row scales, and the ConvRot group beside
- * them. Rows may be shuffled on the way through: the scales are per output
- * row so they shuffle identically, and ConvRot rotates along the *input*
- * dimension so it is undisturbed. */
+/* Load the int8 matrix, its per-row scales, and the ConvRot group beside them.
+ * The package already stores matrices input-major for the production tile, so
+ * every tensor can now go directly from safetensors to its final GPU buffer. */
 /* `rows` and `columns` are the logical [output][input] shape; the package
  * stores the matrix transposed so the GPU reads it coalesced, so that is what
  * the loader asks for. Rows of the logical matrix are columns of the stored
- * one, which is why the head permutation below works on the stored layout
- * rather than on rows. */
+ * one. */
 static int load_linear(zimage_gpu *z, const char *name, uint64_t rows,
                        uint64_t columns, h3_gpu_tensor **weight,
                        h3_gpu_tensor **scales, uint32_t *group,
-                       int permute_heads, char *error, size_t size) {
+                       char *error, size_t size) {
     /* Loaded apart rather than through h3_weight_load_i8_linear, which infers
      * the scale count from the matrix's first dimension. That held while the
      * matrix was [output][input]; the package stores it transposed now, and
@@ -141,99 +114,29 @@ static int load_linear(zimage_gpu *z, const char *name, uint64_t rows,
     if (!*scales) return 0;
     if (!h3_weight_i8_linear_convrot_group(z->store, name, group, error, size))
         return 0;
-    if (!permute_heads) return 1;
-
-    const size_t count = (size_t)rows * columns;
-    int8_t *values = malloc(count);
-    int8_t *shuffled = malloc(count);
-    float *scale_values = malloc(rows * sizeof(float));
-    float *scale_shuffled = malloc(rows * sizeof(float));
-    if (!values || !shuffled || !scale_values || !scale_shuffled ||
-        !h3_gpu_tensor_read_i8(*weight, values, count) ||
-        !h3_gpu_tensor_read_f32(*scales, scale_values, rows)) {
-        free(values); free(shuffled); free(scale_values); free(scale_shuffled);
-        return fail(error, size, "cannot read %s back to permute it", name);
-    }
-    int map[HEAD_DIM];
-    permuted_index(map);
-    /* Only q and k — the first two of the three DIM-row blocks. v keeps its
-     * order, which is what leaves the attention output needing no fix-up. */
-    /* Output channels are the minor axis now, so the permutation moves
-     * elements within each stored row rather than moving whole rows. */
-    memcpy(shuffled, values, count);
-    for (size_t k = 0; k < columns; k++)
-        for (int block = 0; block < 2; block++)
-            for (int head = 0; head < HEADS; head++)
-                for (int index = 0; index < HEAD_DIM; index++) {
-                    const size_t to = (size_t)block * DIM + head * HEAD_DIM + index;
-                    const size_t from = (size_t)block * DIM + head * HEAD_DIM + map[index];
-                    shuffled[k * rows + to] = values[k * rows + from];
-                }
-    for (int block = 0; block < 2; block++)
-        for (int head = 0; head < HEADS; head++)
-            for (int index = 0; index < HEAD_DIM; index++) {
-                const size_t to = (size_t)block * DIM + head * HEAD_DIM + index;
-                const size_t from = (size_t)block * DIM + head * HEAD_DIM + map[index];
-                scale_shuffled[to] = scale_values[from];
-            }
-    for (size_t row = (size_t)2 * DIM; row < rows; row++)
-        scale_shuffled[row] = scale_values[row];
-
-    h3_gpu_tensor_free(*weight);
-    h3_gpu_tensor_free(*scales);
-    *weight = h3_gpu_tensor_from_i8(z->gpu, shuffled, count);
-    *scales = h3_gpu_tensor_from_f32(z->gpu, scale_shuffled, rows);
-    free(values); free(shuffled); free(scale_values); free(scale_shuffled);
-    if (!*weight || !*scales)
-        return fail(error, size, "cannot upload the permuted %s", name);
     return 1;
 }
 
-/* w1 and w3 into one [2 * FFN, DIM], because h3_swiglu_f32 reads gate and up
- * from a single row. */
-static int load_fused_mlp(zimage_gpu *z, const char *prefix,
-                          zimage_gpu_block *block, char *error, size_t size) {
+/* W1 and W3 remain separate as stored. The paired GPU projection presents
+ * them to SwiGLU as one virtual [gate | up] matrix without a host repack. */
+static int load_mlp(zimage_gpu *z, const char *prefix,
+                    zimage_gpu_block *block, char *error, size_t size) {
     char name[256];
-    h3_gpu_tensor *w1 = NULL, *w1_scales = NULL, *w3 = NULL, *w3_scales = NULL;
     uint32_t w1_group = 0, w3_group = 0;
     snprintf(name, sizeof(name), "%sfeed_forward.w1.weight", prefix);
-    if (!load_linear(z, name, FFN, DIM, &w1, &w1_scales, &w1_group, 0, error, size))
+    if (!load_linear(z, name, FFN, DIM, &block->w1, &block->w1_scales,
+                     &w1_group, error, size))
         return 0;
     snprintf(name, sizeof(name), "%sfeed_forward.w3.weight", prefix);
-    if (!load_linear(z, name, FFN, DIM, &w3, &w3_scales, &w3_group, 0, error, size))
+    if (!load_linear(z, name, FFN, DIM, &block->w3, &block->w3_scales,
+                     &w3_group, error, size))
         return 0;
     if (w1_group != w3_group)
         return fail(error, size, "%s w1 and w3 disagree on ConvRot group "
-                                 "(%u against %u), so they cannot be fused",
+                                 "(%u against %u), so they cannot be paired",
                     prefix, w1_group, w3_group);
 
-    /* Stored [input][output], so the two matrices interleave by row rather
-     * than stacking: row k of the fused matrix is w1's row k followed by w3's. */
-    const size_t half = (size_t)FFN * DIM;
-    int8_t *fused = malloc(half * 2);
-    int8_t *first = malloc(half), *second = malloc(half);
-    float *scales = malloc((size_t)FFN * 2 * sizeof(float));
-    if (!fused || !first || !second || !scales ||
-        !h3_gpu_tensor_read_i8(w1, first, half) ||
-        !h3_gpu_tensor_read_i8(w3, second, half) ||
-        !h3_gpu_tensor_read_f32(w1_scales, scales, FFN) ||
-        !h3_gpu_tensor_read_f32(w3_scales, scales + FFN, FFN)) {
-        free(fused); free(first); free(second); free(scales);
-        return fail(error, size, "cannot fuse %s w1 and w3", prefix);
-    }
-    for (size_t k = 0; k < DIM; k++) {
-        memcpy(fused + k * FFN * 2, first + k * FFN, FFN);
-        memcpy(fused + k * FFN * 2 + FFN, second + k * FFN, FFN);
-    }
-    free(first); free(second);
-    h3_gpu_tensor_free(w1); h3_gpu_tensor_free(w1_scales);
-    h3_gpu_tensor_free(w3); h3_gpu_tensor_free(w3_scales);
-    block->w13 = h3_gpu_tensor_from_i8(z->gpu, fused, half * 2);
-    block->w13_scales = h3_gpu_tensor_from_f32(z->gpu, scales, FFN * 2);
-    block->w13_group = w1_group;
-    free(fused); free(scales);
-    if (!block->w13 || !block->w13_scales)
-        return fail(error, size, "cannot upload the fused %s MLP", prefix);
+    block->mlp_group = w1_group;
     return 1;
 }
 
@@ -253,31 +156,31 @@ static int load_block(zimage_gpu *z, const char *prefix,
     VECTOR(ffn_norm2, "ffn_norm2.weight", DIM);
 #undef VECTOR
     snprintf(name, sizeof(name), "%sattention.q_norm.weight", prefix);
-    block->q_norm = permute_norm(z, name, error, size);
+    block->q_norm = load_vector(z, name, HEAD_DIM, error, size);
     snprintf(name, sizeof(name), "%sattention.k_norm.weight", prefix);
-    block->k_norm = permute_norm(z, name, error, size);
+    block->k_norm = load_vector(z, name, HEAD_DIM, error, size);
     if (!block->q_norm || !block->k_norm)
         return fail(error, size, "%s QK norms", prefix);
 
     snprintf(name, sizeof(name), "%sattention.qkv.weight", prefix);
     if (!load_linear(z, name, (uint64_t)DIM * 3, DIM, &block->qkv,
-                     &block->qkv_scales, &block->qkv_group, 1, error, size))
+                     &block->qkv_scales, &block->qkv_group, error, size))
         return 0;
     snprintf(name, sizeof(name), "%sattention.out.weight", prefix);
     if (!load_linear(z, name, DIM, DIM, &block->out, &block->out_scales,
-                     &block->out_group, 0, error, size))
+                     &block->out_group, error, size))
         return 0;
-    if (!load_fused_mlp(z, prefix, block, error, size)) return 0;
+    if (!load_mlp(z, prefix, block, error, size)) return 0;
     snprintf(name, sizeof(name), "%sfeed_forward.w2.weight", prefix);
     if (!load_linear(z, name, DIM, FFN, &block->w2, &block->w2_scales,
-                     &block->w2_group, 0, error, size))
+                     &block->w2_group, error, size))
         return 0;
 
     if (modulated) {
         snprintf(name, sizeof(name), "%sadaLN_modulation.0.weight", prefix);
         if (!load_linear(z, name, (uint64_t)DIM * 4, ADALN, &block->adaln,
-                         &block->adaln_scales, &block->adaln_group, 0,
-                         error, size))
+                         &block->adaln_scales, &block->adaln_group, error,
+                         size))
             return 0;
         snprintf(name, sizeof(name), "%sadaLN_modulation.0.bias", prefix);
         block->adaln_bias = load_vector(z, name, (uint64_t)DIM * 4, error, size);
@@ -289,7 +192,8 @@ static int load_block(zimage_gpu *z, const char *prefix,
 static void free_block(zimage_gpu_block *block) {
     h3_gpu_tensor *tensors[] = {
         block->qkv, block->qkv_scales, block->out, block->out_scales,
-        block->w13, block->w13_scales, block->w2, block->w2_scales,
+        block->w1, block->w1_scales, block->w3, block->w3_scales,
+        block->w2, block->w2_scales,
         block->adaln, block->adaln_scales, block->adaln_bias,
         block->q_norm, block->k_norm, block->attention_norm1,
         block->attention_norm2, block->ffn_norm1, block->ffn_norm2,
@@ -413,6 +317,20 @@ static int rotated_linear(zimage_gpu *z, h3_gpu_tensor *output,
     return 1;
 }
 
+static int rotated_pair_linear(
+        zimage_gpu *z, h3_gpu_tensor *output, h3_gpu_tensor *input,
+        h3_gpu_tensor *first_weight, h3_gpu_tensor *first_scales,
+        h3_gpu_tensor *second_weight, h3_gpu_tensor *second_scales,
+        uint32_t group, uint32_t rows, uint32_t inputs, uint32_t outputs,
+        const char *label, char *error, size_t size) {
+    if (group)
+        OP(h3_gpu_convrot_bf16(z->gpu, input, input, rows, inputs, group), label);
+    OP(h3_gpu_linear_i8_weight_bf16_square_pair(
+           z->gpu, output, input, first_weight, first_scales, second_weight,
+           second_scales, rows, inputs, outputs), label);
+    return 1;
+}
+
 static int run_block(zimage_gpu *z, const zimage_gpu_block *block,
                      uint32_t rows, char *error, size_t size) {
     if (block->modulated) {
@@ -437,10 +355,10 @@ static int run_block(zimage_gpu *z, const zimage_gpu_block *block,
     if (!rotated_linear(z, z->qkv, z->normed, block, block->qkv,
                         block->qkv_scales, NULL, block->qkv_group, rows,
                         DIM, DIM * 3, "QKV", error, size)) return 0;
-    OP(h3_gpu_qkv_rope_bf16(z->gpu, z->query, z->key, z->value, z->qkv,
-                                block->q_norm, block->k_norm, z->rope_cos,
-                                z->rope_sin, rows, HEADS, HEAD_DIM, ROPE_HALF,
-                                NORM_EPS), "QK norm and RoPE");
+    OP(h3_gpu_zimage_qkv_rope_bf16(
+           z->gpu, z->query, z->key, z->value, z->qkv, block->q_norm,
+           block->k_norm, z->rope_cos, z->rope_sin, rows, HEADS, HEAD_DIM,
+           ROPE_HALF, NORM_EPS), "QK norm and RoPE");
     /* Casting costs time linear in the rows while the saving is quadratic in
      * them, so the trade turns over with the canvas: measured, bf16 wins by
      * 2.5% at 320 tokens, f32 by 3.7% at 1056 and by 9% at 4128. */
@@ -493,9 +411,10 @@ static int run_block(zimage_gpu *z, const zimage_gpu_block *block,
     else
         OP(h3_gpu_rms_norm_bf16(z->gpu, z->normed, z->hidden, block->ffn_norm1,
                                rows, DIM, NORM_EPS), "MLP norm");
-    if (!rotated_linear(z, z->ff, z->normed, block, block->w13, block->w13_scales,
-                        NULL, block->w13_group, rows, DIM, FFN * 2,
-                        "MLP input", error, size)) return 0;
+    if (!rotated_pair_linear(
+            z, z->ff, z->normed, block->w1, block->w1_scales, block->w3,
+            block->w3_scales, block->mlp_group, rows, DIM, FFN,
+            "MLP input", error, size)) return 0;
     OP(h3_gpu_swiglu_bf16(z->gpu, z->activated, z->ff, rows, FFN), "SwiGLU");
     if (!rotated_linear(z, z->branch, z->activated, block, block->w2,
                         block->w2_scales, NULL, block->w2_group, rows, FFN,

@@ -559,6 +559,18 @@ public enum ModelCatalog {
         sourceRevision: "f332072aa78be7aecdf3ee76d5c247082da564a6",
         sourcePath: "vae/diffusion_pytorch_model.safetensors"
       ),
+      // TAEF1 is trained against the same FLUX.1 latent API Z-Image uses. It
+      // makes a presentable per-pass image without repeatedly opening the
+      // 99 MB full VAE or allocating its multi-gigabyte working set.
+      ModelPackageFile(
+        role: .previewDecoder,
+        path: "vae_approx/taef1.safetensors",
+        byteCount: 9_848_636,
+        sha256: "47a6c2bff850da04b267cab70fe3553fef57255eb9a8e76852baa0a87850e54d",
+        sourceRepository: "madebyollin/taef1",
+        sourceRevision: "b1b2d00e9e440cfbf3dedb34266864da86016ceb",
+        sourcePath: "diffusion_pytorch_model.safetensors"
+      ),
       ModelPackageFile(
         role: .runtimeMetadata,
         path: "tokenizer.json",

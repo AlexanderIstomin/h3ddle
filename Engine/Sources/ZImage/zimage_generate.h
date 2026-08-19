@@ -17,10 +17,11 @@
 
 typedef struct {
     /* Directory holding tokenizer.json, text_encoder.safetensors,
-     * transformer.safetensors and vae_decoder.safetensors. */
+     * transformer.safetensors and vae_decoder.safetensors. A package that
+     * offers live previews also holds vae_approx/taef1.safetensors. */
     const char *package;
-    /* h3_shaders.metal. NULL keeps everything on the CPU, which is correct
-     * and roughly twenty times slower. */
+    /* h3_shaders.metal. Required by zimage_generate: production generation
+     * has no implicit CPU fallback. */
     const char *shaders;
     const char *prompt;
     /* Both a multiple of 16, and their token count — (width/16) * (height/16)
@@ -58,12 +59,27 @@ typedef struct {
 typedef int (*zimage_progress)(const char *phase, int step, int steps,
                                void *context);
 
+/* One inexpensive decoded image after a denoising pass. `rgb` is interleaved
+ * [height, width, 3] float in [0, 1] and is borrowed only for the call.
+ * Returning non-zero cancels the generation, matching H3's frame callback. */
+typedef int (*zimage_preview)(const float *rgb, int width, int height,
+                              int step, int steps, void *context);
+
 /* `image` receives 3 * width * height floats, channel-major, in [-1, 1] —
  * the range the reference's own post-processing expects. Returns 0 on failure
  * with `error` set, and 0 with an empty `error` when the caller cancelled. */
 int zimage_generate(const zimage_request *request, float *image,
-                    zimage_progress progress, void *context,
+                    zimage_progress progress, zimage_preview preview,
+                    void *context,
                     char *error, size_t error_size);
+
+/* The slow f32 host implementation retained for correctness harnesses. It is
+ * deliberately a different, explicitly named entry point so omitting a Metal
+ * shader path can never change production generation's backend. Live preview
+ * is unavailable here because TAEF1 is itself a Metal decoder. */
+int zimage_generate_cpu_reference(const zimage_request *request, float *image,
+                                  zimage_progress progress, void *context,
+                                  char *error, size_t error_size);
 
 /* Whether this build can render this frame, so a caller can refuse early
  * rather than after loading fourteen gigabytes. */
