@@ -71,6 +71,7 @@ let package = Package(
         // outright: every kernel it needs already existed, including the
         // alias-free snakebeta the vocoder is built on.
         "Sources/LTX/ltx_audio.c",
+        "Sources/LTX/ltx_tiling.c",
         "Sources/LTX/ltx_video.c",
         "Sources/LTX/ltx_connector.c",
         "Sources/LTX/ltx_text.c",

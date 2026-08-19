@@ -6,6 +6,71 @@ import H3ddleEngineProtocol
 
 @Suite("Generation studio settings")
 struct GenerationStudioSettingsTests {
+  @Test("LTX's picker and active run share one end-to-end projection")
+  func ltxGenerationProjection() {
+    let frame = LTXResolution.p720.frame(aspect: 16.0 / 9)
+    #expect(frame == (1248, 704))
+    let seconds = GenerationDurationEstimate.ltx(
+      width: frame.width,
+      height: frame.height,
+      frames: 241,
+      denoisingSteps: 8
+    )
+    #expect(seconds != nil)
+    #expect(abs(seconds! - 4_189.588) < 1e-9)
+    #expect(GenerationDurationEstimate.ltx(
+      width: 1_250,
+      height: 704,
+      frames: 241,
+      denoisingSteps: 8
+    ) == nil)
+  }
+
+  @Test("Every generation engine has a useful initial duration projection")
+  func projectionsCoverEveryEngine() {
+    let zImageDefault = GenerationDurationEstimate.zImage(
+      width: 512, height: 512, denoisingSteps: 8)
+    let zImageDraft = GenerationDurationEstimate.zImage(
+      width: 512, height: 512, denoisingSteps: 3)
+    #expect(abs((zImageDefault ?? 0) - 78.0216) < 1e-9)
+    #expect((zImageDraft ?? 0) < (zImageDefault ?? 0))
+
+    let h3Resident = GenerationDurationEstimate.h3(
+      width: 512,
+      height: 512,
+      frames: 22,
+      denoisingSteps: 8,
+      activeDiTLayers: 50,
+      denoiseReuse: 1,
+      coreReuse: 1,
+      blockCache: false,
+      physicalMemoryBytes: UInt64(32) * 1_073_741_824
+    )
+    let h3Streamed = GenerationDurationEstimate.h3(
+      width: 512,
+      height: 512,
+      frames: 22,
+      denoisingSteps: 8,
+      activeDiTLayers: 50,
+      denoiseReuse: 1,
+      coreReuse: 1,
+      blockCache: false,
+      physicalMemoryBytes: UInt64(16) * 1_073_741_824
+    )
+    #expect(h3Resident != nil)
+    #expect((h3Streamed ?? 0) > (h3Resident ?? 0))
+
+    let stableShort = GenerationDurationEstimate.stableAudio(
+      duration: 5, denoisingSteps: 8)
+    let stableLong = GenerationDurationEstimate.stableAudio(
+      duration: 60, denoisingSteps: 8)
+    #expect((stableLong ?? 0) > (stableShort ?? 0))
+
+    let shortSpeech = GenerationDurationEstimate.speech(characterCount: 20)
+    let longSpeech = GenerationDurationEstimate.speech(characterCount: 200)
+    #expect((longSpeech ?? 0) > (shortSpeech ?? 0))
+  }
+
   @Test("Z-Image is the image default while explicit choices are retained")
   func preferredImageModel() {
     let options = [

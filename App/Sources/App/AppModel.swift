@@ -151,6 +151,9 @@ final class AppModel {
   var generationProgressTracker = GenerationProgressTracker()
   var generationOverallProgress: Double { generationProgressTracker.overall }
   var generationElapsed: TimeInterval = 0
+  /// The selected model's settings-based end-to-end estimate. It gives the
+  /// countdown an immediate useful value, then yields to timing from the run.
+  private var generationProjectedDuration: TimeInterval?
   var generationPreviewImage: CGImage?
   var generationPrompt = ""
   var errorMessage: String?
@@ -486,6 +489,7 @@ final class AppModel {
     generationProgress = 0
     generationProgressTracker = GenerationProgressTracker()
     generationElapsed = 0
+    generationProjectedDuration = nil
     generationPreviewImage = nil
     activeGenerationKind = kind
     // Each audio mode is a separate package, so the one the tab happens to
@@ -585,6 +589,7 @@ final class AppModel {
     blockCache: Bool = false,
     fastStill: Bool = false,
     previewDenoise: Bool = false,
+    allowsLTXMemoryOvercommit: Bool = false,
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
     canvasHeight: Int? = nil
@@ -598,6 +603,7 @@ final class AppModel {
     isGenerating = true
     errorMessage = nil
     generationElapsed = 0
+    generationProjectedDuration = nil
     generationPreviewImage = nil
     // A second run from an already-open studio never passed through
     // `presentGeneration`, so without these it would start against the last
@@ -627,7 +633,9 @@ final class AppModel {
     // passes through `presentGeneration`, and would otherwise start against
     // the last run's numbers — a full bar and no preparation band.
     generationProgressTracker = GenerationProgressTracker(
-      countsPasses: audioEngine == .h3)
+      profile: videoEngine == .ltx
+        ? .ltx
+        : (audioEngine == .h3 ? .standard : .singlePhase))
     // Speech reports frames against a deliberately generous ceiling, so
     // scale that fraction using the expected spoken duration before showing
     // it as whole-run Dock progress.
@@ -682,6 +690,62 @@ final class AppModel {
       case (.image, _, .zImage, _): denoisingSteps ?? Self.imageModelDefaultSteps
       case (.video, _, _, .ltx): denoisingSteps ?? 8
       default: denoisingSteps ?? quality.denoisingSteps
+      }
+    }()
+    generationProjectedDuration = {
+      switch (kind, audioEngine, imageEngine, videoEngine) {
+      case (.video, _, _, .ltx):
+        guard let width = canvasWidth, let height = canvasHeight,
+          let resolvedSteps
+        else { return nil }
+        return GenerationDurationEstimate.ltx(
+          width: width,
+          height: height,
+          frames: EngineVideoOptions.frames(forSeconds: duration),
+          denoisingSteps: resolvedSteps
+        )
+      case (.image, _, .zImage, _):
+        guard let width = canvasWidth, let height = canvasHeight,
+          let resolvedSteps
+        else { return nil }
+        return GenerationDurationEstimate.zImage(
+          width: width,
+          height: height,
+          denoisingSteps: resolvedSteps
+        )
+      case (.video, _, _, .h3), (.image, _, .h3, _):
+        guard let width = canvasWidth, let height = canvasHeight,
+          let resolvedSteps
+        else { return nil }
+        let frames = kind == .image
+          ? (fastStill ? 5 : 22)
+          : H3Duration.aligned(frames: Int((duration * H3Duration.fps).rounded()))
+        let core = blockCache ? 1 : coreReuse ?? 1
+        let reuse = blockCache || core > 1 || resolvedSteps < 10
+          ? 1 : quality.denoiseReuse
+        return GenerationDurationEstimate.h3(
+          width: width,
+          height: height,
+          frames: frames,
+          denoisingSteps: resolvedSteps,
+          activeDiTLayers: activeDiTLayers ?? quality.activeDiTLayers,
+          denoiseReuse: reuse,
+          coreReuse: core,
+          blockCache: blockCache,
+          physicalMemoryBytes: modelReport?.device.physicalMemory
+            ?? ProcessInfo.processInfo.physicalMemory
+        )
+      case (.audio, .stableAudio, _, _):
+        guard let resolvedSteps else { return nil }
+        return GenerationDurationEstimate.stableAudio(
+          duration: duration,
+          denoisingSteps: resolvedSteps
+        )
+      case (.audio, .speech, _, _):
+        let characters = prompt.trimmingCharacters(in: .whitespacesAndNewlines).count
+        return GenerationDurationEstimate.speech(characterCount: characters)
+      default:
+        return nil
       }
     }()
     let conditioningDescription: String? = {
@@ -796,7 +860,8 @@ final class AppModel {
       firstFrameURL: acceptsImageInputs || acceptsSourcePicture
         ? studioStartFrame?.url : nil,
       lastFrameURL: acceptsImageInputs ? studioEndFrame?.url : nil,
-      referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : []
+      referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : [],
+      allowsLTXMemoryOvercommit: allowsLTXMemoryOvercommit
     )
     // The audio models, Z-Image and LTX all load their own packages; the H3
     // directory would be the wrong tree entirely.
@@ -885,13 +950,15 @@ final class AppModel {
     Self.formatElapsed(generationElapsed)
   }
 
-  /// Time left, extrapolated from this run's own measured pace rather than
-  /// any hardware assumption, so it self-corrects as the run proceeds.
-  /// Withheld until enough progress exists for the estimate to mean
-  /// something — an early guess swings wildly and reads as a broken clock.
+  /// Time left. Every model starts with a settings-based projection, then
+  /// replaces it with this run's measured pace once enough progress exists
+  /// for that estimate to mean something.
   var generationRemainingDescription: String? {
     guard isGenerating else { return nil }
-    if let remaining = generationProgressTracker.remaining(elapsed: generationElapsed) {
+    if let remaining = generationProgressTracker.remaining(
+      elapsed: generationElapsed,
+      projectedTotal: generationProjectedDuration
+    ) {
       return GenerationRemaining.phrase(remaining)
     }
     // Denoising is done and the decoder is finishing: there is no step
@@ -2240,6 +2307,7 @@ final class AppModel {
     pendingStatistics = nil
     activeGenerationID = nil
     generationStartedAt = nil
+    generationProjectedDuration = nil
     generationTask = nil
     isGenerating = false
   }

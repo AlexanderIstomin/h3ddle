@@ -156,6 +156,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var firstFrameURL: URL?
   public var lastFrameURL: URL?
   public var referenceImageURLs: [URL]
+  /// True only after the user accepts the high unified-memory warning for an
+  /// LTX request. The engine independently enforces the same estimate.
+  public var allowsLTXMemoryOvercommit: Bool?
 
   public init(
     kind: GenerationKind,
@@ -179,7 +182,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     canvasHeight: Int? = nil,
     firstFrameURL: URL? = nil,
     lastFrameURL: URL? = nil,
-    referenceImageURLs: [URL] = []
+    referenceImageURLs: [URL] = [],
+    allowsLTXMemoryOvercommit: Bool = false
   ) {
     self.kind = kind
     self.audioEngine = audioEngine
@@ -204,6 +208,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.lastFrameURL = lastFrameURL
     self.referenceImageURLs = Array(
       referenceImageURLs.prefix(EngineGenerationRequest.referenceImageLimit))
+    self.allowsLTXMemoryOvercommit = allowsLTXMemoryOvercommit
   }
 }
 

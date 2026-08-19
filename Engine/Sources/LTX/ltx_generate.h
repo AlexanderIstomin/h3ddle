@@ -89,7 +89,9 @@ int ltx_plan(const ltx_request *request, ltx_shape *shape,
  * tower alone is minutes before the first step, and a caller that hears
  * nothing until then shows a still bar and reads as hung.
  *
- * `step` and `steps` are within the phase, so they restart at each one. */
+ * `step` and `steps` are within the phase. Denoise restarts the block counter
+ * for each named step; video VAE counts decoder operations across all tiles
+ * and never goes backwards. */
 typedef int (*ltx_progress)(const char *phase, int step, int steps,
                             void *context);
 

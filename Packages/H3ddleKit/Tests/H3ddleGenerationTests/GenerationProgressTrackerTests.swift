@@ -91,6 +91,37 @@ struct GenerationProgressTrackerTests {
     #expect(remaining! < 60)
   }
 
+  @Test("LTX counts down its projection before measured timing takes over")
+  func ltxProjectionHandoff() {
+    var tracker = GenerationProgressTracker(profile: .ltx)
+    tracker.record(phase: "text encoder", phaseFraction: 0.5, elapsed: 10)
+    #expect(tracker.remaining(elapsed: 10, projectedTotal: 120) == 110)
+
+    tracker.record(phase: "text encoder", phaseFraction: 1, elapsed: 20)
+    tracker.record(phase: "denoise step 1/8", phaseFraction: 1, elapsed: 30)
+    // Ten measured seconds for one eighth means 70 seconds of sampler work
+    // remain. The settings projection retains 17% (20.4 seconds) for decode.
+    let corrected = tracker.remaining(elapsed: 30, projectedTotal: 120)
+    #expect(corrected != nil)
+    #expect(abs(corrected! - 90.4) < 1e-9)
+  }
+
+  @Test("Standard and single-phase models also replace their initial projection")
+  func otherModelProjectionHandoffs() {
+    var standard = GenerationProgressTracker(profile: .standard)
+    standard.record(phase: "text encoder", phaseFraction: 1, elapsed: 10)
+    #expect(standard.remaining(elapsed: 10, projectedTotal: 120) == 110)
+    standard.record(phase: "denoise step 1/8", phaseFraction: 1, elapsed: 20)
+    // The measured seven remaining passes are 70 seconds, with the projected
+    // five-percent decoder allowance retained until that phase begins.
+    #expect(standard.remaining(elapsed: 20, projectedTotal: 120) == 76)
+
+    var singlePhase = GenerationProgressTracker(profile: .singlePhase)
+    #expect(singlePhase.remaining(elapsed: 1, projectedTotal: 20) == 19)
+    singlePhase.record(phase: "speaking", phaseFraction: 0.25, elapsed: 4)
+    #expect(singlePhase.remaining(elapsed: 4, projectedTotal: 20) == 12)
+  }
+
   /// Sound effects and speech report one phase and no counter. Banding them
   /// would pin the bar at the preparation share for the entire run.
   @Test("A model that reports no pass counter uses its phase fraction")
@@ -108,7 +139,8 @@ struct GenerationProgressTrackerTests {
     #expect(speech.remaining(elapsed: 4) == 12)
   }
 
-  /// H3 subdivides a pass, so its fraction is genuinely within the step.
+  /// H3 subdivides a pass by transformer stage and LTX subdivides it by its 48
+  /// blocks, so their fractions are genuinely within the named step.
   @Test("A subdivided pass advances within its own slice")
   func subdividedPasses() {
     var tracker = GenerationProgressTracker()
@@ -143,6 +175,48 @@ struct GenerationProgressTrackerTests {
     #expect(!tracker.isFinishing)
 
     tracker.record(phase: "denoise", phaseFraction: 1, elapsed: 10)
+    #expect(tracker.overall == GenerationRemaining.decodeProgress)
+    #expect(tracker.isFinishing)
+  }
+
+  /// The reported 15-second run spent 16.4% of its wall time in the video VAE.
+  /// Its bar used to jump from the end of denoising to a fixed 95% and stay
+  /// there for 13.5 minutes with no ETA.
+  @Test("LTX video VAE advances through its own band with a phase ETA")
+  func ltxVideoVAEProgress() {
+    var tracker = GenerationProgressTracker(profile: .ltx)
+    tracker.record(phase: "text encoder", phaseFraction: 1, elapsed: 17)
+    #expect(abs(tracker.overall - 0.02) < 1e-12)
+
+    tracker.record(phase: "denoise step 8/8", phaseFraction: 1, elapsed: 4_100)
+    #expect(abs(tracker.overall - 0.83) < 1e-12)
+
+    tracker.record(phase: "video VAE", phaseFraction: 0, elapsed: 4_100)
+    #expect(abs(tracker.overall - 0.83) < 1e-12)
+    #expect(tracker.remaining(elapsed: 4_100) == nil)
+    #expect(!tracker.isFinishing)
+
+    tracker.record(phase: "video VAE", phaseFraction: 0.5, elapsed: 4_500)
+    #expect(abs(tracker.overall - 0.91) < 1e-12)
+    #expect(tracker.remaining(elapsed: 4_500) == 400)
+    #expect(!tracker.isFinishing)
+
+    tracker.record(phase: "video VAE", phaseFraction: 1, elapsed: 4_900)
+    #expect(abs(tracker.overall - 0.99) < 1e-12)
+    #expect(tracker.remaining(elapsed: 4_900) == nil)
+    #expect(tracker.isFinishing)
+
+    tracker.record(phase: "vocoder", phaseFraction: 0, elapsed: 4_901)
+    #expect(abs(tracker.overall - 0.99) < 1e-12)
+    tracker.finish()
+    #expect(tracker.overall == 1)
+  }
+
+  @Test("The standard profile keeps the existing image decoder band")
+  func standardProfileCompatibility() {
+    var tracker = GenerationProgressTracker(profile: .standard)
+    tracker.record(phase: "denoise step 8/8", phaseFraction: 1, elapsed: 100)
+    tracker.record(phase: "image VAE", phaseFraction: 0.5, elapsed: 101)
     #expect(tracker.overall == GenerationRemaining.decodeProgress)
     #expect(tracker.isFinishing)
   }

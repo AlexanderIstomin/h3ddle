@@ -120,10 +120,28 @@ static int text_tick(int layer, int layers, void *context) {
     return r->progress("text encoder", layer, layers, r->context);
 }
 
-static int denoise_tick(int step, int steps, void *context) {
+static int denoise_tick(int completed, int total, void *context) {
     relay *r = context;
     if (!r->progress) return 1;
-    return r->progress("denoise", step, steps, r->context);
+    const int steps = total / LTX_DIT_BLOCKS;
+    int step;
+    int block;
+    if (completed >= total) {
+        step = steps;
+        block = LTX_DIT_BLOCKS;
+    } else {
+        step = completed / LTX_DIT_BLOCKS + 1;
+        block = completed % LTX_DIT_BLOCKS;
+    }
+    char phase[64];
+    snprintf(phase, sizeof(phase), "denoise step %d/%d", step, steps);
+    return r->progress(phase, block, LTX_DIT_BLOCKS, r->context);
+}
+
+static int video_tick(int completed, int total, void *context) {
+    relay *r = context;
+    if (!r->progress) return 1;
+    return r->progress("video VAE", completed, total, r->context);
 }
 
 /* A phase with nothing to report inside it still says it started. Returning
@@ -402,11 +420,10 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
         snprintf(path, sizeof(path), "%s/" VIDEO_VAE_PATH, request->package);
         h3_weight_store *vae = h3_weight_store_open(path, error, error_size);
         ok = vae != NULL;
-        if (ok) ok = announce(&report, "video VAE");
         if (ok)
-            ok = ltx_video_decode(gpu, vae, video_latent, latent_frames,
-                                  cells_high, cells_wide, video, error,
-                                  error_size);
+            ok = ltx_video_decode_progress(
+                gpu, vae, video_latent, latent_frames, cells_high, cells_wide,
+                video, video_tick, &report, error, error_size);
         h3_weight_store_free(vae);
     }
     if (ok) {

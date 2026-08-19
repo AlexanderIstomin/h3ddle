@@ -7,7 +7,9 @@ import Testing
 struct GenerationRemainingTests {
   @Test("Phrases stay short enough to sit inside the progress ring")
   func phrasing() {
-    #expect(GenerationRemaining.phrase(20) == "~1 min")
+    #expect(GenerationRemaining.phrase(3) == "~5 s")
+    #expect(GenerationRemaining.phrase(20) == "~20 s")
+    #expect(GenerationRemaining.phrase(44) == "~45 s")
     #expect(GenerationRemaining.phrase(70) == "~1 min")
     #expect(GenerationRemaining.phrase(400) == "~7 min")
     #expect(GenerationRemaining.phrase(3_600) == "~1 h")
@@ -82,5 +84,14 @@ struct GenerationRemainingTests {
     #expect(GenerationRemaining.estimate(elapsed: 60, progress: 0.01) == nil)
     #expect(GenerationRemaining.estimate(elapsed: 0.5, progress: 0.5) == nil)
     #expect(GenerationRemaining.estimate(elapsed: 60, progress: 1) == nil)
+  }
+
+  @Test("A pre-run projection counts down only while it remains valid")
+  func preRunProjection() {
+    #expect(GenerationRemaining.projected(total: 120, elapsed: 20) == 100)
+    #expect(GenerationRemaining.projected(total: 120, elapsed: -5) == 120)
+    #expect(GenerationRemaining.projected(total: 120, elapsed: 120) == nil)
+    #expect(GenerationRemaining.projected(total: .infinity, elapsed: 20) == nil)
+    #expect(GenerationRemaining.projected(total: nil, elapsed: 20) == nil)
   }
 }

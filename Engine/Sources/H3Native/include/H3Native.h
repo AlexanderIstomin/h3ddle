@@ -89,10 +89,12 @@ int h3ddle_zimage_supports_frame(int width, int height);
  * renders 960x544. `h3ddle_ltx_plan` answers
  * that question, and the clip's duration in seconds, without loading a byte.
  *
- * `on_step` names the stage -- "text encoder", "connector", "denoise",
- * "video VAE", "vocoder" -- because the sampler is only part of the wait.
- * Returning zero abandons the run, which is how cancellation reaches it; a
- * cancelled call returns zero with an empty `error`. */
+ * `on_step` names the stage -- "text encoder", "connector", "denoise step
+ * N/M", "video VAE", "vocoder" -- because the sampler is only part of the
+ * wait. During denoise its fraction counts the 48 transformer blocks inside
+ * that step; during video VAE it counts real decoder operations across every
+ * tile. Returning zero abandons the run, which is how cancellation reaches
+ * it; a cancelled call returns zero with an empty `error`. */
 typedef int (*h3ddle_ltx_step)(const char *phase, int completed, int total,
                                void *opaque);
 int h3ddle_ltx_plan(int width, int height, int frames, int fps,

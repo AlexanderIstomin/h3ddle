@@ -1492,11 +1492,13 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
         int slot = 0;
         load_block(&r, 0, &cond, &jobs[0].weights);
         for (int index = 0; index < TOTAL_BLOCKS; index++) {
-            /* Asked between blocks rather than between steps: a step is a
-             * minute at 512 square, and a cancel that takes a minute to land
-             * reads as a hang. `step` counts *completed* steps either way, so
-             * it never goes backwards. */
-            if (tick && !r.failed && !tick(step, steps, tick_context)) stop(&r);
+            /* Count blocks across the full sampler. Large geometries can take
+             * minutes per step, so reporting only `step` made a healthy first
+             * pass indistinguishable from a hang. */
+            if (tick && !r.failed &&
+                !tick(step * TOTAL_BLOCKS + index,
+                      steps * TOTAL_BLOCKS, tick_context))
+                stop(&r);
             pthread_t worker;
             int started = 0;
             if (!r.failed && prefetch && index + 1 < TOTAL_BLOCKS) {
@@ -1558,7 +1560,9 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                 break;
             }
     }
-    if (tick && !r.failed && !tick(steps, steps, tick_context)) stop(&r);
+    if (tick && !r.failed &&
+        !tick(steps * TOTAL_BLOCKS, steps * TOTAL_BLOCKS, tick_context))
+        stop(&r);
     if (cond_rows) {
         if (!r.failed)
             memcpy(video_latent, working,

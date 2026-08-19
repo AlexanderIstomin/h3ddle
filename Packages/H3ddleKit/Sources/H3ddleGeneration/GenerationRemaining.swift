@@ -99,12 +99,29 @@ public enum GenerationRemaining {
     return remaining.isFinite && remaining > 0 ? remaining : nil
   }
 
+  /// Counts down a pre-run end-to-end projection while the current run has
+  /// not advanced far enough to measure its own pace. Invalid or exhausted
+  /// projections return nil instead of turning into a misleading countdown.
+  public static func projected(
+    total: TimeInterval?,
+    elapsed: TimeInterval
+  ) -> TimeInterval? {
+    guard let total, total.isFinite, total > 0, elapsed.isFinite else {
+      return nil
+    }
+    let remaining = total - max(0, elapsed)
+    return remaining > 0 ? remaining : nil
+  }
+
   /// Compact by necessity: this sits inside the progress ring, where a long
   /// phrase overlaps the circle. Coarse by choice: the pipeline is uneven,
   /// so "~7 min" is honest where "6:47" would not be.
   public static func phrase(_ remaining: TimeInterval) -> String {
     guard remaining.isFinite, remaining > 0 else { return "almost done" }
-    if remaining < 45 { return "~1 min" }
+    if remaining < 45 {
+      let seconds = max(5, Int((remaining / 5).rounded()) * 5)
+      return "~\(seconds) s"
+    }
     let minutes = Int((remaining / 60).rounded())
     if minutes < 60 { return "~\(max(1, minutes)) min" }
     let hours = remaining / 3600
