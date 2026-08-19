@@ -42,7 +42,7 @@ let package = Package(
     ),
     .testTarget(
       name: "H3ddleEngineProtocolTests",
-      dependencies: ["H3ddleEngineProtocol"]
+      dependencies: ["H3ddleEngineProtocol", "H3ddleGeneration"]
     ),
     .testTarget(
       name: "H3ddleGenerationTests",
