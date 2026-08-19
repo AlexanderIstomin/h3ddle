@@ -868,14 +868,13 @@ struct GenerationStudioView: View {
     labeled("RESOLUTION") {
       Menu {
         ForEach(LTXResolution.allCases) { tier in
-          Button("\(tier.label)  ·  \(ltxFrameLabel(tier))  ·  "
-            + "~\(minutesLabel(ltxMinutes(tier)))") {
+          Button("\(tier.label)  ·  ~\(minutesLabel(ltxMinutes(tier)))") {
             model.updateStudioKnobs { $0.ltxResolution = tier }
           }
         }
       } label: {
         HStack {
-          Text("\(knobs.ltxResolution.label)  \(ltxFrameLabel(knobs.ltxResolution))")
+          Text(knobs.ltxResolution.label)
             .font(.system(size: 12, weight: .medium, design: .monospaced))
           Spacer()
           Image(systemName: "chevron.up.chevron.down")
@@ -930,24 +929,18 @@ struct GenerationStudioView: View {
   /// tier maths takes.
   private var studioAspect: Double { Double(model.studioAspect.fraction) }
 
-  /// The frame a Z-Image tier renders at this project's shape.
-  private func imageFrameLabel(_ canvas: ImageCanvas) -> String {
-    let frame = canvas.frame(aspect: studioAspect)
-    return "\(frame.width)×\(frame.height)"
-  }
-
-  /// The frame a tier actually renders at this project's shape, shown beside
-  /// the tier because two of them do not render the number they name.
-  private func ltxFrameLabel(_ tier: LTXResolution) -> String {
-    let frame = tier.frame(aspect: studioAspect)
-    return "\(frame.width)×\(frame.height)"
-  }
+  /// Both tier ladders name a short edge and take their shape from the
+  /// project's aspect ratio, so the exact frame is derived rather than chosen
+  /// and is deliberately not shown — the number a person picks is the tier.
+  /// Two of LTX's do not render the edge they name (720 and 1080 are not
+  /// multiples of 32, so they render 704 and 1088), which is recorded on
+  /// `LTXResolution` rather than in the menu.
 
   private var imageResolutionControls: some View {
     labeled("RESOLUTION") {
       Menu {
         ForEach(ImageCanvas.allCases) { canvas in
-          Button("\(canvas.label)  ·  \(imageFrameLabel(canvas))  ·  "
+          Button("\(canvas.label)  ·  "
             + "~\(minutesLabel(canvas.approximateMinutes(aspect: studioAspect)))") {
             model.updateStudioKnobs { $0.imageCanvas = canvas }
           }
