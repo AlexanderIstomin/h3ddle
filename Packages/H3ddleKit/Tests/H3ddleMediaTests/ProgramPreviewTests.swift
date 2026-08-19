@@ -6,6 +6,24 @@ import Testing
 
 @Suite("Program preview")
 struct ProgramPreviewTests {
+  @Test("A reused composition plan produces the same preview frame")
+  func reusedPlanMatchesProjectFrame() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 4)
+    let audio = audioAsset(name: "Score", duration: 6)
+    project.addAsset(visual)
+    project.addAsset(audio)
+    try project.timeline.appendVisual(visual)
+    try project.timeline.appendAudio(audio)
+    let expected = ProgramPreview.frame(at: 3.5, project: project)
+    let actual = ProgramPreview.frame(
+      at: 3.5,
+      project: project,
+      plan: ProgramCompositionPlan(project: project)
+    )
+    #expect(actual == expected)
+  }
+
   @Test("Enabled video occupies derived program time")
   func mapsEnabledVideo() throws {
     var project = H3ddleProject()

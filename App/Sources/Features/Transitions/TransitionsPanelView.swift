@@ -42,6 +42,8 @@ struct TransitionsPanelView: View {
           .frame(width: 26, height: 26)
           .background(H3Color.controlFill)
           .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .foregroundStyle(H3Color.textSecondary)

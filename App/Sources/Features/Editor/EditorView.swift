@@ -307,14 +307,11 @@ struct EditorView: View {
   private var toolbar: some View {
     HStack(spacing: H3Spacing.medium) {
       HStack(spacing: 9) {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-          .fill(H3Color.accent)
+        Image(nsImage: NSApp.applicationIconImage)
+          .resizable()
+          .interpolation(.high)
           .frame(width: 24, height: 24)
-          .overlay {
-            Text("H3")
-              .font(.system(size: 9, weight: .black, design: .rounded))
-              .foregroundStyle(Color.white)
-          }
+          .accessibilityHidden(true)
         Text("H3ddle")
           .font(.system(size: 15, weight: .semibold))
           .accessibilityIdentifier("editor-root")

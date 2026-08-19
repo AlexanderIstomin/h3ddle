@@ -336,9 +336,8 @@ struct EngineProtocolTests {
     for quality in EngineGenerationQuality.allCases {
       // H3 canvases must be multiples of 32; reuse above 1 must never pair
       // with the minimum step budget, where every pass has to run the model.
-      // A tier buys passes and blocks, never pixels: H3 renders one canvas,
-      // and a tier that shrinks it renders something the prompt did not ask
-      // for. This is the invariant the 448 and 512 defaults broke.
+      // Work presets retain the native fallback. Studio resolution is carried
+      // by explicit width and height, independently of these budgets.
       #expect(quality.canvasSize == H3NativeCanvas.shortEdge)
       #expect(quality.canvasSize.isMultiple(of: 32))
       #expect(quality.denoisingSteps >= 20 || quality.denoiseReuse == 1)

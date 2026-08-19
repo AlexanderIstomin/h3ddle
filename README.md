@@ -1,9 +1,9 @@
 # H3ddle
 
-H3ddle is an open-source native macOS workspace for local MiniMax H3
-generation. Video, images, and audio are produced entirely on your own machine
-and assembled on a deliberately small two-track timeline: one visual lane and
-one audio lane.
+H3ddle is an open-source native macOS studio for local generative media. It
+creates video, still images, music, sound effects, and cloned-voice speech
+entirely on Apple silicon, then assembles generated or imported media on a
+deliberately small two-track timeline: one visual lane and one audio lane.
 
 The project is an independent SwiftUI/AppKit implementation over a vendored
 Metal engine. Model weights are never stored in this repository or bundled with
@@ -14,40 +14,33 @@ into Application Support.
 
 Generation, on the local Metal engine:
 
-- prompt-to-video with synchronized audio, still images, and standalone audio;
-- start and end keyframes, and ordered reference images through a Ref2VA
-  transformer, both working on the optimized single-file packages;
-- four managed model packages — standard and step-distilled, each with or
-  without reference support — pinned by revision and SHA-256, sharing their
-  common weights by hardlink so a second package costs only what differs;
-- prompts composed in the three-field schema MiniMax H3 was trained on;
-- resolutions named by short edge from 352p to 1088p, derived from the chosen
-  aspect ratio;
-- block caching, which replays cached tail-block residuals on stable denoising
-  steps for about 40% less work at standard step counts;
-- denoising previews decoded through a 9 MB tiny autoencoder in roughly 180 ms,
-  showing the model's current estimate of the finished frame; and
-- a remaining-time estimate projected from each run's own measured pace.
+- MiniMax H3 and LTX-2.5 video with synchronized sound, including prompt,
+  keyframe, and reference-image workflows;
+- Z-Image-Turbo stills from a prompt or source image, plus H3 still generation;
+- Stable Audio 3 music, sound effects, and ambience;
+- Qwen3-TTS speech in a voice cloned from a short reference recording;
+- model-specific aspect ratios, resolutions, durations, and sampling controls;
+- managed model packages pinned by revision and SHA-256, downloaded only when
+  chosen and kept outside the application bundle;
+- live progress, denoising previews where supported, and remaining-time
+  estimates projected from each run's measured pace; and
+- reproducible generation statistics containing the settings another user
+  needs to repeat a result.
 
 Editing and output:
 
-- a two-track program timeline with one visual lane and one audio lane;
+- a two-track program timeline with filmstrip and waveform previews;
 - canvas objects with direct gesture editing, text items, visual effects and
   transitions, and undo/redo;
 - drag-and-drop import of existing video, image, and audio files;
 - H.264, H.265, or ProRes export with loudness normalization; and
 - Download and Copy statistics on any finished generation.
 
-Stills render one representative frame of a short H3 clip, at either the
-detailed 22-frame chunk or a 5-frame chunk that is about three times quicker.
-Audio renders the joint model for its soundtrack and writes a 32 kHz stereo WAV
-directly, with no FFmpeg process involved.
-
-Known limitation: prompts asking for ambience rather than speech tend to return
-speech. This is H3's own bias toward dialogue, not a defect in how the app
-drives it — the canvas size was ruled out by measuring 32, 64, 128, and 256
-square, and the audio lane's sigma schedule was checked against the reference
-and is correct. Dedicated sound-effect and ambience generation is in progress.
+Each model exposes only the controls it supports. H3 keeps its structured
+prompt, quality ladder, and block-cache path; LTX and Z-Image use their native
+distilled sampling controls; Stable Audio and Qwen3-TTS provide dedicated
+audio workflows. Generation and export use system media frameworks and do not
+require a cloud service.
 
 ## Requirements
 
@@ -66,17 +59,13 @@ xcodegen generate
 open H3ddle.xcodeproj
 ```
 
-Open **Model not set** in the toolbar to choose an existing directory containing
-the released `FL2VA` model tree, or download the pinned optimized package into
-`~/Library/Application Support/H3ddle/Models`. Model weights stay outside the
-repository and app bundle. `Ref2VA` is optional in the current protocol.
-
-Managed packages come from `Comfy-Org/MiniMax-H3` for the base weights and
-`PulpCut` for the two step-distilled transformers converted for this project,
-plus pinned official tokenizer and configuration metadata. Every source uses an
-immutable Hub revision and every file is verified by SHA-256 before install.
-Packages share their text encoder, VAEs, preview decoder, and metadata, so
-installing a second one downloads only the transformer that differs.
+Open the model picker in the toolbar to install a managed video, image, or audio
+package, or add a compatible package already on this Mac. Downloads go into
+`~/Library/Application Support/H3ddle/Models`; model weights stay outside the
+repository and app bundle. Every managed source uses an immutable Hub revision
+and every file is verified by SHA-256 before install. Packages reuse identical
+files where possible so installing a related model does not duplicate shared
+weights.
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel
@@ -108,7 +97,19 @@ licence.
 **MiniMax H3 TAE** — the 9 MB preview decoder behind live denoising previews,
 by Kijai, Apache-2.0.
 
-**Powered by Stability AI.** Sound effects and ambience come from
+**LTX-2.5** — video with synchronized audio by Lightricks, used under the
+LTX-2.x Community License Agreement. H3ddle downloads an INT8 ConvRot package
+whose tensor values match the published distilled release.
+
+**Z-Image-Turbo** — text-to-image and image-to-image generation by Tongyi-MAI,
+Apache-2.0 licensed. H3ddle downloads an INT8 ConvRot repackaging together with
+the official image encoder.
+
+**Qwen3-TTS** — reference-voice speech generation by the Qwen team,
+Apache-2.0 licensed. H3ddle downloads a safetensors conversion of the 12 Hz
+0.6B Base release.
+
+**Powered by Stability AI.** Music, sound effects, and ambience come from
 [Stable Audio 3 Small SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx),
 © Stability AI Ltd., used under the Stability AI Community License — free for
 research and non-commercial use, and for commercial use below USD $1M annual

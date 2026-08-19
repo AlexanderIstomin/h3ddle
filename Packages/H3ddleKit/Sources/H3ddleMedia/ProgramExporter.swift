@@ -87,6 +87,7 @@ private enum ExportSessionWriter {
 
     try await writeVideo(
       project: project,
+      plan: plan,
       settings: settings,
       span: span,
       size: size,
@@ -113,6 +114,7 @@ private enum ExportSessionWriter {
 
   private static func writeVideo(
     project: H3ddleProject,
+    plan: ProgramCompositionPlan,
     settings: ProgramExportSettings,
     span: (inSec: TimeInterval, outSec: TimeInterval),
     size: (width: Int, height: Int),
@@ -123,6 +125,7 @@ private enum ExportSessionWriter {
     if settings.usesHardwareAcceleration {
       try await writeHardwareVideo(
         project: project,
+        plan: plan,
         settings: settings,
         span: span,
         size: size,
@@ -133,6 +136,7 @@ private enum ExportSessionWriter {
     } else {
       try await writeSoftwareVideo(
         project: project,
+        plan: plan,
         settings: settings,
         span: span,
         size: size,
@@ -145,6 +149,7 @@ private enum ExportSessionWriter {
 
   private static func writeHardwareVideo(
     project: H3ddleProject,
+    plan: ProgramCompositionPlan,
     settings: ProgramExportSettings,
     span: (inSec: TimeInterval, outSec: TimeInterval),
     size: (width: Int, height: Int),
@@ -187,7 +192,16 @@ private enum ExportSessionWriter {
     for index in 0..<frameCount {
       try Task.checkCancellation()
       try await waitUntilReady(videoInput)
-      guard let buffer = await renderer.pixelBuffer(for: frame(at: index, span: span, settings: settings, project: project))
+      guard
+        let buffer = await renderer.pixelBuffer(
+          for: frame(
+            at: index,
+            span: span,
+            settings: settings,
+            project: project,
+            plan: plan
+          )
+        )
       else {
         throw MediaExportError.failed("Could not render frame \(index).")
       }
@@ -207,6 +221,7 @@ private enum ExportSessionWriter {
 
   private static func writeSoftwareVideo(
     project: H3ddleProject,
+    plan: ProgramCompositionPlan,
     settings: ProgramExportSettings,
     span: (inSec: TimeInterval, outSec: TimeInterval),
     size: (width: Int, height: Int),
@@ -235,7 +250,16 @@ private enum ExportSessionWriter {
     var lastPreview = ContinuousClock.now - .seconds(1)
     for index in 0..<frameCount {
       try Task.checkCancellation()
-      guard let buffer = await renderer.pixelBuffer(for: frame(at: index, span: span, settings: settings, project: project))
+      guard
+        let buffer = await renderer.pixelBuffer(
+          for: frame(
+            at: index,
+            span: span,
+            settings: settings,
+            project: project,
+            plan: plan
+          )
+        )
       else {
         throw MediaExportError.failed("Could not render frame \(index).")
       }
@@ -439,7 +463,8 @@ private enum ExportSessionWriter {
     at index: Int,
     span: (inSec: TimeInterval, outSec: TimeInterval),
     settings: ProgramExportSettings,
-    project: H3ddleProject
+    project: H3ddleProject,
+    plan: ProgramCompositionPlan
   ) -> ProgramPreviewFrame {
     let programTime = min(
       span.outSec - 0.000_1,
@@ -448,6 +473,7 @@ private enum ExportSessionWriter {
     return ProgramPreview.frame(
       at: programTime,
       project: project,
+      plan: plan,
       textMuted: !settings.includeTextLane
     )
   }

@@ -1,9 +1,6 @@
 import AppKit
-import os
 
-/// What the Dock icon says about a generation that is running or has just
-/// finished. A generation takes minutes, so the Dock is where the answer has
-/// to be: the window is usually behind something else by then.
+/// Displays generation progress and completion state on the Dock icon.
 ///
 /// The rule this file learned the hard way: **do not touch the tile unless
 /// there is something to put on it.** Clearing a tile that was never written
@@ -13,28 +10,22 @@ import os
 /// reason.
 @MainActor
 enum DockAttention {
-  private static let log = Logger(subsystem: "com.h3ddle.app", category: "dock")
-
   /// Whether anything here has ever changed the tile. Until it has, the tile
   /// belongs to the system and is left alone.
   private static var hasWritten = false
-  /// Last percentage drawn, so a run reporting many times a second redraws
-  /// only when the number would actually change.
+  /// Last percentage drawn, so frequent engine events only redraw the Dock
+  /// when the visible value changes.
   private static var shownPercent: Int?
-  /// Whether a generation is in flight. Coming back to the window is not a
-  /// reason to stop reporting one.
+  /// Whether a generation is in flight. Coming back to the window should not
+  /// clear state belonging to that run.
   private static var isRunning = false
 
-  /// A percentage on the Dock icon while a generation runs.
-  ///
-  /// This is drawn into the tile rather than assigned to `badgeLabel`.
-  /// macOS can accept and log a badge label while suppressing its rendering;
-  /// a custom tile keeps progress visible regardless of that system setting.
   static func showProgress(_ fraction: Double) {
     let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
     isRunning = true
     guard percent != shownPercent else { return }
     shownPercent = percent
+
     let tile = NSApp.dockTile
     let view: DockIconProgressView
     if let current = tile.contentView as? DockIconProgressView {
@@ -49,7 +40,6 @@ enum DockAttention {
     tile.badgeLabel = nil
     tile.display()
     hasWritten = true
-    log.notice("Dock progress -> \(percent, privacy: .public)%")
   }
 
   static func markGenerationFinished() {
@@ -60,8 +50,7 @@ enum DockAttention {
     }
   }
 
-  /// A run that was cancelled or failed: the percentage is stale and there is
-  /// nothing to announce.
+  /// A run that was cancelled or failed has nothing to announce.
   static func markGenerationStopped() {
     isRunning = false
     apply(showsDot: false)
@@ -94,19 +83,15 @@ enum DockAttention {
         tile.contentView = nil
       }
       tile.display()
-      log.notice("Dock tile released back to the system")
       return
     }
 
-    // The percentage has served its purpose; leaving it beside the dot would
-    // read as a run still at 100 rather than one that finished.
     tile.badgeLabel = nil
     let view = DockIconDotView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
     view.icon = NSApp.applicationIconImage
     tile.contentView = view
     tile.display()
     hasWritten = true
-    log.notice("Dock tile shows the finished marker")
   }
 }
 

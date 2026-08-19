@@ -5,7 +5,8 @@ import H3ddleCore
 enum CanvasGizmoGeometry {
   static let padding = 32.0
   static let handleSize = 8.0
-  static let handleHit: Double = 14
+  static let cornerHandleHit: Double = 12
+  static let rotateHandleHit: Double = 14
   static let rotateStem: Double = 22
 
   struct Layout {
@@ -101,14 +102,15 @@ enum CanvasGizmoGeometry {
       hypot(lhs.value.x - viewPoint.x, lhs.value.y - viewPoint.y)
         < hypot(rhs.value.x - viewPoint.x, rhs.value.y - viewPoint.y)
     }).flatMap { candidate in
-      hypot(candidate.value.x - viewPoint.x, candidate.value.y - viewPoint.y) <= handleHit
+      hypot(candidate.value.x - viewPoint.x, candidate.value.y - viewPoint.y) <= cornerHandleHit
         ? candidate.key
         : nil
     }
   }
 
   static func hitsRotate(at viewPoint: (x: Double, y: Double), in layout: Layout) -> Bool {
-    hypot(layout.rotateHandle.x - viewPoint.x, layout.rotateHandle.y - viewPoint.y) <= handleHit
+    hypot(layout.rotateHandle.x - viewPoint.x, layout.rotateHandle.y - viewPoint.y)
+      <= rotateHandleHit
   }
 
   static func contains(

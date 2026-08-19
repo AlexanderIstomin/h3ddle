@@ -435,10 +435,10 @@ public enum ModelCatalog {
     id: "h3ddle-ltx-2-5-int8-v1",
     displayName: "LTX-2.5 · Distilled",
     detail:
-      "Video with a soundtrack the model denoises beside the picture rather "
-      + "than adding afterwards. 22B distilled, eight steps, 24 fps. A 2.7-second "
-      + "clip at 512² takes about six and a half minutes on an M1 Pro; the "
-      + "prompt is all it takes — no reference images, keyframes or previews.",
+      "Creates 2–20 second videos with synchronized sound from a prompt, "
+      + "start/end frames, or up to four reference images. Supports portrait, "
+      + "square, and landscape output from 320p to 1080p; eight steps is the "
+      + "recommended balance.",
     repository: "PulpCut/LTX-2.5-INT8-ConvRot-safetensors",
     revision: "d28e7aae3bfdb47184682838cd11989f1c8aa5dc",
     licenseName: "LTX-2.x Community License Agreement",
@@ -508,10 +508,10 @@ public enum ModelCatalog {
     id: "h3ddle-z-image-turbo-int8-v1",
     displayName: "Z-Image · Turbo",
     detail:
-      "A dedicated text-to-image model: eight passes, no guidance pass, "
-      + "markedly better stills than a frame kept from a clip. 1024² takes "
-      + "about three and a half minutes on an M1 Pro; the larger canvases "
-      + "want more memory than the minimum.",
+      "Creates high-quality still images from a text prompt, or repaints a "
+      + "source picture with adjustable strength. Supports portrait, square, "
+      + "and landscape output from 512p to 1536p; eight passes is the "
+      + "recommended balance.",
     repository: "PulpCut/Z-Image-Turbo-INT8-ConvRot-safetensors",
     revision: "07a468a19068386ab85b0f9d9e391ef57d78eb38",
     licenseName: "Apache License 2.0",

@@ -154,9 +154,13 @@ struct GenerationStudioView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
               .stroke(H3Color.line, lineWidth: 1)
           }
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(model.isGenerating)
+      .help("Close Generation Studio")
+      .accessibilityIdentifier("generation-close")
     }
     .padding(.horizontal, 18)
     .frame(height: 58)
@@ -929,7 +933,46 @@ struct GenerationStudioView: View {
   /// tier maths takes.
   private var studioAspect: Double { Double(model.studioAspect.fraction) }
 
-  /// Both tier ladders name a short edge and take their shape from the
+  private var h3ResolutionControls: some View {
+    labeled("RESOLUTION") {
+      Menu {
+        ForEach(GenerationCanvas.allCases) { canvas in
+          let frame = canvas.frame(aspect: studioAspect)
+          Button("\(canvas.label)  ·  \(frame.width)×\(frame.height)") {
+            model.updateStudioKnobs { $0.canvas = canvas }
+          }
+        }
+      } label: {
+        HStack {
+          Text(knobs.canvas.label)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+          Spacer()
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 36)
+        .background(H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      let frame = knobs.canvas.frame(aspect: studioAspect)
+      Text("\(frame.width) × \(frame.height) at this aspect ratio. "
+        + "H3 supports 256p preview, 512p development, and its native 768p tier.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityIdentifier("generation-resolution")
+  }
+
+  /// The image and LTX ladders name a short edge and take their shape from the
   /// project's aspect ratio, so the exact frame is derived rather than chosen
   /// and is deliberately not shown — the number a person picks is the tier.
   /// Two of LTX's do not render the edge they name (720 and 1080 are not
@@ -1133,39 +1176,8 @@ struct GenerationStudioView: View {
         .accessibilityIdentifier("generation-presets")
       }
 
-      if isLTX {
-        ltxResolutionControls
-      } else if kind != .audio {
-        // H3 draws on one canvas. This used to be a menu of short edges from
-        // 352 to 1088, none of which the model would honour and one of which
-        // (1920x1088) was nearly twice its ceiling. The aspect ratio decides
-        // the shape; the size is not ours to choose.
-        labeled("RESOLUTION") {
-          let size = H3Canvas.dimensions(
-            aspect: Double(model.studioAspect.fraction))
-          HStack {
-            Text("\(size.width) × \(size.height)")
-              .font(.system(size: 12, weight: .medium, design: .monospaced))
-            Spacer()
-            Text("fixed by the model")
-              .font(.system(size: 10))
-              .foregroundStyle(H3Color.textSecondary)
-          }
-          .padding(.horizontal, 11)
-          .frame(height: 36)
-          .background(H3Color.chrome)
-          .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .stroke(H3Color.line, lineWidth: 1)
-          }
-          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          .accessibilityIdentifier("generation-resolution")
-          Text("H3 renders a 768-pixel short edge, capped at 768×1344. The "
-            + "aspect ratio above chooses the shape.")
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+      if kind != .audio {
+        h3ResolutionControls
       }
 
       labeled("DENOISING PASSES") {
@@ -1466,11 +1478,8 @@ struct GenerationStudioView: View {
     // A model built for stills brings its own square ladder; the video one is
     // a short edge that the project's aspect ratio widens, which is the pair
     // this renderer refuses.
-    // H3 draws on one canvas: a 768 short edge, area-capped, the ratio taken
-    // from the project. The quality ladder used to name the short edge as well,
-    // down to 352, which is off-canvas for this model and is where it stops
-    // following the prompt. Passes and blocks still vary by tier; the canvas
-    // does not.
+    // H3's selected tier names the short edge, the project names the ratio,
+    // and the native 768x1344 envelope caps the result.
     // Each prompt-only model has its own square; they are not the same knob,
     // and using the still tier for a clip is how 768 got picked for a picture
     // and silently charged to every video.
@@ -1479,7 +1488,7 @@ struct GenerationStudioView: View {
       ? knobs.ltxResolution.frame(aspect: studioAspect)
       : (promptOnlyModel
         ? knobs.imageCanvas.frame(aspect: studioAspect)
-        : H3Canvas.dimensions(aspect: Double(model.studioAspect.fraction)))
+        : knobs.canvas.frame(aspect: studioAspect))
     model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
@@ -1846,11 +1855,7 @@ private struct GenerationResultMedia: View {
     case .video:
       NativeVideoPlayer(url: asset.url)
     case .image:
-      if let image = NSImage(contentsOf: asset.url) {
-        Image(nsImage: image)
-          .resizable()
-          .scaledToFit()
-      } else {
+      LocalImagePreview(url: asset.url) {
         placeholder("Image preview unavailable")
       }
     case .audio:
@@ -1960,4 +1965,3 @@ private struct ModelDropdownMenu: View {
     .shadow(color: .black.opacity(0.55), radius: 20, y: 14)
   }
 }
-

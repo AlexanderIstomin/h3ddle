@@ -6,12 +6,18 @@ import H3ddleEngineProtocol
 
 @Suite("Generation studio settings")
 struct GenerationStudioSettingsTests {
+  @Test("Only video engines with a still path appear as image models")
+  func videoEngineStillSupport() {
+    #expect(VideoGenerationEngine.h3.supportsStillGeneration)
+    #expect(!VideoGenerationEngine.ltx.supportsStillGeneration)
+  }
+
   @Test("Named presets write the documented knob combinations")
   func namedPresets() {
     var settings = GenerationStudioSettings.makeDefault(seed: 1)
     settings.apply(preset: .standard)
     #expect(settings.preset == .standard)
-    #expect(settings.knobs.canvas == .p480)
+    #expect(settings.knobs.canvas == .p512)
     #expect(settings.knobs.denoisingSteps == 20)
     #expect(settings.knobs.activeDiTLayers == 45)
   }
@@ -30,7 +36,7 @@ struct GenerationStudioSettingsTests {
 
     settings.apply(preset: .custom)
     #expect(settings.knobs.denoisingSteps == 8)
-    #expect(settings.knobs.canvas == .p352)
+    #expect(settings.knobs.canvas == .p256)
   }
 
   @Test("Matching a named preset snaps back to that preset")
@@ -50,37 +56,47 @@ struct GenerationStudioSettingsTests {
 
 @Suite("Canvas ladder")
 struct GenerationCanvasTests {
-  /// The ladder this suite used to check is gone. It asserted a "published
-  /// resolution table" — 864x480 through 1920x1088 — that H3 never offered:
-  /// the reference pins the short edge to 768 and caps the area at 768x1344,
-  /// and the hosted endpoints offer only that and an upscaled 2K. What is
-  /// worth testing is that nothing can ask for anything else.
+  @Test("The picker contains every validated native H3 tier")
+  func validatedNativeTiers() {
+    #expect(GenerationCanvas.allCases == [.p256, .p512, .p768])
+    #expect(GenerationCanvas.p256.frame(aspect: 16.0 / 9) == (448, 256))
+    #expect(GenerationCanvas.p512.frame(aspect: 16.0 / 9) == (896, 512))
+    #expect(GenerationCanvas.p768.frame(aspect: 16.0 / 9) == (1344, 768))
+  }
+
   @Test("Every canvas the app can ask for is inside H3's envelope")
   func everyCanvasIsInsideTheEnvelope() {
-    for aspect in [16.0 / 9, 1.0, 9.0 / 16, 4.0 / 5, 3.0 / 2, 2.39, 0.4] {
-      let size = H3Canvas.dimensions(aspect: aspect)
-      #expect(min(size.width, size.height) <= H3Canvas.shortEdge)
-      #expect(size.width * size.height <= H3Canvas.maximumPixels)
-      #expect(size.width % 32 == 0)
-      #expect(size.height % 32 == 0)
-    }
-  }
-
-  /// The tier reaches the engine as a quality, and every quality has to land
-  /// on the one canvas H3 renders — this is the path a request takes when it
-  /// names no size of its own, which is how 448 and 512 used to ship.
-  @Test("No quality tier can fall below the trained canvas")
-  func noTierFallsBelowTheTrainedCanvas() {
     for canvas in GenerationCanvas.allCases {
-      #expect(canvas.engineQuality.canvasSize == H3NativeCanvas.shortEdge)
+      for aspect in [16.0 / 9, 1.0, 9.0 / 16, 4.0 / 5, 3.0 / 2, 2.39, 0.4] {
+        let size = canvas.frame(aspect: aspect)
+        #expect(min(size.width, size.height) <= canvas.shortEdge)
+        #expect(size.width * size.height <= H3Canvas.maximumPixels)
+        #expect(size.width % 32 == 0)
+        #expect(size.height % 32 == 0)
+      }
     }
   }
 
-  @Test("Settings saved under the old square names still load")
+  @Test("Resolution tiers retain their matching work presets")
+  func tiersRetainTheirWorkPresets() {
+    for canvas in GenerationCanvas.allCases {
+      switch canvas {
+      case .p256: #expect(canvas.engineQuality == .preview)
+      case .p512: #expect(canvas.engineQuality == .standard)
+      case .p768: #expect(canvas.engineQuality == .high)
+      }
+    }
+  }
+
+  @Test("Settings saved under either old ladder still load")
   func legacyDecoding() throws {
     let decoder = JSONDecoder()
-    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"square256\"".utf8)) == .p480)
-    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"native1344\"".utf8)) == .p1088)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"square256\"".utf8)) == .p256)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"p352\"".utf8)) == .p256)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"p480\"".utf8)) == .p512)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"p576\"".utf8)) == .p512)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"native1344\"".utf8)) == .p768)
+    #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"p1088\"".utf8)) == .p768)
     #expect(try decoder.decode(GenerationCanvas.self, from: Data("\"p768\"".utf8)) == .p768)
   }
 

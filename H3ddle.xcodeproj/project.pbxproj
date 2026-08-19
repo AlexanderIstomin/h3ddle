@@ -36,6 +36,7 @@
 		9E78D049843D79C6B77799A5 /* DockAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135192F096FB7C2428444B61 /* DockAttention.swift */; };
 		9F2F6176508A41C319B8787B /* EffectsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95DFE38643B882953196C533 /* EffectsPanelView.swift */; };
 		A72D97AED6C7E11D25D87D04 /* TimelineTransitionHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7041DEC2A89781B53AB90DC7 /* TimelineTransitionHandle.swift */; };
+		A87CED10762409A020D57F8C /* LocalImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A2455B594CABE3E74A707D0 /* LocalImagePreview.swift */; };
 		AC44AEDF7277AC76B56F2D03 /* TrackHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2648406FAFCA8AB60A97EEE9 /* TrackHeaderView.swift */; };
 		ADEC2012684556D6CDF00F48 /* ProjectSettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B65284F9D9F37F44F8B0EC /* ProjectSettingsPanel.swift */; };
 		B47AB95F0B9991CC8D7BE476 /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2547ABB5B8079987008EBA8B /* EditorView.swift */; };
@@ -79,6 +80,7 @@
 		43B65284F9D9F37F44F8B0EC /* ProjectSettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSettingsPanel.swift; sourceTree = "<group>"; };
 		4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewport.swift; sourceTree = "<group>"; };
 		478777F017228F58ABA67D3B /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		4A2455B594CABE3E74A707D0 /* LocalImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImagePreview.swift; sourceTree = "<group>"; };
 		5BBF3667FF8EC32438B53498 /* ProgramFramePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramFramePresenter.swift; sourceTree = "<group>"; };
 		62DFFC4BC7C71D5D3E9C35E2 /* CanvasMediaSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMediaSize.swift; sourceTree = "<group>"; };
 		667AFE15DAB75F795768ED4F /* TransportBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarView.swift; sourceTree = "<group>"; };
@@ -160,6 +162,7 @@
 				135192F096FB7C2428444B61 /* DockAttention.swift */,
 				31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */,
 				0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */,
+				4A2455B594CABE3E74A707D0 /* LocalImagePreview.swift */,
 				E9E1D322A9044F5C380D736E /* VoiceLibrary.swift */,
 			);
 			path = App;
@@ -472,6 +475,7 @@
 				EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */,
 				3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */,
 				C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */,
+				A87CED10762409A020D57F8C /* LocalImagePreview.swift in Sources */,
 				9098009C6BDCA4F8A02BFE44 /* ModelSettingsView.swift in Sources */,
 				6A8CC1CB3478617D14303D05 /* ProgramCanvasView.swift in Sources */,
 				C612E804FE06BE4E86A8D087 /* ProgramFramePresenter.swift in Sources */,
@@ -523,7 +527,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.5.0;
+				MARKETING_VERSION = 0.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;
@@ -548,7 +552,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.5.0;
+				MARKETING_VERSION = 0.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;

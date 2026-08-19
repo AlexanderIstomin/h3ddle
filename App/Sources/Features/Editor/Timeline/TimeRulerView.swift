@@ -5,32 +5,32 @@ import SwiftUI
 struct TimeRulerView: View {
   var duration: TimeInterval
   var metrics: TimelineMetrics
+  var visibleX: CGFloat
+  var visibleWidth: CGFloat
   var onSeek: (TimeInterval) -> Void
 
   var body: some View {
     Canvas { context, size in
       let pps = Double(metrics.pointsPerSecond)
-      let minorSeconds = TimelineRuler.minorInterval(pointsPerSecond: pps)
-      let minorSpan = CGFloat(minorSeconds) * metrics.pointsPerSecond
+      let overscan = CGFloat(TimelineRuler.trailingLabelPadding)
+      let visibleRange = TimelineRuler.visibleTimeRange(
+        scrollOffset: Double(visibleX),
+        viewportWidth: Double(visibleWidth),
+        pointsPerSecond: pps,
+        overscanPoints: Double(overscan)
+      )
 
-      if TimelineRuler.drawsMinorTicks(pointsPerSecond: pps), minorSpan > 0 {
-        var x: CGFloat = 0
-        while x <= size.width + 0.5 {
+      for tick in TimelineRuler.ticks(
+        duration: duration,
+        pointsPerSecond: pps,
+        visibleRange: visibleRange
+      ) {
+        let x = metrics.x(for: tick.time)
+        if tick.isMajor {
           var path = Path()
           path.move(to: CGPoint(x: x, y: size.height))
-          path.addLine(to: CGPoint(x: x, y: size.height - 6))
-          context.stroke(path, with: .color(H3Color.tickMinor), lineWidth: 1)
-          x += minorSpan
-        }
-      }
-
-      for tick in TimelineRuler.ticks(duration: duration, pointsPerSecond: pps) where tick.isMajor {
-        let x = metrics.x(for: tick.time)
-        var path = Path()
-        path.move(to: CGPoint(x: x, y: size.height))
-        path.addLine(to: CGPoint(x: x, y: size.height - 11))
-        context.stroke(path, with: .color(H3Color.tickMajor), lineWidth: 1)
-        if !tick.label.isEmpty {
+          path.addLine(to: CGPoint(x: x, y: size.height - 11))
+          context.stroke(path, with: .color(H3Color.tickMajor), lineWidth: 1)
           context.draw(
             Text(tick.label)
               .font(.system(size: 9, weight: .regular, design: .monospaced))
@@ -39,6 +39,11 @@ struct TimeRulerView: View {
             at: CGPoint(x: x + 5, y: 5),
             anchor: .topLeading
           )
+        } else {
+          var path = Path()
+          path.move(to: CGPoint(x: x, y: size.height))
+          path.addLine(to: CGPoint(x: x, y: size.height - 6))
+          context.stroke(path, with: .color(H3Color.tickMinor), lineWidth: 1)
         }
       }
     }

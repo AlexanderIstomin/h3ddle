@@ -16,6 +16,19 @@ struct TimelineRulerTests {
     #expect(TimelineRuler.minorInterval(pointsPerSecond: 13) == 1.25)
   }
 
+  @Test("Visible tick generation stays bounded on long timelines")
+  func visibleTicksStayBounded() {
+    let ticks = TimelineRuler.ticks(
+      duration: 10_000,
+      pointsPerSecond: 13,
+      visibleRange: 500...510
+    )
+    #expect(
+      ticks.map(\.time) == [500, 501.25, 502.5, 503.75, 505, 506.25, 507.5, 508.75, 510]
+    )
+    #expect(ticks.filter(\.isMajor).map(\.time) == [500, 505, 510])
+  }
+
   @Test("Content duration never collapses below the fallback window")
   func contentDurationHasAFloor() {
     #expect(TimelineRuler.contentDuration(visualDuration: 4, audioTrackEnd: 6) == 180)
@@ -46,5 +59,34 @@ struct TimelineRulerTests {
     let timeBefore = (scroll + anchor) / TimelineRuler.pointsPerSecond(zoom: currentZoom)
     let timeAfter = (newScroll + anchor) / TimelineRuler.pointsPerSecond(zoom: nextZoom)
     #expect(abs(timeBefore - timeAfter) < 0.000_1)
+  }
+
+  @Test("Visible range includes overscan and rejects distant spans")
+  func visibleRangeSupportsTimelineVirtualization() {
+    let range = TimelineRuler.visibleTimeRange(
+      scrollOffset: 400,
+      viewportWidth: 200,
+      pointsPerSecond: 20,
+      overscanPoints: 100
+    )
+    #expect(range == 15...35)
+    #expect(TimelineRuler.spanIntersects(start: 14, duration: 2, visibleRange: range))
+    #expect(TimelineRuler.spanIntersects(start: 34, duration: 2, visibleRange: range))
+    #expect(!TimelineRuler.spanIntersects(start: 10, duration: 2, visibleRange: range))
+    #expect(!TimelineRuler.spanIntersects(start: 40, duration: 2, visibleRange: range))
+  }
+
+  @Test("Filmstrip samples cover the trimmed clip without requesting its exact out point")
+  func filmstripSamplesTrimmedRange() {
+    let times = TimelineFilmstripSampling.times(
+      sourceOffset: 2,
+      duration: 6,
+      frameCount: 3
+    )
+    #expect(times.count == 3)
+    #expect(abs(times[0] - 2) < 1e-6)
+    #expect(abs(times[1] - 4.999_166_666_7) < 1e-6)
+    #expect(times[2] < 8)
+    #expect(times[2] > 7.99)
   }
 }

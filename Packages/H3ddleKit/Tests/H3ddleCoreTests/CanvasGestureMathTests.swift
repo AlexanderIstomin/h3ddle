@@ -123,6 +123,22 @@ struct CanvasGestureMathTests {
     )
   }
 
+  @Test("Unbounded conversion preserves points beyond the monitor for canvas gestures")
+  func unboundedPointExtendsPastMonitor() throws {
+    let point = try #require(
+      CanvasViewportMath.unboundedProgramPoint(
+        viewPoint: (16, 150),
+        viewSize: (400, 300),
+        aspect: 16 / 9,
+        padding: 32,
+        magnification: 1,
+        offset: (0, 0)
+      )
+    )
+    #expect(point.x < 0)
+    #expect(abs(point.y - 0.5) < 1e-6)
+  }
+
   @Test("Scale from top-right about bottom-left keeps the pivot")
   func scaleAboutOppositeCorner() {
     let origin = CanvasObjectTransform()

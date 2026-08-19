@@ -1,40 +1,50 @@
 import Foundation
 import H3ddleEngineProtocol
 
-/// How much work a generation spends: passes, blocks, denoiser reuse.
+/// H3's validated output resolutions, named by the short edge.
 ///
-/// It is not a size, despite the case names. It used to be a ladder of short
-/// edges claiming to reproduce a published resolution table, and the table
-/// was wrong in both directions — its floor rendered below what H3 was
-/// trained on, and its ceiling, 1920x1088, asked for nearly twice the pixels
-/// the model accepts. H3 has one canvas; `H3Canvas` shapes it, and
-/// `H3NativeCanvas` states it.
-///
-/// The cases keep their old names so settings saved under them still load.
+/// These are the native canvases documented by the engine: 256p for a fast
+/// preview, 512p for development, and the model's native 768p ceiling. The
+/// long edge follows the project's aspect ratio and every frame is snapped to
+/// H3's multiple-of-32 requirement.
 public enum GenerationCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
-  case p352
-  case p480
-  case p576
+  case p256
+  case p512
   case p768
-  case p1088
 
   public var id: String { rawValue }
 
+  public var shortEdge: Int {
+    switch self {
+    case .p256: 256
+    case .p512: 512
+    case .p768: 768
+    }
+  }
+
+  public var label: String { "\(shortEdge)p" }
+
   public var engineQuality: EngineGenerationQuality {
     switch self {
-    case .p352, .p480: .preview
-    case .p576: .standard
-    case .p768, .p1088: .high
+    case .p256: .preview
+    case .p512: .standard
+    case .p768: .high
     }
+  }
+
+  public func frame(aspect: Double) -> (width: Int, height: Int) {
+    H3Canvas.dimensions(aspect: aspect, shortEdge: shortEdge)
   }
 
   public init(from decoder: Decoder) throws {
     let raw = try decoder.singleValueContainer().decode(String.self)
-    // Settings saved before the ladder was named by short edge.
+    // Settings saved under the old five-rung ladder migrate to the nearest
+    // validated native output. Those old values named canvases H3 did not
+    // actually document, so preserving their exact number is not useful.
     switch raw {
-    case "square256", "square512": self = .p480
-    case "native768": self = .p768
-    case "native1344": self = .p1088
+    case "square256", "p352": self = .p256
+    case "square512", "p480", "p576": self = .p512
+    case "native768", "native1344", "p1088": self = .p768
     default:
       guard let value = GenerationCanvas(rawValue: raw) else {
         throw DecodingError.dataCorruptedError(
@@ -130,29 +140,34 @@ public enum ImageCanvas: String, CaseIterable, Codable, Sendable, Identifiable {
   }
 }
 
-/// H3's own canvas and duration rules, transcribed from the released
-/// pipeline's `adapt_canvas` and its latent-length grid.
+/// H3's canvas envelope and duration rules.
 ///
-/// Both were being ignored, and the model does not fail loudly when they are:
-/// asked for a canvas or a length it was never trained on it returns a
-/// confident, well-made video of something else entirely. Measured here at 73
-/// frames, roughly half of seeds came back with no relation to the prompt —
-/// the same period-drama interior whatever the prompt said, at four passes and
-/// at twelve, on the base checkpoint and the turbo one, and with the prompt
-/// written to the vendor's own guide.
+/// Canvas choices remain on the engine's multiple-of-32 grid and below its
+/// native area ceiling. Durations use the 17k+5 frame grid and stay inside the
+/// released training range.
 public enum H3Canvas {
-  /// The short edge is *always* this. A caller's width and height choose the
-  /// ratio and nothing else — which is what the reference does, and why every
-  /// tier below 768 was drawing off-canvas.
+  /// The native tier's short edge. Lower validated tiers are available through
+  /// `GenerationCanvas`.
   public static let shortEdge = H3NativeCanvas.shortEdge
   /// Area ceiling; the reference scales the whole canvas down to meet it
   /// rather than clamping one axis.
   public static let maximumPixels = H3NativeCanvas.maximumPixels
 
   public static func dimensions(aspect: Double) -> (width: Int, height: Int) {
-    guard aspect.isFinite, aspect > 0 else { return (shortEdge, shortEdge) }
-    var width = aspect >= 1 ? Double(shortEdge) * aspect : Double(shortEdge)
-    var height = aspect >= 1 ? Double(shortEdge) : Double(shortEdge) / aspect
+    dimensions(aspect: aspect, shortEdge: shortEdge)
+  }
+
+  static func dimensions(
+    aspect: Double,
+    shortEdge requestedShortEdge: Int
+  ) -> (width: Int, height: Int) {
+    guard aspect.isFinite, aspect > 0 else {
+      return (requestedShortEdge, requestedShortEdge)
+    }
+    var width =
+      aspect >= 1 ? Double(requestedShortEdge) * aspect : Double(requestedShortEdge)
+    var height =
+      aspect >= 1 ? Double(requestedShortEdge) : Double(requestedShortEdge) / aspect
     let area = width * height
     if area > Double(maximumPixels) {
       let scale = (Double(maximumPixels) / area).squareRoot()
@@ -293,11 +308,11 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
     switch preset {
     case .preview:
       GenerationKnobSnapshot(
-        canvas: .p352, denoisingSteps: 4, activeDiTLayers: 50, coreReuse: 1
+        canvas: .p256, denoisingSteps: 4, activeDiTLayers: 50, coreReuse: 1
       )
     case .standard:
       GenerationKnobSnapshot(
-        canvas: .p480, denoisingSteps: 20, activeDiTLayers: 45, coreReuse: 1
+        canvas: .p512, denoisingSteps: 20, activeDiTLayers: 45, coreReuse: 1
       )
     case .high:
       GenerationKnobSnapshot(

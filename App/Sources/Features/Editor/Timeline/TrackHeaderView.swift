@@ -6,8 +6,9 @@ import SwiftUI
 enum TimelineChrome {
   static let headerWidth: CGFloat = 128
   static let rulerHeight: CGFloat = 30
-  static let visualLaneHeight: CGFloat = 112
-  static let audioLaneHeight: CGFloat = 56
+  static let mediaLaneHeight: CGFloat = 56
+  static let visualLaneHeight = mediaLaneHeight
+  static let audioLaneHeight = mediaLaneHeight
   static let effectLaneHeight: CGFloat = 24
   static let appendButtonSize: CGFloat = 36
 

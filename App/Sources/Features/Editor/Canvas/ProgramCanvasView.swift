@@ -51,7 +51,7 @@ struct ProgramCanvasView: View {
           .simultaneousGesture(resetGesture)
           .onHover { pointerInside = $0 }
 
-        CanvasInteractionProbe(onEvent: handlePointer)
+        CanvasInteractionProbe(onEvent: handlePointer, cursorAt: { cursor(at: $0) })
           .allowsHitTesting(true)
       }
       .coordinateSpace(name: "program-canvas")
@@ -195,7 +195,7 @@ struct ProgramCanvasView: View {
     }
     guard var session = model.canvasGesture, case .visual(let id) = session.target,
       let item = model.project.timeline.visualItems.first(where: { $0.id == id }),
-      let program = programPoint(sample.viewPoint)
+      let program = unboundedProgramPoint(sample.viewPoint)
     else {
       return
     }
@@ -262,7 +262,7 @@ struct ProgramCanvasView: View {
     kind: CanvasGestureSession.Kind,
     at sample: CanvasPointerSample
   ) {
-    guard let program = programPoint(sample.viewPoint) else { return }
+    guard let program = unboundedProgramPoint(sample.viewPoint) else { return }
     model.canvasGesture = CanvasGestureSession(
       target: .visual(item.id),
       kind: kind,
@@ -313,6 +313,28 @@ struct ProgramCanvasView: View {
       }
     }
     return .empty
+  }
+
+  private func cursor(at viewPoint: CGPoint) -> NSCursor? {
+    guard let layout = gizmoLayout,
+      let corner = CanvasGizmoGeometry.hitCorner(
+        at: (Double(viewPoint.x), Double(viewPoint.y)),
+        in: layout
+      ),
+      let handle = layout.corners[corner]
+    else {
+      return nil
+    }
+    let centerX = layout.quad.reduce(0) { $0 + $1.x } / Double(layout.quad.count)
+    let centerY = layout.quad.reduce(0) { $0 + $1.y } / Double(layout.quad.count)
+    let position: NSCursor.FrameResizePosition =
+      switch (handle.x >= centerX, handle.y >= centerY) {
+      case (false, false): .topLeft
+      case (true, false): .topRight
+      case (false, true): .bottomLeft
+      case (true, true): .bottomRight
+      }
+    return NSCursor.frameResize(position: position, directions: .all)
   }
 
   private func presentClipMenu(at local: CGPoint) {
@@ -413,6 +435,17 @@ struct ProgramCanvasView: View {
 
   private func programPoint(_ viewPoint: CGPoint) -> (x: Double, y: Double)? {
     CanvasViewportMath.programPoint(
+      viewPoint: (Double(viewPoint.x), Double(viewPoint.y)),
+      viewSize: (Double(viewSize.width), Double(viewSize.height)),
+      aspect: Double(model.project.settings.aspectFraction),
+      padding: CanvasGizmoGeometry.padding,
+      magnification: Double(viewport.magnification),
+      offset: (Double(viewport.offset.width), Double(viewport.offset.height))
+    )
+  }
+
+  private func unboundedProgramPoint(_ viewPoint: CGPoint) -> (x: Double, y: Double)? {
+    CanvasViewportMath.unboundedProgramPoint(
       viewPoint: (Double(viewPoint.x), Double(viewPoint.y)),
       viewSize: (Double(viewSize.width), Double(viewSize.height)),
       aspect: Double(model.project.settings.aspectFraction),

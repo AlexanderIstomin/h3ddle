@@ -1,11 +1,16 @@
 import AppKit
+import AVFoundation
 import H3ddleCore
 import H3ddleDesignSystem
+import H3ddleMedia
+import ImageIO
 import SwiftUI
 
 struct TimelineClipView: View {
   var title: String
   var kind: MediaKind
+  var mediaURL: URL? = nil
+  var sourceOffset: TimeInterval = 0
   var duration: TimeInterval
   var isEnabled: Bool
   var isTrackMuted: Bool = false
@@ -150,13 +155,33 @@ struct TimelineClipView: View {
   @ViewBuilder
   private var decoration: some View {
     switch kind {
-    case .video:
-      filmSprockets
-    case .image:
-      stillDecoration
+    case .video, .image:
+      visualFilmstrip
     case .audio:
       waveform
     }
+  }
+
+  private var visualFilmstrip: some View {
+    ZStack {
+      if let mediaURL {
+        TimelineFilmstripView(
+          request: TimelineFilmstripRequest(
+            url: mediaURL,
+            kind: kind,
+            sourceOffset: sourceOffset,
+            duration: duration
+          )
+        )
+      }
+      LinearGradient(
+        colors: [.clear, .black.opacity(0.5)],
+        startPoint: .center,
+        endPoint: .bottom
+      )
+      filmSprockets.opacity(0.62)
+    }
+    .allowsHitTesting(false)
   }
 
   private var filmSprockets: some View {
@@ -189,17 +214,6 @@ struct TimelineClipView: View {
         Rectangle()
           .stroke(style: StrokeStyle(lineWidth: 4, dash: [3, 6]))
       )
-  }
-
-  private var stillDecoration: some View {
-    ZStack(alignment: .topTrailing) {
-      Color.white.opacity(0.06)
-      Circle()
-        .fill(Color.white.opacity(0.35))
-        .frame(width: 10, height: 10)
-        .padding(.top, 7)
-        .padding(.trailing, 13)
-    }
   }
 
   private var waveform: some View {
@@ -241,6 +255,176 @@ struct TimelineClipView: View {
       .onEnded { _ in
         onMoveEnded?()
       }
+  }
+}
+
+private struct TimelineFilmstripRequest: Hashable, Sendable {
+  var url: URL
+  var kind: MediaKind
+  var sourceOffset: TimeInterval
+  var duration: TimeInterval
+
+  var cacheKey: String {
+    if kind == .image {
+      return "image|\(url.standardizedFileURL.path)"
+    }
+    return "video|\(url.standardizedFileURL.path)|\(sourceOffset.bitPattern)|\(duration.bitPattern)"
+  }
+}
+
+private final class TimelineFilmstripFrames: @unchecked Sendable {
+  let images: [CGImage]
+
+  init(_ images: [CGImage]) {
+    self.images = images
+  }
+
+  var cacheCost: Int {
+    images.reduce(0) { cost, image in
+      cost + image.bytesPerRow * image.height
+    }
+  }
+}
+
+private actor TimelineFilmstripStore {
+  static let shared = TimelineFilmstripStore()
+
+  private let cache = NSCache<NSString, TimelineFilmstripFrames>()
+  private var inFlight: [String: Task<TimelineFilmstripFrames?, Never>] = [:]
+
+  private init() {
+    cache.countLimit = 64
+    cache.totalCostLimit = 128 * 1_024 * 1_024
+  }
+
+  func frames(for request: TimelineFilmstripRequest) async -> [CGImage] {
+    let key = request.cacheKey
+    if let cached = cache.object(forKey: key as NSString) {
+      return cached.images
+    }
+    let task: Task<TimelineFilmstripFrames?, Never>
+    if let existing = inFlight[key] {
+      task = existing
+    } else {
+      let created = Task.detached(priority: .utility) {
+        await Self.load(request)
+      }
+      inFlight[key] = created
+      task = created
+    }
+    let loaded = await task.value
+    inFlight[key] = nil
+    if let loaded {
+      cache.setObject(loaded, forKey: key as NSString, cost: loaded.cacheCost)
+      return loaded.images
+    }
+    return []
+  }
+
+  private nonisolated static func load(
+    _ request: TimelineFilmstripRequest
+  ) async -> TimelineFilmstripFrames? {
+    guard FileManager.default.fileExists(atPath: request.url.path) else { return nil }
+    switch request.kind {
+    case .image:
+      return loadImage(request.url).map { TimelineFilmstripFrames([$0]) }
+    case .video:
+      return await loadVideo(request)
+    case .audio:
+      return nil
+    }
+  }
+
+  private nonisolated static func loadImage(_ url: URL) -> CGImage? {
+    autoreleasepool {
+      let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+        return nil
+      }
+      let thumbnailOptions: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: 240,
+        kCGImageSourceShouldCacheImmediately: true,
+      ]
+      return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+    }
+  }
+
+  private nonisolated static func loadVideo(
+    _ request: TimelineFilmstripRequest
+  ) async -> TimelineFilmstripFrames? {
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: request.url))
+    generator.appliesPreferredTrackTransform = true
+    generator.maximumSize = CGSize(width: 240, height: 144)
+    let tolerance = CMTime(seconds: 0.2, preferredTimescale: 600)
+    generator.requestedTimeToleranceBefore = tolerance
+    generator.requestedTimeToleranceAfter = tolerance
+    var images: [CGImage] = []
+    for seconds in TimelineFilmstripSampling.times(
+      sourceOffset: request.sourceOffset,
+      duration: request.duration
+    ) {
+      let time = CMTime(seconds: seconds, preferredTimescale: 600)
+      if let result = try? await generator.image(at: time) {
+        images.append(result.image)
+      }
+    }
+    return images.isEmpty ? nil : TimelineFilmstripFrames(images)
+  }
+}
+
+private struct TimelineFilmstripView: View {
+  var request: TimelineFilmstripRequest
+  @State private var frames: [CGImage] = []
+
+  var body: some View {
+    GeometryReader { proxy in
+      if !frames.isEmpty {
+        let availableCount = request.kind == .image
+          ? TimelineFilmstripSampling.maximumFrameCount
+          : frames.count
+        let cellCount = min(
+          availableCount,
+          max(1, Int(ceil(proxy.size.width / 56)))
+        )
+        let spacing = CGFloat(1)
+        let cellWidth = max(
+          1,
+          (proxy.size.width - spacing * CGFloat(cellCount - 1)) / CGFloat(cellCount)
+        )
+        HStack(spacing: spacing) {
+          ForEach(0..<cellCount, id: \.self) { index in
+            Image(decorative: frame(at: index, displayedCount: cellCount), scale: 1)
+              .resizable()
+              .scaledToFill()
+              .frame(width: cellWidth, height: proxy.size.height)
+              .clipped()
+          }
+        }
+      }
+    }
+    .task(id: request) {
+      frames = []
+      do {
+        try await Task.sleep(for: .milliseconds(120))
+      } catch {
+        return
+      }
+      let loaded = await TimelineFilmstripStore.shared.frames(for: request)
+      guard !Task.isCancelled else { return }
+      frames = loaded
+    }
+  }
+
+  private func frame(at index: Int, displayedCount: Int) -> CGImage {
+    if request.kind == .image || frames.count == 1 {
+      return frames[0]
+    }
+    guard displayedCount > 1 else { return frames[frames.count / 2] }
+    let position = Double(index) / Double(displayedCount - 1)
+    let sourceIndex = Int((position * Double(frames.count - 1)).rounded())
+    return frames[sourceIndex]
   }
 }
 

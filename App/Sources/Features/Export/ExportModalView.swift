@@ -113,6 +113,8 @@ struct ExportModalView: View {
           .frame(width: 34, height: 34)
           .background(H3Color.controlFill)
           .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(isRendering)

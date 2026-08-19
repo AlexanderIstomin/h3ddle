@@ -60,7 +60,13 @@ struct ProgramTimelineView: View {
       ScrollView(.horizontal) {
         ZStack(alignment: .topLeading) {
           VStack(spacing: 0) {
-            TimeRulerView(duration: contentDuration, metrics: metrics, onSeek: model.seekPlayback)
+            TimeRulerView(
+              duration: contentDuration,
+              metrics: metrics,
+              visibleX: timelineScrollX,
+              visibleWidth: timelineViewportWidth,
+              onSeek: model.seekPlayback
+            )
               .frame(height: TimelineChrome.rulerHeight)
             if model.showsEffectLanes {
               effectLane(items: model.fxLanesExpanded ? [] : model.effectLaneItems)
@@ -170,15 +176,21 @@ struct ProgramTimelineView: View {
   }
 
   private var visualLane: some View {
-    ZStack(alignment: .topLeading) {
+    let renderedPlacements = visualPlacements.filter { placement in
+      visualMove?.itemID == placement.item.id
+        || shouldRenderTimelineSpan(start: placement.startTime, duration: placement.item.duration)
+    }
+    return ZStack(alignment: .topLeading) {
       laneBackground(alt: false)
-      ForEach(visualPlacements, id: \.item.id) { placement in
+      ForEach(renderedPlacements, id: \.item.id) { placement in
         let asset = model.project.asset(id: placement.item.assetID)
         let isMoving = visualMove?.itemID == placement.item.id
         Group {
         TimelineClipView(
           title: asset?.displayName ?? "Visual",
           kind: asset?.kind ?? .video,
+          mediaURL: asset?.url,
+          sourceOffset: placement.item.sourceOffset,
           duration: placement.item.duration,
           isEnabled: placement.item.isEnabled,
           isTrackMuted: model.visualTrackMuted,
@@ -253,10 +265,7 @@ struct ProgramTimelineView: View {
         insertionCaret(
           x: insertionX(
             dest: visualMove.proposedIndex,
-            movingID: visualMove.itemID,
-            placements: visualPlacements.map {
-              (id: $0.item.id, start: $0.startTime, duration: $0.item.duration)
-            }
+            placements: visualMove.reorderTargets
           ),
           height: TimelineChrome.visualLaneHeight
         )
@@ -277,9 +286,13 @@ struct ProgramTimelineView: View {
   }
 
   private var audioLane: some View {
-    ZStack(alignment: .topLeading) {
+    let renderedItems = model.project.timeline.audioItems.filter { item in
+      audioMove?.itemID == item.id
+        || shouldRenderTimelineSpan(start: item.startTime, duration: item.duration)
+    }
+    return ZStack(alignment: .topLeading) {
       laneBackground(alt: true)
-      ForEach(model.project.timeline.audioItems) { item in
+      ForEach(renderedItems) { item in
         let isMoving = audioMove?.itemID == item.id
         TimelineClipView(
           title: model.project.asset(id: item.assetID)?.displayName ?? "Audio",
@@ -325,10 +338,7 @@ struct ProgramTimelineView: View {
         insertionCaret(
           x: insertionX(
             dest: audioMove.proposedIndex,
-            movingID: audioMove.itemID,
-            placements: orderedAudio.map {
-              (id: $0.id, start: $0.startTime, duration: $0.duration)
-            }
+            placements: audioMove.reorderTargets
           ),
           height: TimelineChrome.audioLaneHeight
         )
@@ -349,9 +359,12 @@ struct ProgramTimelineView: View {
   }
 
   private func effectLane(items: [EffectLaneItem]) -> some View {
-    ZStack(alignment: .topLeading) {
+    let renderedItems = items.filter { item in
+      shouldRenderTimelineSpan(start: item.startTime, duration: item.duration)
+    }
+    return ZStack(alignment: .topLeading) {
       Color.white.opacity(0.045)
-      ForEach(items) { item in
+      ForEach(renderedItems) { item in
         TimelineEffectPill(
           title: item.effect.kind.label,
           tint: item.effect.kind.swatch,
@@ -616,31 +629,52 @@ struct ProgramTimelineView: View {
     model.project.timeline.audioItems.sorted(by: TimelineReorderMath.audioOrder)
   }
 
+  private var renderedTimeRange: ClosedRange<TimeInterval> {
+    TimelineRuler.visibleTimeRange(
+      scrollOffset: Double(timelineScrollX),
+      viewportWidth: Double(timelineViewportWidth),
+      pointsPerSecond: Double(metrics.pointsPerSecond),
+      overscanPoints: Double(timelineViewportWidth)
+    )
+  }
+
+  private func shouldRenderTimelineSpan(
+    start: TimeInterval,
+    duration: TimeInterval
+  ) -> Bool {
+    TimelineRuler.spanIntersects(
+      start: start,
+      duration: duration,
+      visibleRange: renderedTimeRange
+    )
+  }
+
   private func dragVisual(_ placement: VisualPlacement, translation: CGFloat) {
-    clipMenu = nil
-    appendMenu = nil
-    model.selectedTimelineItem = .visual(placement.item.id)
-    let from = visualPlacements.firstIndex(where: { $0.item.id == placement.item.id }) ?? 0
     if visualMove?.itemID != placement.item.id {
+      clipMenu = nil
+      appendMenu = nil
+      model.selectedTimelineItem = .visual(placement.item.id)
+      let placements = visualPlacements
+      let from = placements.firstIndex(where: { $0.item.id == placement.item.id }) ?? 0
       visualMove = ClipMoveSession(
         itemID: placement.item.id,
         fromIndex: from,
         originStart: placement.startTime,
         translation: 0,
-        proposedIndex: from
+        proposedIndex: from,
+        reorderTargets: placements
+          .filter { $0.item.id != placement.item.id }
+          .map { (start: $0.startTime, duration: $0.item.duration) }
       )
       NSCursor.closedHand.push()
     }
     let dropTime =
       placement.startTime + placement.item.duration / 2 + metrics.time(for: translation)
-    let others = visualPlacements
-      .filter { $0.item.id != placement.item.id }
-      .map { (start: $0.startTime, duration: $0.item.duration) }
     guard var session = visualMove else { return }
     session.translation = translation
     session.proposedIndex = TimelineReorderMath.destinationIndex(
       dropTime: dropTime,
-      others: others
+      others: session.reorderTargets
     )
     visualMove = session
   }
@@ -659,30 +693,30 @@ struct ProgramTimelineView: View {
   }
 
   private func dragAudio(_ item: AudioItem, translation: CGFloat) {
-    clipMenu = nil
-    appendMenu = nil
-    model.selectedTimelineItem = .audio(item.id)
-    let ordered = orderedAudio
-    let from = ordered.firstIndex(where: { $0.id == item.id }) ?? 0
     if audioMove?.itemID != item.id {
+      clipMenu = nil
+      appendMenu = nil
+      model.selectedTimelineItem = .audio(item.id)
+      let ordered = orderedAudio
+      let from = ordered.firstIndex(where: { $0.id == item.id }) ?? 0
       audioMove = ClipMoveSession(
         itemID: item.id,
         fromIndex: from,
         originStart: item.startTime,
         translation: 0,
-        proposedIndex: from
+        proposedIndex: from,
+        reorderTargets: ordered
+          .filter { $0.id != item.id }
+          .map { (start: $0.startTime, duration: $0.duration) }
       )
       NSCursor.closedHand.push()
     }
     let dropTime = item.startTime + item.duration / 2 + metrics.time(for: translation)
-    let others = ordered
-      .filter { $0.id != item.id }
-      .map { (start: $0.startTime, duration: $0.duration) }
     guard var session = audioMove else { return }
     session.translation = translation
     session.proposedIndex = TimelineReorderMath.destinationIndex(
       dropTime: dropTime,
-      others: others
+      others: session.reorderTargets
     )
     audioMove = session
   }
@@ -707,17 +741,15 @@ struct ProgramTimelineView: View {
 
   private func insertionX(
     dest: Int,
-    movingID: UUID,
-    placements: [(id: UUID, start: TimeInterval, duration: TimeInterval)]
+    placements: [(start: TimeInterval, duration: TimeInterval)]
   ) -> CGFloat {
-    let others = placements.filter { $0.id != movingID }
     if dest <= 0 {
-      return others.first.map { metrics.x(for: $0.start) } ?? 0
+      return placements.first.map { metrics.x(for: $0.start) } ?? 0
     }
-    if dest >= others.count {
-      return others.last.map { metrics.x(for: $0.start + $0.duration) } ?? 0
+    if dest >= placements.count {
+      return placements.last.map { metrics.x(for: $0.start + $0.duration) } ?? 0
     }
-    return metrics.x(for: others[dest].start)
+    return metrics.x(for: placements[dest].start)
   }
 
   private func insertionCaret(x: CGFloat, height: CGFloat) -> some View {
@@ -837,6 +869,7 @@ private struct ClipMoveSession {
   var originStart: TimeInterval
   var translation: CGFloat
   var proposedIndex: Int
+  var reorderTargets: [(start: TimeInterval, duration: TimeInterval)]
 }
 
 private struct TransitionDragSession {

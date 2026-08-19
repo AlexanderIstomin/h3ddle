@@ -591,9 +591,8 @@ final class AppModel {
   ) {
     guard let kind = activeGenerationKind else { return }
     GenerationNotifier.requestAuthorizationIfNeeded()
-    // Up front rather than on the first progress event: loading a model can
-    // take a minute before anything is reported, and a short run can finish
-    // before the first event arrives at all.
+    // Show activity before the first engine event; model loading can take a
+    // while and some short runs complete before reporting progress.
     DockAttention.showProgress(0)
     generationTask?.cancel()
     isGenerating = true
@@ -629,12 +628,9 @@ final class AppModel {
     // the last run's numbers — a full bar and no preparation band.
     generationProgressTracker = GenerationProgressTracker(
       countsPasses: audioEngine == .h3)
-    // Speech reports frames against the ceiling it was sent, and that ceiling
-    // is deliberately generous so a long line is never cut off mid-word — so
-    // its fraction stops wherever the line ends, measured at 49% on a run that
-    // had entirely finished. Stopping and being half done are different
-    // questions, so the Dock is told the second one: how far through the line
-    // this is, at fourteen characters a second for English at a normal pace.
+    // Speech reports frames against a deliberately generous ceiling, so
+    // scale that fraction using the expected spoken duration before showing
+    // it as whole-run Dock progress.
     let progressScale: Double = {
       guard audioEngine == .speech else { return 1 }
       let expected = max(1.0, Double(prompt.count) / 14)
@@ -668,18 +664,61 @@ final class AppModel {
         : "")
       + (seed.map { " · seed \($0)" } ?? "")
 
+    let usesH3Settings: Bool = {
+      switch kind {
+      case .video: videoEngine == .h3
+      case .image: imageEngine == .h3
+      case .audio: audioEngine == .h3
+      }
+    }()
+    let resolvedSteps: Int? = {
+      switch (kind, audioEngine, imageEngine, videoEngine) {
+      case (.audio, .speech, _, _): nil
+      case (.audio, .stableAudio, _, _): denoisingSteps ?? Self.soundEffectDefaultSteps
+      case (.image, _, .zImage, _): denoisingSteps ?? Self.imageModelDefaultSteps
+      case (.video, _, _, .ltx): denoisingSteps ?? 8
+      default: denoisingSteps ?? quality.denoisingSteps
+      }
+    }()
+    let conditioningDescription: String? = {
+      guard kind != .audio else { return nil }
+      if acceptsSourcePicture {
+        guard studioStartFrame != nil else { return "none" }
+        return "picture to work from (repaint \(Int((studioSourceStrength * 100).rounded()))%)"
+      }
+      var anchors: [String] = []
+      if studioStartFrame != nil { anchors.append("start frame") }
+      if studioEndFrame != nil { anchors.append("end frame") }
+      if !anchors.isEmpty { return anchors.joined(separator: " + ") }
+      let referenceCount = studioReferenceImages.count
+      if referenceCount > 0 {
+        return "\(referenceCount) reference image\(referenceCount == 1 ? "" : "s")"
+      }
+      return "none"
+    }()
 
     pendingStatistics = GenerationStatistics(
       kind: kind,
       seconds: 0,
       canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
       canvasHeight: kind == .audio ? nil : canvasHeight ?? quality.canvasSize,
-      denoisingSteps: ownPackage
-        ? (denoisingSteps ?? Self.soundEffectDefaultSteps)
-        : (denoisingSteps ?? quality.denoisingSteps),
+      denoisingSteps: resolvedSteps,
+      stepLabel: videoEngine == .ltx ? "steps" : "passes",
       clipSeconds: duration,
       modelName: runningModelName,
-      blockCache: blockCache,
+      aspectRatio: kind == .audio ? nil : studioAspect.rawValue,
+      transformerBlocks: usesH3Settings
+        ? (activeDiTLayers ?? quality.activeDiTLayers) : nil,
+      coreReuse: usesH3Settings ? (blockCache ? 1 : coreReuse ?? 1) : nil,
+      blockCache: usesH3Settings ? blockCache : nil,
+      stillFrameCount: kind == .image && imageEngine == .h3
+        ? (fastStill ? 5 : 22) : nil,
+      previewDenoise: usesH3Settings && kind != .audio ? previewDenoise : nil,
+      seed: kind == .audio ? nil : seed,
+      conditioning: conditioningDescription,
+      speechLanguage: audioEngine == .speech ? studioSpeechLanguage.displayName : nil,
+      speechVariation: audioEngine == .speech ? studioSpeechTemperature : nil,
+      voiceName: audioEngine == .speech ? selectedVoiceName : nil,
       deviceName: modelReport?.device.name,
       deviceMemoryBytes: modelReport?.device.physicalMemory
     )
@@ -799,8 +838,8 @@ final class AppModel {
               phaseFraction: fractionComplete,
               elapsed: generationElapsed
             )
-            // Just short of 100 while it is still running: arriving there and
-            // staying reads as finished when it is not.
+            // Reserve 100% for completion rather than making a running task
+            // look finished.
             DockAttention.showProgress(
               min(0.99, generationOverallProgress * progressScale))
             phaseTimeline.record(
@@ -817,6 +856,7 @@ final class AppModel {
             }
           case .completed(let asset):
             generationProgressTracker.finish()
+            pendingStatistics?.clipSeconds = asset.duration
             studioResults.insert(
               GenerationResult(
                 id: UUID(),
@@ -1494,6 +1534,8 @@ final class AppModel {
     return modelChoices.filter {
       $0.isInstalled && capabilities.contains($0.capability)
         && (role == nil || $0.audioRole == role)
+        && (kind != .image || $0.capability == .image
+          || $0.videoEngine.supportsStillGeneration)
     }
   }
 
@@ -2169,8 +2211,7 @@ final class AppModel {
         GenerationNotifier.generationFinished(kind: kind, seconds: elapsed)
       }
     } else {
-      // Cancelled, or failed after the progress badge went up. Either way the
-      // percentage is stale and there is nothing to announce.
+      // A cancelled or failed run has nothing to announce.
       DockAttention.markGenerationStopped()
     }
     pendingStatistics = nil

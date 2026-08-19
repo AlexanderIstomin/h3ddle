@@ -104,11 +104,27 @@ public enum ProgramPreview {
     transformOverrides: [UUID: CanvasObjectTransform] = [:]
   ) -> ProgramPreviewFrame {
     let plan = ProgramCompositionPlan(project: project)
-    let previewDuration = max(
-      project.timeline.visualDuration,
-      project.timeline.audioTrackEnd,
-      project.timeline.textTrackEnd
+    return frame(
+      at: time,
+      project: project,
+      plan: plan,
+      visualMuted: visualMuted,
+      audioMuted: audioMuted,
+      textMuted: textMuted,
+      transformOverrides: transformOverrides
     )
+  }
+
+  public static func frame(
+    at time: TimeInterval,
+    project: H3ddleProject,
+    plan: ProgramCompositionPlan,
+    visualMuted: Bool = false,
+    audioMuted: Bool = false,
+    textMuted: Bool = false,
+    transformOverrides: [UUID: CanvasObjectTransform] = [:]
+  ) -> ProgramPreviewFrame {
+    let previewDuration = plan.duration + plan.trailingAudioDuration
     let query = queryTime(time, duration: previewDuration)
     var visual: ProgramVisualPresentation = .empty
     var visualTransform = VisualCanvasTransform.identity

@@ -36,6 +36,24 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.licenseURL.absoluteString.contains("939557dc319dd91227e30195a763f272ba7f8765"))
   }
 
+  @Test("Video and image package descriptions name user-facing capabilities")
+  func packageCapabilityDescriptions() {
+    let ltx = ModelCatalog.ltx25.detail
+    #expect(ltx.contains("2–20 second videos with synchronized sound"))
+    #expect(ltx.contains("start/end frames"))
+    #expect(ltx.contains("up to four reference images"))
+    #expect(ltx.contains("320p to 1080p"))
+    #expect(ltx.contains("eight steps"))
+    #expect(!ltx.contains("no reference images"))
+
+    let zImage = ModelCatalog.zImageTurbo.detail
+    #expect(zImage.contains("high-quality still images"))
+    #expect(zImage.contains("repaints a source picture"))
+    #expect(zImage.contains("portrait, square, and landscape"))
+    #expect(zImage.contains("512p to 1536p"))
+    #expect(zImage.contains("eight passes"))
+  }
+
   @Test("A completed package is verified and installed atomically")
   func installsPackage() async throws {
     let fixture = Data("small model fixture".utf8)

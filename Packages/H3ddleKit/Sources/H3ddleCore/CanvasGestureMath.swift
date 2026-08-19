@@ -37,9 +37,38 @@ public enum CanvasViewportMath: Sendable {
     )
     guard contains(unscaled, in: monitor) else { return nil }
     guard monitor.width > 0, monitor.height > 0 else { return nil }
+    return normalizedProgramPoint(unscaled, in: monitor)
+  }
+
+  /// Converts a view point without rejecting coordinates outside the monitor.
+  /// This keeps an active canvas gesture responsive when a handle or pointer
+  /// crosses the artwork boundary.
+  public static func unboundedProgramPoint(
+    viewPoint: (x: Double, y: Double),
+    viewSize: (width: Double, height: Double),
+    aspect: Double,
+    padding: Double,
+    magnification: Double,
+    offset: (x: Double, y: Double)
+  ) -> (x: Double, y: Double)? {
+    let monitor = monitorRect(viewSize: viewSize, aspect: aspect, padding: padding)
+    guard monitor.width > 0, monitor.height > 0 else { return nil }
+    let unscaled = unscaledViewPoint(
+      viewPoint: viewPoint,
+      viewSize: viewSize,
+      magnification: magnification,
+      offset: offset
+    )
+    return normalizedProgramPoint(unscaled, in: monitor)
+  }
+
+  private static func normalizedProgramPoint(
+    _ point: (x: Double, y: Double),
+    in monitor: CanvasLayout.Rect
+  ) -> (x: Double, y: Double) {
     return (
-      (unscaled.x - monitor.x) / monitor.width,
-      1 - (unscaled.y - monitor.y) / monitor.height
+      (point.x - monitor.x) / monitor.width,
+      1 - (point.y - monitor.y) / monitor.height
     )
   }
 

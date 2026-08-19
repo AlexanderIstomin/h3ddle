@@ -12,6 +12,26 @@ public struct TimelineTick: Equatable, Sendable {
   }
 }
 
+public enum TimelineFilmstripSampling {
+  public static let maximumFrameCount = 12
+
+  public static func times(
+    sourceOffset: TimeInterval,
+    duration: TimeInterval,
+    frameCount: Int = maximumFrameCount
+  ) -> [TimeInterval] {
+    let start = max(0, sourceOffset)
+    let count = min(max(1, frameCount), maximumFrameCount)
+    let sampledDuration = max(0, duration - 1.0 / 600.0)
+    guard count > 1, sampledDuration > 0 else {
+      return [start + sampledDuration / 2]
+    }
+    return (0..<count).map { index in
+      start + sampledDuration * Double(index) / Double(count - 1)
+    }
+  }
+}
+
 public enum TimelineRuler {
   public static let basePointsPerSecond: Double = 13
   public static let minimumZoom = 0.05
@@ -44,6 +64,31 @@ public enum TimelineRuler {
     return max(0, time * newPps - anchor)
   }
 
+  public static func visibleTimeRange(
+    scrollOffset: Double,
+    viewportWidth: Double,
+    pointsPerSecond: Double,
+    overscanPoints: Double = 0
+  ) -> ClosedRange<TimeInterval> {
+    let pps = max(pointsPerSecond, 0.000_1)
+    let overscan = max(0, overscanPoints)
+    let startPoints = max(0, scrollOffset - overscan)
+    let endPoints = max(
+      startPoints,
+      scrollOffset + max(0, viewportWidth) + overscan
+    )
+    return startPoints / pps...endPoints / pps
+  }
+
+  public static func spanIntersects(
+    start: TimeInterval,
+    duration: TimeInterval,
+    visibleRange: ClosedRange<TimeInterval>
+  ) -> Bool {
+    start <= visibleRange.upperBound
+      && start + max(0, duration) >= visibleRange.lowerBound
+  }
+
   public static func contentDuration(
     visualDuration: TimeInterval,
     audioTrackEnd: TimeInterval,
@@ -67,14 +112,31 @@ public enum TimelineRuler {
   }
 
   public static func ticks(duration: TimeInterval, pointsPerSecond: Double) -> [TimelineTick] {
+    ticks(
+      duration: duration,
+      pointsPerSecond: pointsPerSecond,
+      visibleRange: 0...max(0, duration)
+    )
+  }
+
+  public static func ticks(
+    duration: TimeInterval,
+    pointsPerSecond: Double,
+    visibleRange: ClosedRange<TimeInterval>
+  ) -> [TimelineTick] {
     let pps = max(1, pointsPerSecond)
     let major = majorInterval(pointsPerSecond: pps)
     let minor = major / 4
     let drawMinor = drawsMinorTicks(pointsPerSecond: pps)
     let end = max(0, duration)
+    let visibleStart = max(0, visibleRange.lowerBound)
+    let visibleEnd = min(end, visibleRange.upperBound)
+    guard visibleStart <= visibleEnd else { return [] }
+    let firstIndex = max(0, Int(ceil((visibleStart - 1e-6) / minor)))
+    let lastIndex = Int(floor((visibleEnd + 1e-6) / minor))
+    guard firstIndex <= lastIndex else { return [] }
     var ticks: [TimelineTick] = []
-    var index = 0
-    while Double(index) * minor <= end + 1e-6 {
+    for index in firstIndex...lastIndex {
       let time = Double(index) * minor
       let isMajor = abs((time / major) - (time / major).rounded()) < 1e-6
       if isMajor || drawMinor {
@@ -86,7 +148,6 @@ public enum TimelineRuler {
           )
         )
       }
-      index += 1
     }
     return ticks
   }

@@ -58,6 +58,11 @@ public enum VideoGenerationEngine: String, Codable, Sendable {
   /// Whether this engine loads a package of its own rather than the H3 tree.
   public var usesOwnPackage: Bool { self != .h3 }
 
+  /// Whether this video package also implements the app's still-generation
+  /// contract. H3 keeps a decoded frame from a short temporal generation;
+  /// LTX currently has only its video/MP4 service path.
+  public var supportsStillGeneration: Bool { self == .h3 }
+
   /// Whether a clip from this engine can be conditioned on pictures. Both can
   /// now, by different means: H3 reads them as keyframes and Ref2VA stills,
   /// LTX encodes them and appends their tokens to the DiT's own sequence.

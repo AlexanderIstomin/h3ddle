@@ -18,7 +18,14 @@ struct GenerationStatisticsTests {
       denoisingSteps: 8,
       clipSeconds: 3,
       modelName: "MiniMax H3 · Turbo",
+      aspectRatio: "1:1",
+      transformerBlocks: 45,
+      coreReuse: 4,
       blockCache: blockCache,
+      stillFrameCount: 22,
+      previewDenoise: true,
+      seed: 12_345,
+      conditioning: "none",
       deviceName: "Apple M1 Pro",
       deviceMemoryBytes: 34_359_738_368
     )
@@ -29,7 +36,10 @@ struct GenerationStatisticsTests {
     let summary = statistics().socialSummary
     #expect(summary.hasPrefix("Generated an image at 448x448 in 6 min 1 s"))
     #expect(summary.contains("on Apple M1 Pro with 32 GB, fully offline."))
-    #expect(summary.contains("Settings: 8 denoising passes, model MiniMax H3 · Turbo."))
+    #expect(summary.contains("Settings: model MiniMax H3 · Turbo, aspect 1:1, 8 passes"))
+    #expect(summary.contains("45 transformer blocks, core reuse every 4th pass"))
+    #expect(summary.contains("still detail Full 22f, denoising preview on"))
+    #expect(summary.contains("seed 12345, conditioning none"))
     #expect(summary.contains("github.com/AlexanderIstomin/h3ddle"))
   }
 
@@ -44,14 +54,53 @@ struct GenerationStatisticsTests {
     var stats = statistics(kind: .audio)
     stats.canvasWidth = nil
     stats.canvasHeight = nil
+    stats.aspectRatio = nil
+    stats.transformerBlocks = nil
+    stats.coreReuse = nil
+    stats.blockCache = nil
+    stats.stillFrameCount = nil
+    stats.previewDenoise = nil
+    stats.seed = nil
+    stats.conditioning = nil
     #expect(stats.socialSummary.hasPrefix("Generated 3.0s of audio in 6 min 1 s"))
     #expect(!stats.socialSummary.contains(" at "))
   }
 
-  @Test("The block cache is mentioned only when it ran")
+  @Test("Repeatable switches state whether they were on or off")
   func blockCacheMention() {
-    #expect(!statistics().socialSummary.contains("block cache"))
+    #expect(statistics().socialSummary.contains("block cache off"))
     #expect(statistics(blockCache: true).socialSummary.contains("block cache on"))
+  }
+
+  @Test("Model-specific step wording and speech settings stay user-facing")
+  func modelSpecificSettings() {
+    var ltx = statistics(kind: .video)
+    ltx.stepLabel = "steps"
+    ltx.transformerBlocks = nil
+    ltx.coreReuse = nil
+    ltx.blockCache = nil
+    ltx.stillFrameCount = nil
+    ltx.previewDenoise = nil
+    #expect(ltx.socialSummary.contains("8 steps"))
+    #expect(!ltx.socialSummary.contains("transformer blocks"))
+
+    var speech = statistics(kind: .audio)
+    speech.canvasWidth = nil
+    speech.canvasHeight = nil
+    speech.denoisingSteps = nil
+    speech.aspectRatio = nil
+    speech.transformerBlocks = nil
+    speech.coreReuse = nil
+    speech.blockCache = nil
+    speech.stillFrameCount = nil
+    speech.previewDenoise = nil
+    speech.seed = nil
+    speech.conditioning = nil
+    speech.speechLanguage = "English"
+    speech.speechVariation = 0.9
+    speech.voiceName = "Neutral"
+    #expect(!speech.socialSummary.contains("passes"))
+    #expect(speech.socialSummary.contains("language English, variation 0.90, voice Neutral"))
   }
 
   @Test("Sub-minute and whole-minute runs read naturally")

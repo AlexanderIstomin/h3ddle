@@ -332,12 +332,11 @@ public struct EngineModelReport: Hashable, Codable, Sendable {
 /// Validated speed/quality presets for H3 generation. Each tier maps to a
 /// combination the vendored h3.c documentation has validated end to end;
 /// arbitrary parameter mixes are deliberately not exposed here.
-/// H3's operating envelope, as the released pipeline defines it: `adapt_canvas`
-/// pins the short edge and caps the area, and everything that asks the engine
-/// for a size resolves through here so no caller can invent a ladder of its
-/// own again.
+/// H3's native resolution and hard operating envelope. Callers can choose the
+/// engine's lower validated 256p and 512p tiers, while every request remains
+/// bounded by this native 768p / 768x1344 ceiling.
 public enum H3NativeCanvas: Sendable {
-  /// The fixed dimension: height in landscape, width in portrait.
+  /// The native tier's short edge: height in landscape, width in portrait.
   public static let shortEdge = 768
   /// The area ceiling, from the reference's 768x1344 bound.
   public static let maximumPixels = 768 * 1344
@@ -354,19 +353,10 @@ public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   /// Sized for M5-class Macs; slow on anything earlier.
   case high
 
-  /// Output canvas edge, used when a request names no size of its own.
-  ///
-  /// H3 renders one canvas. The reference pipeline pins the short edge to 768
-  /// and caps the area at 768x1344, and the hosted endpoints offer that and
-  /// an upscaled 2K, nothing between. This tier used to step 448/512/768, so
-  /// two of the three defaults sat below anything the model was trained on:
-  /// prompts stopped steering the scene and output became a function of the
-  /// seed. Measured repeatedly through 2026-08-14 — a clip prompted for a red
-  /// apple returned a man in a suit at 352, 448 and 640, on both checkpoints,
-  /// at four pass counts, and returned the apple at 768.
-  ///
-  /// A tier buys passes and blocks now, not pixels. Preview stays cheap by
-  /// rendering fewer frames, which costs nothing in adherence.
+  /// Native fallback used when a request names no explicit canvas. The studio
+  /// sends its selected H3 resolution explicitly, so this remains a safe
+  /// default for other protocol clients rather than coupling work presets to
+  /// output size.
   public var canvasSize: Int { H3NativeCanvas.shortEdge }
 
   /// Denoising passes. Four is the minimum validated budget; twenty is the

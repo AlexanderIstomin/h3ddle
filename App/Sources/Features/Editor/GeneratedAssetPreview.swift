@@ -59,11 +59,7 @@ struct GeneratedAssetPreview: View {
       NativeVideoPlayer(url: asset.url)
         .accessibilityIdentifier("generated-video-player")
     case .image:
-      if let image = NSImage(contentsOf: asset.url) {
-        Image(nsImage: image)
-          .resizable()
-          .scaledToFit()
-      } else {
+      LocalImagePreview(url: asset.url) {
         unavailableMedia
       }
     case .audio:

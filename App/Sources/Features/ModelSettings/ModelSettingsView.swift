@@ -119,6 +119,7 @@ struct ModelSettingsView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
               .stroke(H3Color.line, lineWidth: 1)
           }
+          .frame(width: 44, height: 44)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
