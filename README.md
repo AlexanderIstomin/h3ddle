@@ -72,9 +72,13 @@ and every file is verified by SHA-256 before install. Packages reuse identical
 files where possible so installing a related model does not duplicate shared
 weights.
 
-The managed MiniMax H3 Turbo packages ship a full input-major FL2VA
-transformer. All 200 quantized core projections are pre-transposed for the
+The managed MiniMax H3 standard and Turbo packages ship full input-major FL2VA
+transformers. All 200 quantized core projections are pre-transposed for the
 faster Metal path; the tensor values and prompt-only output are unchanged.
+The standard artifact is published in
+[PulpCut/MiniMax-H3-INT8-ConvRot](https://huggingface.co/PulpCut/MiniMax-H3-INT8-ConvRot),
+and the distilled artifact remains in
+[PulpCut/MiniMax-H3-Turbo-INT8-ConvRot](https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot).
 Both INT8 + Hybrid References packages add the same 43.55 MB Ref2VA AdaLN
 overlay instead of a second 20.97 GB transformer. Full standard Ref2VA weights
 remain in the

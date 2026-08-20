@@ -204,9 +204,18 @@ The Ref2VA Turbo 512x896 reference A/B reduced transformer time from 541.2 to
 515.3 seconds: **25.9 seconds, or 4.8%**. Total generation fell from 631.4 to
 595.9 seconds, with good reference output.
 
-The complete transformer is the only optimized managed path; no auxiliary
-weight file is required. Turbo + References downloads two transformer files
-while accelerating all four projections in both flows.
+The standard FL2VA checkpoint was repacked through the same path after all 200
+converted matrices were checked against the exact transpose and all 732 other
+tensors were checked byte-for-byte. A native 50-layer output-major/input-major
+smoke comparison produced identical video and audio hashes; the complete
+input-major file has SHA-256
+`5a0a3e1e73f099680896a98ab418870f27711800ac73b5f16af81724fc7e567a`.
+Its first real app image passed visual approval before publication.
+
+Standard and Turbo managed packages now use their respective complete
+input-major FL2VA core. Each Hybrid References variant reuses that core and
+adds the shared 43.55 MB AdaLN overlay; it does not install a second full
+transformer.
 
 ### What is left
 
