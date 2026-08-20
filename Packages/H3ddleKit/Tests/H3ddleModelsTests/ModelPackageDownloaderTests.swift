@@ -254,7 +254,7 @@ struct ModelPackageDownloaderTests {
     #expect(try Data(contentsOf: destination) == fixture)
   }
 
-  @Test("The turbo package shares every non-transformer file with the standard package")
+  @Test("The turbo package adds its transformer and exact-output FC2 sidecar")
   func turboManifestSharing() throws {
     let standard = ModelCatalog.minimaxH3Int8
     let turbo = ModelCatalog.minimaxH3TurboInt8
@@ -275,18 +275,73 @@ struct ModelPackageDownloaderTests {
     #expect(
       turbo.downloadURL(for: turboTransformer).absoluteString
         == "https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot/resolve/"
-          + "4aea334367e4007d7b3630810ec28eb97639ae65/"
+          + "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65/"
           + "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
     )
-    // Every non-transformer file is identical across the two packages, so an
-    // install of one can supply the other.
+    let sidecar = try #require(turbo.files.first { $0.role == .transformerSidecar })
+    #expect(
+      sidecar.path
+        == "diffusion_models/"
+          + "minimax_h3_fl2va_pruned_int8_convrot_fc2_input_major.safetensors"
+    )
+    #expect(sidecar.byteCount == 3_853_522_260)
+    #expect(
+      sidecar.sha256
+        == "76a4886d1acb1cde7993bab5f6ada9a2abc2ea61be5b01a59f25451642d18a33"
+    )
+    #expect(
+      turbo.downloadURL(for: sidecar).absoluteString
+        == "https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot/resolve/"
+          + "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65/"
+          + "minimax_h3_fl2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
+    )
+    // Every base-package file is identical across the two packages, so an
+    // install of one can supply the other. The Turbo-only sidecar is excluded.
     let sharedStandard = standard.files.filter { $0.role != .transformer }
-    let sharedTurbo = turbo.files.filter { $0.role != .transformer }
+    let sharedTurbo = turbo.files.filter {
+      $0.role != .transformer && $0.role != .transformerSidecar
+    }
     #expect(sharedStandard == sharedTurbo)
     let videoVAE = try #require(turbo.files.first { $0.role == .videoVAE })
     #expect(
       turbo.downloadURL(for: videoVAE).absoluteString
         .hasPrefix("https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/")
+    )
+  }
+
+  @Test("The reference Turbo package ships a source-bound sidecar for each transformer")
+  func referenceTurboManifestSidecars() throws {
+    let manifest = ModelCatalog.minimaxH3Ref2VATurboInt8
+    let transformers = manifest.files.filter {
+      $0.role == .transformer || $0.role == .referenceTransformer
+    }
+    let sidecars = manifest.files.filter { $0.role == .transformerSidecar }
+
+    #expect(transformers.count == 2)
+    #expect(sidecars.count == 2)
+    for transformer in transformers {
+      let expectedPath = transformer.path.replacingOccurrences(
+        of: ".safetensors", with: "_fc2_input_major.safetensors"
+      )
+      let sidecar = try #require(sidecars.first { $0.path == expectedPath })
+      #expect(sidecar.sourceRepository == transformer.sourceRepository)
+      #expect(sidecar.sourceRevision == transformer.sourceRevision)
+      #expect(sidecar.byteCount == 3_853_522_260)
+    }
+
+    let referenceSidecar = try #require(
+      sidecars.first { $0.path.contains("minimax_h3_ref2va_pruned_int8_convrot_") }
+    )
+    #expect(
+      referenceSidecar.sha256
+        == "0ad6a5673abdf842c39d4d8de7c34c971a420b64bd5f79eb6f4331c5bfb5cd97"
+    )
+    #expect(
+      manifest.downloadURL(for: referenceSidecar).absoluteString
+        == "https://huggingface.co/PulpCut/"
+          + "MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot/resolve/"
+          + "e64afa326a209e38078e2d64155acbf575157d77/"
+          + "minimax_h3_ref2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
     )
   }
 

@@ -177,14 +177,72 @@ is, and it is 3.85 GB of the package rather than all of it. Transposing just
 that projection, or writing a k-contiguous variant for deep-K shapes, would
 recover most of the 17% without touching the rest.
 
+### Retired: on-the-fly FC2 transpose
+
+An experiment transposed each streamed FC2 into the alternate bounded Metal
+slot while the preceding block ran, then used the input-major tile. Isolated
+FC2 and local two-pass measurements looked promising, but the production app
+did not confirm them. With both processes started cold at the same 512x512,
+eight-pass, 50-block settings, transformer totals were 256.6 and 253.8 seconds:
+only 1.1% apart, with overlapping per-step distributions. That is below the
+3% noise floor and did not justify extra streaming complexity. The transpose,
+environment control, tests, and documentation were removed.
+
+### Shipped: pre-transposed FC2 sidecar
+
+The useful part of the alternate layout can instead be prepared once, outside
+generation. `Scripts/optimize-h3-fc2-sidecar.py` writes the 50 INT8 FC2
+matrices in input-major order to a sibling safetensors sidecar. The source
+checkpoint, its per-output scales, and all other projections remain unchanged.
+The sidecar costs 3.589 GiB per transformer and is discovered automatically;
+`H3_DIT_FC2_INPUT_MAJOR=0` disables it and `=1` requires a valid sidecar.
+
+The loader checks a format marker, source file size, source-header fingerprint,
+and every FC2 tensor schema before selecting the alternate kernel. A missing or
+stale optional sidecar therefore falls back to the original output-major path
+instead of applying weights from a different checkpoint.
+
+The managed FL2VA Turbo package ships its source-bound sidecar from the same
+pinned Hugging Face revision as the transformer. Turbo + References ships both
+the FL2VA and Ref2VA sidecars. The standalone converter remains available for
+other compatible checkpoints; managed-package files are also size- and
+SHA-256-verified by the app before installation.
+
+An A/B/B/A run used the same optimized FL2VA Turbo checkpoint and real
+512-class latent shape for all four complete 50-block forwards:
+
+| path | first | second | mean |
+|---|---:|---:|---:|
+| original output-major FC2 | 34.452 s | 34.036 s | 34.244 s |
+| input-major FC2 sidecar | 32.025 s | 31.567 s | 31.796 s |
+
+That is 2.448 seconds per pass, or **7.15% of transformer time**; eight passes
+save about 19.6 seconds. Every run produced video hash
+`dc9158e61e05de24` and audio hash `548cddc5e876f881`, and the full 50-layer
+tiny-row oracle also remained byte-identical. Tracked peak Metal residency was
+unchanged at 1.487 GiB because the sidecar replaces each streamed FC2 matrix
+rather than becoming an additional resident copy.
+
 ### What is left
 
-`h3_text_encoder.c` is still on the 8x8 tile. It is worth much less than it
-looks: the text encoder is 7 s of a run, not the 182 s of "loading" this
-section used to claim. That figure was arrived at by subtracting the passes
-from the total and calling the remainder loading, without looking — it was
-almost entirely the video VAE decode, and measuring it rather than inferring
-it is what found the next 2.2x.
+`h3_text_encoder.c` now selects the same exact-output 64x40 output-major tile
+for optimized Qwen sequences of at least 24 tokens. Real Qwen shapes on M1 Pro
+showed the old 8x8 tile winning at 8 and 16 rows; the crossover was 24-32 rows,
+and at 48-128 rows the larger tile was 1.8-6.0x faster depending on projection.
+An old/new/new/old complete 50-layer run at 32 tokens averaged 6.67 seconds on
+8x8 and 5.76 seconds on 64x40, a 13.7% reduction. All four final BF16 embedding
+hashes were `6e8cb132f08acbe0`, and peak Metal residency remained 0.914 GiB.
+`H3_QWEN_TILE=0` restores 8x8. The text encoder is still a much smaller target
+than DiT: it is 7-12 s of a run, not the 182 s of "loading" this section once
+claimed. That figure was arrived at by subtracting the passes from the total
+and calling the remainder loading, without looking — it was almost entirely
+the video VAE decode, and measuring it rather than inferring it is what found
+the next 2.2x.
+
+The corrected cold app A/B on the 32 GiB M1 Pro was stronger: 11.7 seconds
+with `H3_QWEN_TILE=0` and 5.5 seconds with `=1`, a 53% text-encoder reduction.
+Transformer and VAE phases were unchanged, and total generation fell from
+298.1 to 291.5 seconds.
 
 **The f32 SDPA switch was retired here on a bad measurement, and is not.**
 Attention lives inside the 4.6 s that remained when the projections were
@@ -225,6 +283,18 @@ pre-quantized package — `int8_attention_out` is `!prequantized_int8` — so th
 row-major output this path writes is what that path was already producing. An
 A/B of the head-major flag on a pre-quantized package measures nothing, which
 is what it measured.
+
+Putting the three BF16-to-F32 casts and final F32-to-BF16 cast inside the SDPA
+graph was also byte-identical, but saved only 1.2 ms per block at the 1,835-row
+512-class shape: about 0.06 seconds per 50-block pass. It improved 5,095-row
+attention by 3.5%, but the fused graph was removed because it is noise-level
+for the supported 512 workflow being optimized here.
+
+Retaining all 50 pre-transposed FC2 matrices was byte-identical and cut each
+SSD-streamed forward from 18.315 to 14.654 GiB read. That I/O was already
+hidden by GPU work: the real 512 forward moved from 33.685 to 33.781 seconds,
+while load rose from 1.467 to 3.750 seconds and peak Metal memory from 1.633 to
+5.078 GiB. The resident path and its 3.589 GiB memory cost were removed.
 
 **This one changes the picture, unlike the tile.** f32 attention rounds less
 than bf16, so it is the more accurate of the two, but denoising amplifies any

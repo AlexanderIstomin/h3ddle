@@ -1,14 +1,36 @@
 import AppKit
 import H3ddleGeneration
+import H3ddleModels
 import SwiftUI
 
 @main
 struct H3ddleApp: App {
-  @State private var model = AppModel(
-    generationProvider: ProcessInfo.processInfo.arguments.contains("-H3ddleFastFakeGeneration")
+  @State private var model: AppModel = {
+    let arguments = ProcessInfo.processInfo.arguments
+    let generationProvider: any GenerationProvider =
+      arguments.contains("-H3ddleFastFakeGeneration")
       ? FakeGenerationProvider(stepDelay: .milliseconds(20))
       : FakeGenerationProvider()
-  )
+
+    #if DEBUG
+      if let marker = arguments.firstIndex(of: "-H3ddleUITestActiveManagedDownload"),
+        arguments.indices.contains(marker + 1)
+      {
+        // Keep the fixture completely separate from a developer's real model
+        // library; the test is about button state, not package discovery.
+        let root = FileManager.default.temporaryDirectory
+          .appendingPathComponent("H3ddleUITestModels-\(ProcessInfo.processInfo.processIdentifier)")
+        let model = AppModel(
+          generationProvider: generationProvider,
+          modelDownloader: ModelPackageDownloader(store: ModelPackageStore(rootURL: root))
+        )
+        model.prepareManagedDownloadFixture(packageID: arguments[marker + 1])
+        return model
+      }
+    #endif
+
+    return AppModel(generationProvider: generationProvider)
+  }()
 
   var body: some Scene {
     WindowGroup("H3ddle") {

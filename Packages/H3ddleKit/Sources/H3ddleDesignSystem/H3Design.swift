@@ -36,6 +36,12 @@ public enum H3Radius {
   public static let large: CGFloat = 16
 }
 
+public enum H3Hit {
+  /// The smallest square a pointer should have to land in. Icon buttons draw
+  /// smaller than this, so they claim the difference as hit area only.
+  public static let minimumTarget: CGFloat = 44
+}
+
 public struct H3PrimaryButtonStyle: ButtonStyle {
   public init() {}
 
@@ -89,6 +95,11 @@ public struct H3IconButtonStyle: ButtonStyle {
           : (configuration.isPressed ? H3Color.controlHover : Color.clear)
       )
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .frame(
+        width: max(size, H3Hit.minimumTarget),
+        height: max(size, H3Hit.minimumTarget)
+      )
+      .contentShape(Rectangle())
   }
 }
 

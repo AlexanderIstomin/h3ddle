@@ -271,4 +271,40 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
     XCTAssertTrue(app.buttons["choose-model-folder-audio"].exists)
   }
+
+  /// H3 packages share most of their weights, so only one may download at a
+  /// time. The model layer already rejects a second request; the window must
+  /// communicate that constraint before presenting a useless confirmation.
+  @MainActor
+  func testOtherH3DownloadsAreDisabledWhileOneIsActive() {
+    let activePackage = "h3ddle-minimax-h3-ref2va-turbo-int8-v1"
+    let app = XCUIApplication()
+    app.launchArguments += [
+      "-ApplePersistenceIgnoreState", "YES",
+      "-H3ddleUITestActiveManagedDownload", activePackage,
+    ]
+    app.launch()
+    XCTAssertTrue(
+      app.staticTexts["editor-root"].waitForExistence(timeout: 30),
+      "the editor never became accessible"
+    )
+
+    click("model-status", in: app, expecting: "model-settings")
+    let otherH3Packages = [
+      "comfy-minimax-h3-int8-v1",
+      "h3ddle-minimax-h3-turbo-int8-v1",
+      "comfy-minimax-h3-int8-ref2va-v1",
+    ]
+    for packageID in otherH3Packages {
+      let button = app.buttons["download-managed-model-\(packageID)"]
+      XCTAssertTrue(button.waitForExistence(timeout: 8), "missing button for \(packageID)")
+      XCTAssertFalse(button.isEnabled, "\(packageID) remained enabled")
+    }
+
+    XCTAssertTrue(
+      app.staticTexts["managed-download-blocker-comfy-minimax-h3-int8-v1"]
+        .waitForExistence(timeout: 8),
+      "the Models window did not explain which H3 download is blocking the others"
+    )
+  }
 }
