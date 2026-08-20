@@ -72,11 +72,16 @@ and every file is verified by SHA-256 before install. Packages reuse identical
 files where possible so installing a related model does not duplicate shared
 weights.
 
-The managed MiniMax H3 Turbo packages ship full input-major transformers. All
-200 quantized core projections are pre-transposed for the faster Metal path;
-the tensor values and generated output are unchanged. Turbo + References needs
-only its two optimized transformer files and accelerates attention and both MLP
-projections in each flow.
+The managed MiniMax H3 Turbo packages ship a full input-major FL2VA
+transformer. All 200 quantized core projections are pre-transposed for the
+faster Metal path; the tensor values and prompt-only output are unchanged.
+Both INT8 + Hybrid References packages add the same 43.55 MB Ref2VA AdaLN
+overlay instead of a second 20.97 GB transformer. Full standard Ref2VA weights
+remain in the
+[upstream repository](https://huggingface.co/Comfy-Org/MiniMax-H3), while both
+full Turbo Ref2VA layouts remain in the
+[H3ddle weight repository](https://huggingface.co/PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot)
+for exact-weight use and comparisons.
 
 For another compatible optimized MiniMax H3 transformer, prepare the same
 layout locally:
@@ -89,6 +94,23 @@ The source model is not changed. H3ddle automatically uses the validated
 layout marker when the resulting `_input_major.safetensors` checkpoint is
 selected. FL2VA and Ref2VA transformers must be repacked separately if both
 flows should benefit.
+
+The managed standard and Turbo + Hybrid References packages keep their
+respective FL2VA transformers and overlay only Ref2VA AdaLN blocks 25–49,
+reducing the additional reference weight file from 20.97 GB to 43.55 MB. Build
+the same overlay locally without changing a source checkpoint:
+
+```sh
+python3 -B Scripts/build-h3-hybrid-adaln.py /path/to/ref2va.safetensors
+```
+
+Place the resulting file at
+`diffusion_models/minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors`.
+If a full Ref2VA checkpoint is also installed, `H3_REF2VA_HYBRID=1` opts into
+the hybrid for comparison; if only the overlay is installed, the loader uses
+it automatically. The hybrid intentionally changes generation and is not an
+exact-output or speed optimization. Standard and Turbo Ref2VA produce the same
+overlay bytes, so the managed packages share one pinned download.
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel

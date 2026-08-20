@@ -325,16 +325,14 @@ public enum ModelCatalog {
     ] + sharedMinimaxH3Files
   )
 
-  /// Adds the Ref2VA transformer alongside the standard FL2VA one, which is
-  /// what ordered reference images need. Both ship together because the engine
-  /// picks between them per generation, so one package covers prompt-only,
-  /// keyframe, and reference work. Every file except the extra transformer is
-  /// shared with the standard package and installs as a hardlink, so the real
-  /// cost of adding this is the Ref2VA weights alone.
+  /// Adds the compact Ref2VA AdaLN overlay alongside the standard FL2VA core.
+  /// Standard and Turbo Ref2VA checkpoints produce the same overlay bytes, so
+  /// both managed reference packages share one immutable artifact. The full
+  /// standard Ref2VA transformer remains available in the upstream repository.
   public static let minimaxH3Ref2VAInt8 = ModelPackageManifest(
     id: "comfy-minimax-h3-int8-ref2va-v1",
-    displayName: "MiniMax H3 · INT8 + References",
-    detail: "Adds the Ref2VA transformer for ordered reference images",
+    displayName: "MiniMax H3 · INT8 + Hybrid References",
+    detail: "Adds compact hybrid references for ordered reference images",
     repository: "Comfy-Org/MiniMax-H3",
     revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
     licenseName: "MiniMax H3 Community License Agreement",
@@ -353,23 +351,30 @@ public enum ModelCatalog {
       ),
       ModelPackageFile(
         role: .referenceTransformer,
-        path: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-        byteCount: 20_970_379_616,
-        sha256: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
-      )
+        path:
+          "diffusion_models/"
+          + "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors",
+        byteCount: 43_551_180,
+        sha256: "c3d80a9a2d17a30caf83e933262473cbf0b1ba7de4d29556646e9a92ab5f17aa",
+        sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
+        sourceRevision: "2f01b8f268aeb6c3e73eac7fe4ab13c2ad0c1954",
+        sourcePath:
+          "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors"
+      ),
     ] + sharedMinimaxH3Files
   )
 
-  /// Both transformers step-distilled: the FL2VA turbo we host plus a Ref2VA
-  /// turbo merged the same way, so reference generations get a fast path they
-  /// have never had — every published turbo adapter targets FL2VA only.
-  /// Measured 2.4x faster than base Ref2VA with reference identity intact.
+  /// The step-distilled FL2VA core plus the compact Ref2VA AdaLN overlay used
+  /// by the hybrid loader. The full input-major Ref2VA transformer remains on
+  /// the Hub for manual exact-weight use, but managed installs avoid carrying
+  /// a second 20.97 GB core. The selected recipe was approved against matched
+  /// full/hybrid app renders before becoming the managed default.
   public static let minimaxH3Ref2VATurboInt8 = ModelPackageManifest(
     id: "h3ddle-minimax-h3-ref2va-turbo-int8-v1",
-    displayName: "MiniMax H3 · Turbo + References (Experimental)",
+    displayName: "MiniMax H3 · Turbo + Hybrid References",
     detail:
-      "Step-distilled prompt and reference transformers: 8 passes, ordered "
-      + "reference images, loose prompt control.",
+      "Step-distilled prompt transformer with compact hybrid references: "
+      + "8 passes, ordered reference images, loose prompt control.",
     repository: "Comfy-Org/MiniMax-H3",
     revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
     licenseName: "MiniMax H3 Community License Agreement",
@@ -400,20 +405,15 @@ public enum ModelCatalog {
       ),
       ModelPackageFile(
         role: .referenceTransformer,
-        path: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-        byteCount: 20_970_380_012,
-        sha256: "5ca6696fe1cd9a8f254594ac67ee541f151b2377735dea3557364bd868270463",
+        path:
+          "diffusion_models/"
+          + "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors",
+        byteCount: 43_551_180,
+        sha256: "c3d80a9a2d17a30caf83e933262473cbf0b1ba7de4d29556646e9a92ab5f17aa",
         sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
-        sourceRevision: "1d1391e63fb2c314f7a5a616f0aff08ad4e41b04",
-        sourcePath: "minimax_h3_ref2va_pruned_turbo_int8_convrot_input_major.safetensors",
-        localCandidatePath: URL.applicationSupportDirectory
-          .appendingPathComponent("H3ddle", isDirectory: true)
-          .appendingPathComponent("Conversion", isDirectory: true)
-          .appendingPathComponent(
-            "minimax_h3_ref2va_pruned_turbo_int8_convrot_input_major.safetensors",
-            isDirectory: false
-          )
-          .path
+        sourceRevision: "2f01b8f268aeb6c3e73eac7fe4ab13c2ad0c1954",
+        sourcePath:
+          "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors"
       ),
     ] + sharedMinimaxH3Files
   )

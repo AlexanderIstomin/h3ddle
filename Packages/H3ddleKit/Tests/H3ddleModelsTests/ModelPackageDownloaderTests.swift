@@ -52,6 +52,13 @@ struct ModelPackageDownloaderTests {
     #expect(zImage.contains("portrait, square, and landscape"))
     #expect(zImage.contains("512p to 1536p"))
     #expect(zImage.contains("eight passes"))
+
+    let hybrid = ModelCatalog.minimaxH3Ref2VATurboInt8
+    #expect(hybrid.displayName.contains("Hybrid References"))
+    #expect(hybrid.detail.contains("compact hybrid references"))
+    let standardHybrid = ModelCatalog.minimaxH3Ref2VAInt8
+    #expect(standardHybrid.displayName.contains("Hybrid References"))
+    #expect(standardHybrid.detail.contains("compact hybrid references"))
   }
 
   @Test("Z-Image carries an immutable TAEF1 live-preview decoder")
@@ -295,33 +302,56 @@ struct ModelPackageDownloaderTests {
     )
   }
 
-  @Test("The reference Turbo package ships a full input-major checkpoint for each flow")
-  func referenceTurboManifestCheckpoints() throws {
+  @Test("Both reference packages share the compact overlay")
+  func referenceManifestsUseHybridOverlay() throws {
     let manifest = ModelCatalog.minimaxH3Ref2VATurboInt8
     let transformers = manifest.files.filter {
       $0.role == .transformer || $0.role == .referenceTransformer
     }
     #expect(transformers.count == 2)
-    for transformer in transformers {
-      #expect(transformer.byteCount == 20_970_380_012)
-      #expect(transformer.sourcePath?.hasSuffix("_input_major.safetensors") == true)
-    }
+    let prompt = try #require(transformers.first { $0.role == .transformer })
+    #expect(prompt.byteCount == 20_970_380_012)
+    #expect(prompt.sourcePath?.hasSuffix("_input_major.safetensors") == true)
     #expect(
-      Set(transformers.map(\.sha256))
-        == [
-          "1dfe28c517a937fb9876f0975f224fd6e7ecb8744219f89bb8ba954403e10dc3",
-          "5ca6696fe1cd9a8f254594ac67ee541f151b2377735dea3557364bd868270463",
-        ]
+      prompt.sha256
+        == "1dfe28c517a937fb9876f0975f224fd6e7ecb8744219f89bb8ba954403e10dc3"
     )
     let reference = try #require(
       transformers.first { $0.role == .referenceTransformer }
+    )
+    #expect(reference.byteCount == 43_551_180)
+    #expect(
+      reference.path
+        == "diffusion_models/"
+          + "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors"
+    )
+    #expect(
+      reference.sha256
+        == "c3d80a9a2d17a30caf83e933262473cbf0b1ba7de4d29556646e9a92ab5f17aa"
     )
     #expect(
       manifest.downloadURL(for: reference).absoluteString
         == "https://huggingface.co/PulpCut/"
           + "MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot/resolve/"
-          + "1d1391e63fb2c314f7a5a616f0aff08ad4e41b04/"
-          + "minimax_h3_ref2va_pruned_turbo_int8_convrot_input_major.safetensors"
+          + "2f01b8f268aeb6c3e73eac7fe4ab13c2ad0c1954/"
+          + "minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors"
+    )
+    let standard = ModelCatalog.minimaxH3Ref2VAInt8
+    let standardPrompt = try #require(
+      standard.files.first { $0.role == .transformer }
+    )
+    #expect(standardPrompt.byteCount == 20_970_379_616)
+    #expect(
+      standardPrompt.sha256
+        == "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    )
+    let standardReference = try #require(
+      standard.files.first { $0.role == .referenceTransformer }
+    )
+    #expect(standardReference == reference)
+    #expect(
+      standard.downloadURL(for: standardReference)
+        == manifest.downloadURL(for: reference)
     )
   }
 
@@ -396,6 +426,52 @@ struct ModelPackageDownloaderTests {
     let pending = await downloader.pendingByteCount(for: after)
     #expect(after.totalByteCount == Int64(payload.count + extra.count))
     #expect(pending == Int64(extra.count))
+  }
+
+  @Test("Replacing a full reference file with an overlay reclaims the old file")
+  func replacesFullReferenceWithOverlay() async throws {
+    let fullReference = Data("large full reference fixture".utf8)
+    let overlay = Data("compact hybrid overlay".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let before = makeManifest(payload: fullReference)
+    let store = ModelPackageStore(rootURL: root)
+    let installed = try await ModelPackageDownloader(
+      store: store,
+      transport: FixtureTransport(payload: fullReference),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    ).download(before)
+    let fullURL = installed.appendingPathComponent("weights/model.safetensors")
+    #expect(FileManager.default.fileExists(atPath: fullURL.path))
+
+    let overlayFile = ModelPackageFile(
+      role: .referenceTransformer,
+      path: "weights/hybrid-overlay.safetensors",
+      byteCount: Int64(overlay.count),
+      sha256: SHA256.hash(data: overlay).map { String(format: "%02x", $0) }.joined()
+    )
+    let after = ModelPackageManifest(
+      id: before.id, displayName: before.displayName, detail: before.detail,
+      repository: before.repository, revision: before.revision,
+      licenseName: before.licenseName, licenseURL: before.licenseURL,
+      minimumUnifiedMemoryBytes: before.minimumUnifiedMemoryBytes,
+      compatibility: before.compatibility, files: [overlayFile]
+    )
+    let updater = ModelPackageDownloader(
+      store: store,
+      transport: FixtureTransport(payload: overlay),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    )
+    #expect(await updater.pendingByteCount(for: after) == Int64(overlay.count))
+
+    let updated = try await updater.download(after)
+    #expect(!FileManager.default.fileExists(atPath: fullURL.path))
+    #expect(
+      try Data(
+        contentsOf: updated.appendingPathComponent("weights/hybrid-overlay.safetensors")
+      ) == overlay
+    )
   }
 
   /// Adding one accessory file to a manifest must not cost a re-download, and
