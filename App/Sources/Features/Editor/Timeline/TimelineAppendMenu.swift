@@ -3,13 +3,20 @@ import H3ddleGeneration
 import SwiftUI
 
 struct AppendMenuPlacement: Equatable {
-  var isVisual: Bool
+  enum Track: Equatable {
+    case visual
+    case audio
+    case text
+  }
+
+  var track: Track
   var origin: CGPoint
 }
 
 enum TimelineAppendAction: Equatable {
   case generate(GenerationKind)
   case importFiles
+  case addText
 }
 
 struct TimelineAppendMenuItem: Identifiable {
@@ -115,6 +122,17 @@ struct TimelineAppendMenu: View {
       ),
     ]
   }
+
+  static func textItems() -> [TimelineAppendMenuItem] {
+    [
+      TimelineAppendMenuItem(
+        label: "Add text",
+        symbol: "textformat",
+        tint: H3Color.clipText,
+        action: .addText
+      )
+    ]
+  }
 }
 
 private struct AppendMenuRow: View {
@@ -156,6 +174,7 @@ extension TimelineAppendMenuItem {
     switch action {
     case .generate(let kind): "append-generate-\(kind.rawValue)"
     case .importFiles: "append-import"
+    case .addText: "append-add-text"
     }
   }
 }

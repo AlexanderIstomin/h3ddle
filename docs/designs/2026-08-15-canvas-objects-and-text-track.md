@@ -966,7 +966,7 @@ Insertion surfaces:
 
 1. T1 lane `+` button → one-item append menu "Add text" (`TimelineAppendAction.addText`, `AppendMenuPlacement.Track.text`).
 2. Keyboard **⌘T** when the studio and export modal are closed — **lands in PR 5** with the panel.
-3. Clip menu is not the inserter.
+3. Empty-canvas and empty-T1 right-click → context menu "Add text" (`ClipMenuPlacement.Target.insertText`). Choosing it inserts at the playhead and opens the Text inspector.
 
 `AppModel.insertTextAtPlayhead()` (PR 4b):
 

@@ -211,6 +211,7 @@ public struct ProgramExportSettings: Hashable, Sendable {
         outSec: project.timeline.exportDuration(includeTextLane: true)
       ),
       usesHardwareAcceleration: true,
+      includeAudioLane: true,
       includeTextLane: true
     )
   }

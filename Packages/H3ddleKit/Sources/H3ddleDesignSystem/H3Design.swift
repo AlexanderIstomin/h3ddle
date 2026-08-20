@@ -16,6 +16,7 @@ public enum H3Color {
   public static let danger = Color(red: 229 / 255, green: 72 / 255, blue: 77 / 255)
   public static let clipVideo = Color(red: 91 / 255, green: 134 / 255, blue: 201 / 255)
   public static let clipAudio = Color(red: 70 / 255, green: 168 / 255, blue: 131 / 255)
+  public static let clipText = Color(red: 214 / 255, green: 154 / 255, blue: 74 / 255)
   public static let tickMajor = Color.white.opacity(0.42)
   public static let tickMinor = Color.white.opacity(0.18)
   public static let controlFill = Color.white.opacity(0.07)

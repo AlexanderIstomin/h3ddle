@@ -3,7 +3,8 @@
 H3ddle is an open-source native macOS studio for local generative media. It
 creates video, still images, music, sound effects, and cloned-voice speech
 entirely on Apple silicon, then assembles generated or imported media on a
-deliberately small two-track timeline: one visual lane and one audio lane.
+deliberately small program timeline: one text lane, one visual lane, and one
+audio lane.
 
 The project is an independent SwiftUI/AppKit implementation over a vendored
 Metal engine. Model weights are never stored in this repository or bundled with
@@ -29,7 +30,7 @@ Generation, on the local Metal engine:
 
 Editing and output:
 
-- a two-track program timeline with filmstrip and waveform previews;
+- a program timeline with a T1 text lane, filmstrip, and waveform previews;
 - canvas objects with direct gesture editing, text items, visual effects and
   transitions, and undo/redo;
 - drag-and-drop import of existing video, image, and audio files;

@@ -6,6 +6,8 @@ import os
 
 public struct TextLayout: Sendable {
   public var expandedSize: (width: Double, height: Double)
+  /// Offset of the content box inside the expanded raster, y-up.
+  public var contentInset: Double
   public var lineFragments: [CanvasLayout.Rect]
   public var glyphBounds: [CanvasLayout.Rect]
 }
@@ -227,6 +229,7 @@ public enum TextRasterizer {
           Double(content.width) + inset * 2,
           Double(content.height) + inset * 2
         ),
+        contentInset: inset,
         lineFragments: lines,
         glyphBounds: glyphs
       ),

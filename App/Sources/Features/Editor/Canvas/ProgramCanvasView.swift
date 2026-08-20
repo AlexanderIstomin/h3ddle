@@ -79,6 +79,7 @@ struct ProgramCanvasView: View {
     .onChange(of: model.project.settings) { _, _ in refreshPreview() }
     .onChange(of: model.visualLaneAudible) { _, _ in refreshPreview() }
     .onChange(of: model.audioLaneAudible) { _, _ in refreshPreview() }
+    .onChange(of: model.textLaneAudible) { _, _ in refreshPreview() }
     .onChange(of: model.canvasGesture) { _, _ in refreshPreview() }
     .onChange(of: monitorSize) { _, _ in refreshPreview() }
     .task(id: model.project.assets) {
@@ -108,7 +109,7 @@ struct ProgramCanvasView: View {
 
   @ViewBuilder
   private var mediaSurface: some View {
-    if model.project.timeline.visualItems.isEmpty {
+    if !hasComposableContent {
       emptyState
     } else if let image = presenter.image {
       Image(nsImage: image)
@@ -169,13 +170,13 @@ struct ProgramCanvasView: View {
     }
     let hit = hit(at: sample.viewPoint)
     switch hit {
-    case .rotate(let item):
-      startGesture(item, kind: .rotate, at: sample)
-    case .scale(let item, let corner):
-      startGesture(item, kind: .scale(corner), at: sample)
-    case .body(let item):
-      model.selectedTimelineItem = .visual(item.id)
-      startGesture(item, kind: .move, at: sample)
+    case .rotate(let target):
+      startGesture(target, kind: .rotate, at: sample)
+    case .scale(let target, let corner):
+      startGesture(target, kind: .scale(corner), at: sample)
+    case .body(let target):
+      select(target)
+      startGesture(target, kind: .move, at: sample)
     case .empty:
       isPanning = true
       panFromEmpty = true
@@ -193,14 +194,16 @@ struct ProgramCanvasView: View {
       viewport.pan(by: delta)
       return
     }
-    guard var session = model.canvasGesture, case .visual(let id) = session.target,
-      let item = model.project.timeline.visualItems.first(where: { $0.id == id }),
+    guard var session = model.canvasGesture,
+      let target = canvasObject(session.target),
       let program = unboundedProgramPoint(sample.viewPoint)
     else {
       return
     }
     session.shiftDown = sample.shift
     session.commandDown = sample.command
+    let source = sourceSize(for: target)
+    let usesMediaFit = target.isVisual
     switch session.kind {
     case .move:
       session.current = CanvasGestureMath.moved(
@@ -209,7 +212,6 @@ struct ProgramCanvasView: View {
         deltaProgramY: program.y - session.startProgram.y
       )
     case .scale(let corner):
-      let source = sourceSize(for: item)
       session.current = CanvasGestureMath.scaled(
         origin: session.origin,
         grab: corner,
@@ -218,10 +220,10 @@ struct ProgramCanvasView: View {
         canvasHeight: canvas.height,
         sourceWidth: source.width,
         sourceHeight: source.height,
-        aboutCenter: sample.command
+        aboutCenter: sample.command,
+        usesMediaFit: usesMediaFit
       )
     case .rotate:
-      let source = sourceSize(for: item)
       session.current = CanvasGestureMath.rotated(
         origin: session.origin,
         start: session.startProgram,
@@ -230,7 +232,8 @@ struct ProgramCanvasView: View {
         canvasHeight: canvas.height,
         sourceWidth: source.width,
         sourceHeight: source.height,
-        snapToIncrements: sample.shift
+        snapToIncrements: sample.shift,
+        usesMediaFit: usesMediaFit
       )
     }
     model.canvasGesture = session
@@ -258,26 +261,57 @@ struct ProgramCanvasView: View {
   }
 
   private func startGesture(
-    _ item: VisualItem,
+    _ target: CanvasObject,
     kind: CanvasGestureSession.Kind,
     at sample: CanvasPointerSample
   ) {
     guard let program = unboundedProgramPoint(sample.viewPoint) else { return }
     model.canvasGesture = CanvasGestureSession(
-      target: .visual(item.id),
+      target: target.timelineID,
       kind: kind,
-      origin: item.canvasTransform,
-      current: item.canvasTransform,
+      origin: target.transform,
+      current: target.transform,
       startProgram: program,
       shiftDown: sample.shift,
       commandDown: sample.command
     )
   }
 
+  private enum CanvasObject: Equatable {
+    case visual(VisualItem)
+    case text(TextItem)
+
+    var timelineID: TimelineItemID {
+      switch self {
+      case .visual(let item): .visual(item.id)
+      case .text(let item): .text(item.id)
+      }
+    }
+
+    var transform: CanvasObjectTransform {
+      switch self {
+      case .visual(let item): item.canvasTransform
+      case .text(let item): item.canvasTransform
+      }
+    }
+
+    var isEnabled: Bool {
+      switch self {
+      case .visual(let item): item.isEnabled
+      case .text(let item): item.isEnabled
+      }
+    }
+
+    var isVisual: Bool {
+      if case .visual = self { return true }
+      return false
+    }
+  }
+
   private enum Hit: Equatable {
-    case rotate(VisualItem)
-    case scale(VisualItem, CanvasCorner)
-    case body(VisualItem)
+    case rotate(CanvasObject)
+    case scale(CanvasObject, CanvasCorner)
+    case body(CanvasObject)
     case empty
   }
 
@@ -302,14 +336,21 @@ struct ProgramCanvasView: View {
         return .body(target)
       }
     }
-    if let program, let item = visualAtPlayhead(), item.isEnabled, !model.visualTrackMuted {
-      if CanvasGizmoGeometry.contains(
-        program: program,
-        placement: placement(for: item),
-        canvas: canvas,
-        tolerance: 3
-      ) {
-        return .body(item)
+    if let program {
+      for item in textsAtPlayhead().reversed() {
+        if hitsText(item, program: program, selected: isSelectedText(item.id)) {
+          return .body(.text(item))
+        }
+      }
+      if let item = visualAtPlayhead(), item.isEnabled, !model.visualTrackMuted {
+        if CanvasGizmoGeometry.contains(
+          program: program,
+          placement: placement(for: .visual(item)),
+          canvas: canvas,
+          tolerance: 3
+        ) {
+          return .body(.visual(item))
+        }
       }
     }
     return .empty
@@ -342,14 +383,17 @@ struct ProgramCanvasView: View {
       x: local.x,
       y: local.y
     )
-    if case .body(let item) = hit(at: local) {
-      model.selectedTimelineItem = .visual(item.id)
-      clipMenu = ClipMenuPlacement(target: .visual(item.id), origin: mappedMenuOrigin(local))
+    if case .body(let target) = hit(at: local) {
+      select(target)
+      switch target {
+      case .visual(let item):
+        clipMenu = ClipMenuPlacement(target: .visual(item.id), origin: mappedMenuOrigin(local))
+      case .text(let item):
+        clipMenu = ClipMenuPlacement(target: .text(item.id), origin: mappedMenuOrigin(local))
+      }
       return
     }
-    guard let item = visualAtPlayhead() else { return }
-    model.selectedTimelineItem = .visual(item.id)
-    clipMenu = ClipMenuPlacement(target: .visual(item.id), origin: mappedMenuOrigin(origin))
+    clipMenu = ClipMenuPlacement(target: .insertText, origin: mappedMenuOrigin(origin))
   }
 
   private func mappedMenuOrigin(_ local: CGPoint) -> CGPoint {
@@ -363,20 +407,33 @@ struct ProgramCanvasView: View {
     })?.item
   }
 
-  private var gizmoTarget: VisualItem? {
-    guard !model.visualTrackMuted, case .visual(let id) = model.selectedTimelineItem,
-      let item = model.project.timeline.visualItems.first(where: { $0.id == id }),
-      item.isEnabled, visualAtPlayhead()?.id == id
-    else {
+  private var gizmoTarget: CanvasObject? {
+    switch model.selectedTimelineItem {
+    case .visual(let id):
+      guard !model.visualTrackMuted,
+        let item = model.project.timeline.visualItems.first(where: { $0.id == id }),
+        item.isEnabled, visualAtPlayhead()?.id == id
+      else {
+        return nil
+      }
+      return .visual(item)
+    case .text(let id):
+      guard !model.textTrackMuted,
+        let item = model.project.timeline.textItems.first(where: { $0.id == id }),
+        item.isEnabled, textsAtPlayhead().contains(where: { $0.id == id })
+      else {
+        return nil
+      }
+      return .text(item)
+    case .audio, nil:
       return nil
     }
-    return item
   }
 
   private var gizmoLayout: CanvasGizmoGeometry.Layout? {
-    guard let item = gizmoTarget, viewSize.width > 1 else { return nil }
+    guard let target = gizmoTarget, viewSize.width > 1 else { return nil }
     return CanvasGizmoGeometry.layout(
-      placement: placement(for: item),
+      placement: placement(for: target),
       canvas: canvas,
       viewSize: (Double(viewSize.width), Double(viewSize.height)),
       aspect: Double(model.project.settings.aspectFraction),
@@ -385,27 +442,122 @@ struct ProgramCanvasView: View {
     )
   }
 
-  private func placement(for item: VisualItem) -> CanvasLayout.Placement {
-    let override: CanvasObjectTransform?
-    if let gesture = model.canvasGesture, case .visual(let id) = gesture.target, id == item.id {
-      override = gesture.current
-    } else {
-      override = nil
+  private func placement(for target: CanvasObject) -> CanvasLayout.Placement {
+    let transform = liveTransform(for: target)
+    let source = sourceSize(for: target)
+    switch target {
+    case .visual:
+      return CanvasLayout.placed(
+        sourceWidth: source.width,
+        sourceHeight: source.height,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        transform: transform
+      )
+    case .text:
+      return CanvasLayout.overlayPlaced(
+        sourceWidth: source.width,
+        sourceHeight: source.height,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        transform: transform
+      )
     }
-    return CanvasGizmoGeometry.placement(
-      item: item,
-      source: sourceSize(for: item),
-      canvas: canvas,
-      override: override
-    )
   }
 
-  private func sourceSize(for item: VisualItem) -> (width: Double, height: Double) {
-    if let asset = model.project.asset(id: item.assetID) {
-      let size = mediaSizes[asset.url] ?? .fallback
-      return (size.width, size.height)
+  private func sourceSize(for target: CanvasObject) -> (width: Double, height: Double) {
+    switch target {
+    case .visual(let item):
+      if let asset = model.project.asset(id: item.assetID) {
+        let size = mediaSizes[asset.url] ?? .fallback
+        return (size.width, size.height)
+      }
+      return (canvas.width, canvas.height)
+    case .text(let item):
+      let layout = TextRasterizer.layout(
+        item,
+        layoutSize: (model.project.settings.width, model.project.settings.height)
+      )
+      return layout.expandedSize
     }
-    return (canvas.width, canvas.height)
+  }
+
+  private func liveTransform(for target: CanvasObject) -> CanvasObjectTransform {
+    if let gesture = model.canvasGesture, gesture.target == target.timelineID {
+      return gesture.current
+    }
+    return target.transform
+  }
+
+  private func select(_ target: CanvasObject) {
+    model.selectedTimelineItem = target.timelineID
+  }
+
+  private func canvasObject(_ id: TimelineItemID) -> CanvasObject? {
+    switch id {
+    case .visual(let uuid):
+      return model.project.timeline.visualItems.first { $0.id == uuid }.map(CanvasObject.visual)
+    case .text(let uuid):
+      return model.project.timeline.textItems.first { $0.id == uuid }.map(CanvasObject.text)
+    case .audio:
+      return nil
+    }
+  }
+
+  private func textsAtPlayhead() -> [TextItem] {
+    guard !model.textTrackMuted else { return [] }
+    let time = model.playback.clock.currentTime
+    return model.project.timeline.textItems.filter { item in
+      item.isEnabled && time >= item.startTime && time < item.endTime
+    }
+  }
+
+  private func isSelectedText(_ id: UUID) -> Bool {
+    model.selectedTimelineItem == .text(id)
+  }
+
+  private func hitsText(
+    _ item: TextItem,
+    program: (x: Double, y: Double),
+    selected: Bool
+  ) -> Bool {
+    let layout = TextRasterizer.layout(
+      item,
+      layoutSize: (model.project.settings.width, model.project.settings.height)
+    )
+    let placement = placement(for: .text(item))
+    if selected {
+      return CanvasGizmoGeometry.contains(
+        program: program,
+        placement: placement,
+        canvas: canvas,
+        tolerance: 3
+      )
+    }
+    let point = (program.x * canvas.width, program.y * canvas.height)
+    for glyph in layout.glyphBounds {
+      let rect = CanvasLayout.Rect(
+        x: glyph.x + layout.contentInset,
+        y: glyph.y + layout.contentInset,
+        width: glyph.width,
+        height: glyph.height
+      )
+      let quad = CanvasLayout.overlayQuad(
+        rect: rect,
+        sourceWidth: layout.expandedSize.width,
+        sourceHeight: layout.expandedSize.height,
+        placement: placement
+      )
+      if CanvasGestureMath.contains(point: point, quad: quad, tolerance: 2) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private var hasComposableContent: Bool {
+    !model.project.timeline.visualItems.isEmpty
+      || !model.project.timeline.textItems.isEmpty
   }
 
   private func loadMediaSizes(for assets: [AssetReference]) async {
@@ -507,16 +659,22 @@ struct ProgramCanvasView: View {
 
   private func refreshPreview() {
     var overrides: [UUID: CanvasObjectTransform] = [:]
-    if let gesture = model.canvasGesture, case .visual(let id) = gesture.target {
-      overrides[id] = gesture.current
+    if let gesture = model.canvasGesture {
+      switch gesture.target {
+      case .visual(let id), .text(let id):
+        overrides[id] = gesture.current
+      case .audio:
+        break
+      }
     }
     let frame = model.playback.sync(
       project: model.project,
       visualMuted: !model.visualLaneAudible,
       audioMuted: !model.audioLaneAudible,
+      textMuted: !model.textLaneAudible,
       transformOverrides: overrides
     )
-    guard !model.project.timeline.visualItems.isEmpty else {
+    guard hasComposableContent else {
       presenter.clear()
       return
     }

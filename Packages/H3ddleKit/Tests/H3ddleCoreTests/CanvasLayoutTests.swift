@@ -110,4 +110,19 @@ struct CanvasLayoutTests {
     #expect(transform.rotationTurns == 1)
     #expect(abs(transform.scale - 1) < 0.000_1)
   }
+
+  @Test("Overlay placement skips fit and scales the source")
+  func overlaySkipsFit() {
+    let placed = CanvasLayout.overlayPlaced(
+      sourceWidth: 40,
+      sourceHeight: 20,
+      canvasWidth: 200,
+      canvasHeight: 200,
+      transform: CanvasObjectTransform(translationX: 0.1, scale: 2)
+    )
+    #expect(abs(placed.drawWidth - 80) < 0.000_1)
+    #expect(abs(placed.drawHeight - 40) < 0.000_1)
+    #expect(abs(placed.centerX - 120) < 0.000_1)
+    #expect(abs(placed.centerY - 100) < 0.000_1)
+  }
 }

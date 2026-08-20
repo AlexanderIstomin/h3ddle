@@ -62,15 +62,19 @@ struct ExportModalView: View {
       Button("Export anyway") { presentSaveAndStart() }
     } message: {
       Text(
-        "The audio track continues \(ProgramExportSettings.formatClock(trailingAudioDuration)) past the visual duration. The file will end at the picture."
+        "The audio track continues \(ProgramExportSettings.formatClock(trailingAudioDuration)) past the program end. The file will end there."
       )
     }
   }
 
   private var project: H3ddleProject { model.project }
   private var plan: ProgramCompositionPlan { ProgramCompositionPlan(project: project) }
-  private var programDuration: TimeInterval { plan.duration }
-  private var canExport: Bool { programDuration > 0.001 && !isRendering }
+  private var programDuration: TimeInterval {
+    plan.exportDuration(includeTextLane: settings.includeTextLane)
+  }
+  private var canExport: Bool {
+    project.timeline.visualDuration > 0.001 && programDuration > 0.001 && !isRendering
+  }
   private var isRendering: Bool {
     if case .active = render { return true }
     return false
@@ -218,7 +222,7 @@ struct ExportModalView: View {
           Image(systemName: "exclamationmark.triangle.fill")
             .foregroundStyle(H3Color.accent)
           Text(
-            "Audio continues \(ProgramExportSettings.formatClock(trailingAudioDuration)) past the picture. Export ends at the visual duration."
+            "Audio continues \(ProgramExportSettings.formatClock(trailingAudioDuration)) past the picture. Export ends at the program end."
           )
           .font(.system(size: 11.5))
           .fixedSize(horizontal: false, vertical: true)
@@ -468,6 +472,7 @@ struct ExportModalView: View {
   private func seedFromProject() {
     var next = ProgramExportSettings.makeDefault(project: project)
     next.includeAudioLane = model.audioLaneAudible
+    next.includeTextLane = model.textLaneAudible
     seed = next
     settings = next
     livePreview = nil
@@ -477,6 +482,7 @@ struct ExportModalView: View {
   private func requestExport() {
     guard canExport else { return }
     settings.includeAudioLane = model.audioLaneAudible
+    settings.includeTextLane = model.textLaneAudible
     if settings.includeAudioLane,
       plan.requiresTrailingAudioWarning(range: settings.range)
     {

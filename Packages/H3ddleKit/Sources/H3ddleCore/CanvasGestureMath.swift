@@ -179,14 +179,16 @@ public enum CanvasGestureMath: Sendable {
     canvasHeight: Double,
     sourceWidth: Double,
     sourceHeight: Double,
-    aboutCenter: Bool
+    aboutCenter: Bool,
+    usesMediaFit: Bool = true
   ) -> CanvasObjectTransform {
-    let placement = CanvasLayout.placed(
+    let placement = placed(
       sourceWidth: sourceWidth,
       sourceHeight: sourceHeight,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight,
-      transform: origin
+      transform: origin,
+      usesMediaFit: usesMediaFit
     )
     let grabPoint = corner(
       grab,
@@ -219,12 +221,13 @@ public enum CanvasGestureMath: Sendable {
     next.scale = max(origin.scale * projected, minimumScale)
     if aboutCenter { return next }
 
-    let nextPlacement = CanvasLayout.placed(
+    let nextPlacement = placed(
       sourceWidth: sourceWidth,
       sourceHeight: sourceHeight,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight,
-      transform: next
+      transform: next,
+      usesMediaFit: usesMediaFit
     )
     let nextLocal = corner(
       grab.opposite,
@@ -250,14 +253,16 @@ public enum CanvasGestureMath: Sendable {
     canvasHeight: Double,
     sourceWidth: Double,
     sourceHeight: Double,
-    snapToIncrements: Bool
+    snapToIncrements: Bool,
+    usesMediaFit: Bool = true
   ) -> CanvasObjectTransform {
-    let placement = CanvasLayout.placed(
+    let placement = placed(
       sourceWidth: sourceWidth,
       sourceHeight: sourceHeight,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight,
-      transform: origin
+      transform: origin,
+      usesMediaFit: usesMediaFit
     )
     let startPixels = (x: start.x * canvasWidth, y: start.y * canvasHeight)
     let pointerPixels = (x: pointer.x * canvasWidth, y: pointer.y * canvasHeight)
@@ -304,6 +309,32 @@ public enum CanvasGestureMath: Sendable {
       }
     }
     return true
+  }
+
+  private static func placed(
+    sourceWidth: Double,
+    sourceHeight: Double,
+    canvasWidth: Double,
+    canvasHeight: Double,
+    transform: CanvasObjectTransform,
+    usesMediaFit: Bool
+  ) -> CanvasLayout.Placement {
+    if usesMediaFit {
+      return CanvasLayout.placed(
+        sourceWidth: sourceWidth,
+        sourceHeight: sourceHeight,
+        canvasWidth: canvasWidth,
+        canvasHeight: canvasHeight,
+        transform: transform
+      )
+    }
+    return CanvasLayout.overlayPlaced(
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight,
+      transform: transform
+    )
   }
 
   private static func corner(

@@ -6,6 +6,8 @@ struct ClipMenuPlacement: Equatable {
   enum Target: Equatable {
     case visual(UUID)
     case audio(UUID)
+    case text(UUID)
+    case insertText
   }
 
   var target: Target
@@ -147,6 +149,55 @@ struct TimelineClipMenu: View {
     return rows
   }
 
+  static func textItems(item: TextItem, canSplit: Bool) -> [TimelineClipMenuItem] {
+    [
+      TimelineClipMenuItem(
+        id: "duplicate",
+        label: "Duplicate",
+        symbol: "plus.square.on.square",
+        action: .duplicate
+      ),
+      TimelineClipMenuItem(
+        id: "enable",
+        label: item.isEnabled ? "Disable" : "Enable",
+        symbol: "power",
+        action: .toggleEnabled
+      ),
+      TimelineClipMenuItem(
+        id: "split",
+        label: "Split at playhead",
+        symbol: "scissors",
+        action: .split,
+        isEnabled: canSplit
+      ),
+      TimelineClipMenuItem(
+        id: "reset-transform",
+        label: "Reset transform",
+        symbol: "arrow.counterclockwise",
+        action: .resetTransform
+      ),
+      .separator("remove"),
+      TimelineClipMenuItem(
+        id: "remove",
+        label: "Remove",
+        symbol: "trash",
+        action: .remove,
+        isDestructive: true
+      ),
+    ]
+  }
+
+  static func addTextItems() -> [TimelineClipMenuItem] {
+    [
+      TimelineClipMenuItem(
+        id: "add-text",
+        label: "Add text",
+        symbol: "textformat",
+        action: .addText
+      )
+    ]
+  }
+
   static func audioItems(item: AudioItem, canSplit: Bool) -> [TimelineClipMenuItem] {
     [
       TimelineClipMenuItem(
@@ -190,6 +241,7 @@ enum TimelineClipMenuAction: Equatable {
   case rotate
   case resetTransform
   case remove
+  case addText
 }
 
 struct TimelineClipMenuItem: Identifiable, Equatable {
