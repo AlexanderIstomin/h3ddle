@@ -70,14 +70,29 @@ identity, red shirt, and lighting. Their SSIM was 0.728 and PSNR 19.42 dB,
 showing that the recipe intentionally changes pose and expression rather than
 reproducing the full Ref2VA pixels.
 
-One image is not enough evidence to replace the managed model. Before shipping
-the compact package, test several seeds and reference types (single/multiple
-images, video, and audio), compare identity and prompt adherence against full
-Ref2VA, and make the storage trade explicit in the model description.
+The first native comparison and a second matched 512-square app A/B both
+produced good images and received visual approval. The app comparison measured
+340.2 seconds for full Ref2VA and 360.6 seconds for hybrid, with the difference
+concentrated in the final three transformer passes rather than overlay loading
+or AdaLN precomputation. That pattern is consistent with system/thermal
+variation: the overlay changes no denoising dispatch shape or per-pass work.
 
-The automatic fallback was also exercised with a lean package containing the
-FL2VA core and overlay but no full Ref2VA checkpoint. A real 256×256, two-pass
-reference generation selected the hybrid without an environment override and
-completed normally. A standard, non-Turbo checkpoint completed the same smoke
-test with the explicit override. These checks establish loader compatibility;
-they do not replace the broader visual-quality matrix above.
+## Ship decision
+
+H3ddle 0.7.4 makes this overlay the managed default for both standard and
+Turbo + References. The upstream Hub keeps the full standard Ref2VA checkpoint
+and H3ddle's weight repository keeps both full Turbo Ref2VA layouts; the
+managed manifests simply stop downloading them. Existing app installs fetch
+the 43.55 MB overlay, reuse their other verified files, and remove the
+now-unmanaged full reference checkpoint during the atomic package swap.
+
+The automatic fallback was also exercised with lean packages containing the
+FL2VA core and overlay but no full Ref2VA checkpoint. Turbo completed a real
+256×256, two-pass reference smoke test. Standard completed both that smoke test
+and a 256×256 quality check at 20 passes and all 50 blocks, with the environment
+override explicitly absent. Its output was a coherent detailed portrait that
+preserved the reference's face, hair, glasses, earrings, makeup, and sailor
+outfit. The standard quality check measured 277.897 seconds for the DiT and
+35.991 seconds for the resident VAE decoder. These checks establish loader and
+visual compatibility; they do not imply that the hybrid exactly reproduces
+full Ref2VA pixels.
