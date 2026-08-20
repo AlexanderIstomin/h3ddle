@@ -39,14 +39,25 @@ case "$engine_handshake" in
         exit 1
         ;;
 esac
+# macOS can attach an access-control record to a UI-test runner after launch;
+# cleaning derived products keeps a later signed run from trying to overwrite
+# that protected executable in place.
 xcodebuild \
     -project "$repository_root/H3ddle.xcodeproj" \
     -scheme H3ddle \
     -destination 'platform=macOS' \
     -derivedDataPath "$repository_root/DerivedData" \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY=- \
+    CODE_SIGNING_REQUIRED=YES \
+    CODE_SIGNING_ALLOWED=YES \
     -quiet \
-    build-for-testing
+    clean build-for-testing
+
+# A linker-signed executable inside an otherwise unsigned .app looks built but
+# fails Gatekeeper's bundle validation as "damaged". Ad-hoc signing needs no
+# certificate and makes local/UI-test products structurally valid.
+codesign --verify --deep --strict \
+    "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app"
 
 # The UI tests drive the real application, which means launching a window that
 # takes keyboard focus. On a developer's machine that interrupts whatever they
@@ -79,7 +90,9 @@ xcodebuild \
     -destination 'platform=macOS' \
     -derivedDataPath "$repository_root/DerivedData" \
     -only-testing:H3ddleUITests \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY=- \
+    CODE_SIGNING_REQUIRED=YES \
+    CODE_SIGNING_ALLOWED=YES \
     test-without-building > "$ui_test_log" 2>&1
 ui_test_status=$?
 set -e
