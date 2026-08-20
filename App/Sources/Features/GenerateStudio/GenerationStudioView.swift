@@ -1227,7 +1227,7 @@ struct GenerationStudioView: View {
                 model.updateStudioKnobs { $0.denoisingSteps = Int(steps) }
               }
             ),
-            in: 2...30,
+            in: GenerationKnobSnapshot.h3DenoisingStepsRange,
             step: 1
           )
           .tint(H3Color.accent)

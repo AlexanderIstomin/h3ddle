@@ -17,7 +17,7 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.repository == "Comfy-Org/MiniMax-H3")
     #expect(manifest.revision == "014cd40f7e177756c6b2473c0d93b1c89a790dd2")
     #expect(manifest.files.count == 10)
-    #expect(manifest.totalByteCount == 53_941_614_721)
+    #expect(manifest.totalByteCount == 53_941_614_829)
     #expect(manifest.files.filter { $0.role != .runtimeMetadata }.allSatisfy {
       $0.path.hasSuffix(".safetensors")
     })
@@ -277,6 +277,26 @@ struct ModelPackageDownloaderTests {
     // hosted file lives at the root of its own repository.
     #expect(turboTransformer.path == standardTransformer.path)
     #expect(turboTransformer.sha256 != standardTransformer.sha256)
+    #expect(standardTransformer.byteCount == 20_970_379_724)
+    #expect(
+      standardTransformer.sha256
+        == "5a0a3e1e73f099680896a98ab418870f27711800ac73b5f16af81724fc7e567a"
+    )
+    #expect(!standardTransformer.requiresLocalSource)
+    #expect(standardTransformer.sourceRepository == "PulpCut/MiniMax-H3-INT8-ConvRot")
+    #expect(
+      standardTransformer.sourceRevision
+        == "0324458ae2cfd885a2252ee752e7d60d2466c345"
+    )
+    #expect(
+      standardTransformer.sourcePath
+        == "minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors"
+    )
+    #expect(
+      standardTransformer.localCandidatePath?.hasSuffix(
+        "minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors"
+      ) == true
+    )
     #expect(turboTransformer.byteCount == 20_970_380_012)
     #expect(
       turboTransformer.sha256
@@ -340,10 +360,17 @@ struct ModelPackageDownloaderTests {
     let standardPrompt = try #require(
       standard.files.first { $0.role == .transformer }
     )
-    #expect(standardPrompt.byteCount == 20_970_379_616)
+    #expect(standardPrompt.byteCount == 20_970_379_724)
     #expect(
       standardPrompt.sha256
-        == "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+        == "5a0a3e1e73f099680896a98ab418870f27711800ac73b5f16af81724fc7e567a"
+    )
+    #expect(!standardPrompt.requiresLocalSource)
+    #expect(
+      standard.downloadURL(for: standardPrompt).absoluteString
+        == "https://huggingface.co/PulpCut/MiniMax-H3-INT8-ConvRot/resolve/"
+          + "0324458ae2cfd885a2252ee752e7d60d2466c345/"
+          + "minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors"
     )
     let standardReference = try #require(
       standard.files.first { $0.role == .referenceTransformer }

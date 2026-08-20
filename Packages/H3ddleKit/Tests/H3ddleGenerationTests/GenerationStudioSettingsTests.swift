@@ -123,6 +123,11 @@ struct GenerationStudioSettingsTests {
     #expect(settings.knobs.activeDiTLayers == 45)
   }
 
+  @Test("H3 exposes denoising budgets through 50 passes")
+  func h3DenoisingRange() {
+    #expect(GenerationKnobSnapshot.h3DenoisingStepsRange == 2...50)
+  }
+
   @Test("Editing a knob selects Custom and remembers the snapshot")
   func editingSelectsCustom() {
     var settings = GenerationStudioSettings.makeDefault(seed: 1)

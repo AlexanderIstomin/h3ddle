@@ -243,6 +243,11 @@ public enum GenerationPreset: String, CaseIterable, Codable, Sendable, Identifia
 }
 
 public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
+  /// The H3 studio's deliberately bounded pass control. The engine protocol
+  /// accepts larger experimental values, but 50 keeps the UI useful without
+  /// making accidental multi-hour generations too easy.
+  public static let h3DenoisingStepsRange: ClosedRange<Double> = 2...50
+
   public var canvas: GenerationCanvas
   /// Kept beside the video canvas rather than replacing it: the two ladders
   /// are different shapes, and switching model should not forget which

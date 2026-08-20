@@ -302,10 +302,31 @@ public enum ModelCatalog {
     ),
   ]
 
+  /// Exact-output input-major repack of the standard checkpoint, pinned to its
+  /// immutable published revision. The local candidate remains an optional
+  /// development override for matched A/B tests.
+  private static let standardMinimaxH3InputMajorTransformer = ModelPackageFile(
+    role: .transformer,
+    path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    byteCount: 20_970_379_724,
+    sha256: "5a0a3e1e73f099680896a98ab418870f27711800ac73b5f16af81724fc7e567a",
+    sourceRepository: "PulpCut/MiniMax-H3-INT8-ConvRot",
+    sourceRevision: "0324458ae2cfd885a2252ee752e7d60d2466c345",
+    sourcePath: "minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors",
+    localCandidatePath: URL.applicationSupportDirectory
+      .appendingPathComponent("H3ddle", isDirectory: true)
+      .appendingPathComponent("Conversion", isDirectory: true)
+      .appendingPathComponent(
+        "minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors",
+        isDirectory: false
+      )
+      .path
+  )
+
   public static let minimaxH3Int8 = ModelPackageManifest(
     id: "comfy-minimax-h3-int8-v1",
     displayName: "MiniMax H3 · INT8",
-    detail: "Pruned FL2VA, INT8 ConvRot transformer and text encoder",
+    detail: "Pruned FL2VA, input-major INT8 ConvRot transformer and text encoder",
     repository: "Comfy-Org/MiniMax-H3",
     revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
     licenseName: "MiniMax H3 Community License Agreement",
@@ -315,14 +336,7 @@ public enum ModelCatalog {
     )!,
     minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
-    files: [
-      ModelPackageFile(
-        role: .transformer,
-        path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-        byteCount: 20_970_379_616,
-        sha256: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
-      )
-    ] + sharedMinimaxH3Files
+    files: [standardMinimaxH3InputMajorTransformer] + sharedMinimaxH3Files
   )
 
   /// Adds the compact Ref2VA AdaLN overlay alongside the standard FL2VA core.
@@ -343,12 +357,7 @@ public enum ModelCatalog {
     minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
     compatibility: .ready,
     files: [
-      ModelPackageFile(
-        role: .transformer,
-        path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-        byteCount: 20_970_379_616,
-        sha256: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
-      ),
+      standardMinimaxH3InputMajorTransformer,
       ModelPackageFile(
         role: .referenceTransformer,
         path:
