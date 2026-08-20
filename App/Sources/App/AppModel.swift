@@ -217,6 +217,8 @@ final class AppModel {
   var selectedTimelineItem: TimelineItemID?
   var visualTrackMuted = false
   var audioTrackMuted = false
+  var textTrackMuted = false
+  var showsTextPanel = false
   var canvasGesture: CanvasGestureSession?
   private var snapshots = ProjectSnapshotStack()
   var studioResults: [GenerationResult] = []
@@ -1022,6 +1024,10 @@ final class AppModel {
         if project.timeline.audioItems.contains(where: { $0.id == id }) == false {
           selectedTimelineItem = nil
         }
+      case .text(let id):
+        if project.timeline.textItems.contains(where: { $0.id == id }) == false {
+          selectedTimelineItem = nil
+        }
       }
     }
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
@@ -1034,6 +1040,10 @@ final class AppModel {
 
   var audioLaneAudible: Bool {
     !audioTrackMuted
+  }
+
+  var textLaneAudible: Bool {
+    !textTrackMuted
   }
 
   var latestStudioResult: GenerationResult? {
@@ -1910,12 +1920,129 @@ final class AppModel {
     project.timeline.resetVisualTransform(id)
   }
 
+  func openTextPanel() {
+    showsProjectSettings = false
+    showsEffectsPanel = false
+    selectedEffectID = nil
+    closeTransitionsPanel()
+    showsTextPanel = true
+  }
+
+  func closeTextPanel() {
+    showsTextPanel = false
+  }
+
+  @discardableResult
+  func insertTextAtPlayhead(opensInspector: Bool = true) -> TextItem {
+    registerUndoCheckpoint()
+    let height = Double(max(project.settings.height, 1))
+    let style = FontResolver.resolved(TextStyle(fontSize: 48 * (height / 1080)))
+    let item = project.timeline.insertText(
+      TextItem(
+        startTime: playback.clock.currentTime,
+        duration: 5,
+        text: "Text",
+        style: style
+      )
+    )
+    selectedTimelineItem = .text(item.id)
+    textTrackMuted = false
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+    if opensInspector {
+      openTextPanel()
+    }
+    return item
+  }
+
+  func toggleText(_ id: UUID) {
+    guard let item = project.timeline.textItems.first(where: { $0.id == id }) else {
+      return
+    }
+    registerUndoCheckpoint()
+    project.timeline.setTextEnabled(id, isEnabled: !item.isEnabled)
+  }
+
+  func setTextContent(_ id: UUID, _ text: String, registersUndo: Bool = true) {
+    if registersUndo {
+      registerUndoCheckpoint()
+    }
+    project.timeline.setTextContent(id, text)
+  }
+
+  func setTextStyle(_ id: UUID, _ style: TextStyle, registersUndo: Bool = true) {
+    if registersUndo {
+      registerUndoCheckpoint()
+    }
+    project.timeline.setTextStyle(id, style)
+  }
+
+  func setTextTransform(_ id: UUID, _ transform: CanvasObjectTransform) {
+    registerUndoCheckpoint()
+    project.timeline.setTextTransform(id, transform)
+  }
+
+  func resetTextTransform(_ id: UUID) {
+    registerUndoCheckpoint()
+    project.timeline.resetTextTransform(id)
+  }
+
+  func applyTextTrim(
+    _ id: UUID,
+    edge: TimelineTrimEdge,
+    delta: TimeInterval,
+    origin: TextTrim
+  ) {
+    let trim = TextTrimMath.apply(
+      edge: edge,
+      delta: delta,
+      startTime: origin.startTime,
+      duration: origin.duration,
+      minimumDuration: VisualTrimMath.minimumDuration(
+        framesPerSecond: project.settings.framesPerSecond
+      )
+    )
+    project.timeline.setTextTrim(id, trim)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func setTextStart(_ id: UUID, startTime: TimeInterval) {
+    registerUndoCheckpoint()
+    project.timeline.setTextStart(id, startTime: startTime)
+    selectedTimelineItem = .text(id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func removeText(_ id: UUID) {
+    registerUndoCheckpoint()
+    project.timeline.removeText(id)
+    if selectedTimelineItem == .text(id) {
+      selectedTimelineItem = nil
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+  }
+
+  func duplicateText(_ id: UUID) {
+    registerUndoCheckpoint()
+    guard let copy = project.timeline.duplicateText(id) else {
+      _ = snapshots.popUndo(current: project)
+      return
+    }
+    selectedTimelineItem = .text(copy.id)
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
   func commitCanvasGesture() {
     guard let gesture = canvasGesture else { return }
     canvasGesture = nil
     switch gesture.target {
     case .visual(let id):
       setVisualCanvasTransform(id, gesture.current)
+    case .text(let id):
+      setTextTransform(id, gesture.current)
     case .audio:
       break
     }
@@ -1944,6 +2071,7 @@ final class AppModel {
 
   func openEffectsCatalog() {
     showsProjectSettings = false
+    showsTextPanel = false
     closeTransitionsPanel()
     showsEffectsPanel = true
     selectedEffectID = nil
@@ -1956,6 +2084,7 @@ final class AppModel {
 
   func openEffectSettings(clipID: UUID, effectID: UUID) {
     showsProjectSettings = false
+    showsTextPanel = false
     closeTransitionsPanel()
     showsEffectsPanel = true
     showsEffectLanes = true
@@ -2010,6 +2139,7 @@ final class AppModel {
   func openTransitions(for id: UUID) {
     showsProjectSettings = false
     showsEffectsPanel = false
+    showsTextPanel = false
     selectedEffectID = nil
     selectedTimelineItem = .visual(id)
     showsTransitionsPanel = true
@@ -2172,6 +2302,8 @@ final class AppModel {
       duplicateVisual(id)
     case .audio(let id):
       duplicateAudio(id)
+    case .text(let id):
+      duplicateText(id)
     }
   }
 
@@ -2212,6 +2344,8 @@ final class AppModel {
       return project.timeline.canSplitVisual(id, at: time, framesPerSecond: fps)
     case .audio(let id):
       return project.timeline.canSplitAudio(id, at: time, framesPerSecond: fps)
+    case .text(let id):
+      return project.timeline.canSplitText(id, at: time, framesPerSecond: fps)
     }
   }
 
@@ -2246,6 +2380,11 @@ final class AppModel {
         selectedTimelineItem = .audio(split.left)
         didSplit = true
       }
+    case .text(let id):
+      if let split = project.timeline.splitText(id, at: time, framesPerSecond: fps) {
+        selectedTimelineItem = .text(split.left)
+        didSplit = true
+      }
     }
     if !didSplit {
       _ = snapshots.popUndo(current: project)
@@ -2262,6 +2401,8 @@ final class AppModel {
       removeVisual(id)
     case .audio(let id):
       removeAudio(id)
+    case .text(let id):
+      removeText(id)
     }
   }
 
@@ -2378,7 +2519,6 @@ final class AppModel {
     if kind != .audio {
       let environment = ProcessInfo.processInfo.environment
       let overrides = [
-        ("H3_DIT_FC2_INPUT_MAJOR", "FC2 sidecar"),
         ("H3_QWEN_TILE", "Qwen tile"),
         ("H3_VAE_PREFETCH", "VAE prefetch"),
         ("H3_VAE_NATIVE_F16", "VAE native F16"),

@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CoreVideo
 import H3ddleCore
 import H3ddleMedia
 import Observation
@@ -12,6 +13,8 @@ final class ProgramFramePresenter {
   private var compositor: ProgramCompositor
   private var queued: Request?
   private var isRendering = false
+  private var visualBuffer: CVPixelBuffer?
+  private var renderGeneration = 0
 
   init() {
     compositor = ProgramCompositor(width: 2, height: 2)
@@ -38,8 +41,23 @@ final class ProgramFramePresenter {
     startIfNeeded()
   }
 
+  @discardableResult
+  func blitOverlays(_ overlays: [ProgramTextPresentation]) -> Bool {
+    renderGeneration += 1
+    queued = nil
+    guard let visual = visualBuffer,
+      let composed = compositor.addingOverlays(overlays, onto: visual)
+    else {
+      return false
+    }
+    apply(ProgramCompositor.makeImage(from: composed))
+    return true
+  }
+
   func clear() {
     queued = nil
+    renderGeneration += 1
+    visualBuffer = nil
     image = nil
   }
 
@@ -66,6 +84,7 @@ final class ProgramFramePresenter {
         layoutWidth: layoutW,
         layoutHeight: layoutH
       )
+      visualBuffer = nil
     }
   }
 
@@ -73,12 +92,23 @@ final class ProgramFramePresenter {
     guard !isRendering, let request = queued else { return }
     queued = nil
     isRendering = true
+    let token = renderGeneration
     let compositor = compositor
+    var visualOnly = request.frame
+    visualOnly.overlays = []
+    let overlays = request.frame.overlays
     Task.detached {
-      let buffer = await compositor.pixelBuffer(for: request.frame, videoFrame: request.videoFrame)
-      let next = buffer.flatMap(ProgramCompositor.makeImage)
+      let visual = await compositor.pixelBuffer(
+        for: visualOnly,
+        videoFrame: request.videoFrame
+      )
+      let composed = visual.flatMap { compositor.addingOverlays(overlays, onto: $0) } ?? visual
+      let next = composed.flatMap(ProgramCompositor.makeImage)
       await MainActor.run {
-        self.apply(next)
+        if token == self.renderGeneration {
+          self.visualBuffer = visual
+          self.apply(next)
+        }
         self.isRendering = false
         self.startIfNeeded()
       }

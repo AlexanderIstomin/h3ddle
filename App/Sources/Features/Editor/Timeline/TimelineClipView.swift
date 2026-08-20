@@ -17,6 +17,8 @@ struct TimelineClipView: View {
   var isSelected: Bool
   var metrics: TimelineMetrics
   var height: CGFloat
+  var accentOverride: Color? = nil
+  var showsFilmstrip: Bool = true
   var showsTrimHandles: Bool = false
   var onTrimChanged: ((TimelineTrimEdge, CGFloat) -> Void)?
   var onTrimEnded: (() -> Void)?
@@ -130,35 +132,50 @@ struct TimelineClipView: View {
 
   @ViewBuilder
   private var clipFill: some View {
-    switch kind {
-    case .audio:
+    if !showsFilmstrip {
       LinearGradient(
         colors: [
-          Color(red: 44 / 255, green: 58 / 255, blue: 54 / 255),
-          Color(red: 31 / 255, green: 41 / 255, blue: 37 / 255),
+          Color(red: 72 / 255, green: 54 / 255, blue: 32 / 255),
+          Color(red: 48 / 255, green: 36 / 255, blue: 22 / 255),
         ],
         startPoint: .top,
         endPoint: .bottom
       )
-    case .video, .image:
-      LinearGradient(
-        colors: [
-          Color(red: 51 / 255, green: 61 / 255, blue: 73 / 255),
-          Color(red: 34 / 255, green: 42 / 255, blue: 51 / 255),
-        ],
-        startPoint: .top,
-        endPoint: .bottom
-      )
+    } else {
+      switch kind {
+      case .audio:
+        LinearGradient(
+          colors: [
+            Color(red: 44 / 255, green: 58 / 255, blue: 54 / 255),
+            Color(red: 31 / 255, green: 41 / 255, blue: 37 / 255),
+          ],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      case .video, .image:
+        LinearGradient(
+          colors: [
+            Color(red: 51 / 255, green: 61 / 255, blue: 73 / 255),
+            Color(red: 34 / 255, green: 42 / 255, blue: 51 / 255),
+          ],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
     }
   }
 
   @ViewBuilder
   private var decoration: some View {
+    if !showsFilmstrip {
+      EmptyView()
+    } else {
     switch kind {
     case .video, .image:
       visualFilmstrip
     case .audio:
       waveform
+    }
     }
   }
 
@@ -244,7 +261,8 @@ struct TimelineClipView: View {
   }
 
   private var accent: Color {
-    kind == .audio ? H3Color.clipAudio : H3Color.clipVideo
+    if let accentOverride { return accentOverride }
+    return kind == .audio ? H3Color.clipAudio : H3Color.clipVideo
   }
 
   private var moveDrag: some Gesture {

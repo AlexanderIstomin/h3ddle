@@ -3,7 +3,8 @@
 H3ddle is an open-source native macOS studio for local generative media. It
 creates video, still images, music, sound effects, and cloned-voice speech
 entirely on Apple silicon, then assembles generated or imported media on a
-deliberately small two-track timeline: one visual lane and one audio lane.
+deliberately small program timeline: one text lane, one visual lane, and one
+audio lane.
 
 The project is an independent SwiftUI/AppKit implementation over a vendored
 Metal engine. Model weights are never stored in this repository or bundled with
@@ -33,7 +34,7 @@ Generation, on the local Metal engine:
 
 Editing and output:
 
-- a two-track program timeline with filmstrip and waveform previews;
+- a program timeline with a T1 text lane, filmstrip, and waveform previews;
 - canvas objects with direct gesture editing, text items, visual effects and
   transitions, and undo/redo;
 - drag-and-drop import of existing video, image, and audio files;
@@ -71,21 +72,23 @@ and every file is verified by SHA-256 before install. Packages reuse identical
 files where possible so installing a related model does not duplicate shared
 weights.
 
-The managed MiniMax H3 Turbo package now downloads its verified 3.589 GiB FC2
-performance sidecar automatically. Turbo + References includes one for each
-transformer (7.178 GiB total), so new users get the faster denoising path
-without a conversion step. The model's output is unchanged.
+The managed MiniMax H3 Turbo packages ship full input-major transformers. All
+200 quantized core projections are pre-transposed for the faster Metal path;
+the tensor values and generated output are unchanged. Turbo + References needs
+only its two optimized transformer files and accelerates attention and both MLP
+projections in each flow.
 
 For another compatible optimized MiniMax H3 transformer, prepare the same
-optional sidecar locally:
+layout locally:
 
 ```sh
-python3 -B Scripts/optimize-h3-fc2-sidecar.py /path/to/transformer.safetensors
+python3 -B Scripts/repack-h3-input-major.py /path/to/transformer.safetensors
 ```
 
 The source model is not changed. H3ddle automatically uses the validated
-`_fc2_input_major.safetensors` sibling; FL2VA and Ref2VA transformers need
-separate sidecars if both flows should benefit.
+layout marker when the resulting `_input_major.safetensors` checkpoint is
+selected. FL2VA and Ref2VA transformers must be repacked separately if both
+flows should benefit.
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel

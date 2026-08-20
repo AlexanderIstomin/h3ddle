@@ -298,4 +298,46 @@ struct CanvasGestureMathTests {
     )
     #expect(abs(next.rotationRadians - .pi / 12) < 0.001)
   }
+
+  @Test("Overlay scale skips media fit")
+  func overlayScaleSkipsFit() {
+    let origin = CanvasObjectTransform()
+    let placed = CanvasLayout.overlayPlaced(
+      sourceWidth: 40,
+      sourceHeight: 20,
+      canvasWidth: 200,
+      canvasHeight: 200,
+      transform: origin
+    )
+    let grab = (
+      x: (placed.centerX + placed.drawWidth / 2) / 200,
+      y: (placed.centerY + placed.drawHeight / 2) / 200
+    )
+    let pointer = (x: grab.x + 0.05, y: grab.y + 0.025)
+    let fitted = CanvasGestureMath.scaled(
+      origin: origin,
+      grab: .topRight,
+      pointer: pointer,
+      canvasWidth: 200,
+      canvasHeight: 200,
+      sourceWidth: 40,
+      sourceHeight: 20,
+      aboutCenter: true,
+      usesMediaFit: true
+    )
+    let overlay = CanvasGestureMath.scaled(
+      origin: origin,
+      grab: .topRight,
+      pointer: pointer,
+      canvasWidth: 200,
+      canvasHeight: 200,
+      sourceWidth: 40,
+      sourceHeight: 20,
+      aboutCenter: true,
+      usesMediaFit: false
+    )
+    #expect(overlay.scale != fitted.scale)
+    #expect(abs(overlay.translationX) < 1e-6)
+    #expect(abs(overlay.translationY) < 1e-6)
+  }
 }

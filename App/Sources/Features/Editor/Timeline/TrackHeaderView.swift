@@ -9,11 +9,17 @@ enum TimelineChrome {
   static let mediaLaneHeight: CGFloat = 56
   static let visualLaneHeight = mediaLaneHeight
   static let audioLaneHeight = mediaLaneHeight
+  static let textLaneHeight = mediaLaneHeight
   static let effectLaneHeight: CGFloat = 24
   static let appendButtonSize: CGFloat = 36
+  static let collapsedLaneHeight: CGFloat = 15
+  static let collapsedLaneGap: CGFloat = 4
+  static let collapsedStackHeight: CGFloat =
+    collapsedLaneHeight * 3 + collapsedLaneGap * 2
 
   static func bodyHeight(showsEffectLanes: Bool, expandedEffectCount: Int = 0) -> CGFloat {
     rulerHeight
+      + textLaneHeight
       + visualLaneHeight
       + audioLaneHeight
       + effectLanesHeight(
@@ -56,6 +62,14 @@ struct TrackHeaderColumn: View {
           }
         }
       }
+      TrackHeaderView(
+        code: "T1",
+        title: "Text",
+        tag: H3Color.clipText,
+        height: TimelineChrome.textLaneHeight,
+        isDisabled: model.textTrackMuted,
+        onToggleEnabled: { model.textTrackMuted.toggle() }
+      )
       TrackHeaderView(
         code: "V1",
         title: "Visual",

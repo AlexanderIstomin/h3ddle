@@ -205,6 +205,72 @@ public enum CanvasLayout {
     )
   }
 
+  /// Overlay placement. No fit/cover: source pixels are already in canvas
+  /// space, then uniform scale, translation, and rotation apply.
+  public static func overlayPlaced(
+    sourceWidth: Double,
+    sourceHeight: Double,
+    canvasWidth: Double,
+    canvasHeight: Double,
+    transform: CanvasObjectTransform
+  ) -> Placement {
+    guard sourceWidth > 0, sourceHeight > 0, canvasWidth > 0, canvasHeight > 0 else {
+      return Placement(
+        centerX: canvasWidth / 2,
+        centerY: canvasHeight / 2,
+        drawWidth: max(0, sourceWidth),
+        drawHeight: max(0, sourceHeight),
+        rotationRadians: transform.rotationRadians,
+        aabb: Rect(x: 0, y: 0, width: max(0, canvasWidth), height: max(0, canvasHeight))
+      )
+    }
+    let drawWidth = sourceWidth * transform.scale
+    let drawHeight = sourceHeight * transform.scale
+    let centerX = canvasWidth / 2 + transform.translationX * canvasWidth
+    let centerY = canvasHeight / 2 + transform.translationY * canvasHeight
+    return Placement(
+      centerX: centerX,
+      centerY: centerY,
+      drawWidth: drawWidth,
+      drawHeight: drawHeight,
+      rotationRadians: transform.rotationRadians,
+      aabb: aabb(
+        centerX: centerX,
+        centerY: centerY,
+        width: drawWidth,
+        height: drawHeight,
+        rotationRadians: transform.rotationRadians
+      )
+    )
+  }
+
+  /// Corners of a source-space rect after overlay placement, in canvas pixels.
+  public static func overlayQuad(
+    rect: Rect,
+    sourceWidth: Double,
+    sourceHeight: Double,
+    placement: Placement
+  ) -> [(x: Double, y: Double)] {
+    let scaleX = placement.drawWidth / max(sourceWidth, 0.001)
+    let scaleY = placement.drawHeight / max(sourceHeight, 0.001)
+    let corners = [
+      (rect.x, rect.y),
+      (rect.maxX, rect.y),
+      (rect.maxX, rect.maxY),
+      (rect.x, rect.maxY),
+    ]
+    return corners.map { point in
+      let localX = (point.0 - sourceWidth / 2) * scaleX
+      let localY = (point.1 - sourceHeight / 2) * scaleY
+      let rotated = rotateClockwise(
+        x: localX,
+        y: localY,
+        radians: placement.rotationRadians
+      )
+      return (placement.centerX + rotated.x, placement.centerY + rotated.y)
+    }
+  }
+
   /// Bounding box of the media after fit, scale, translation, and rotation.
   public static func destination(
     sourceWidth: Double,

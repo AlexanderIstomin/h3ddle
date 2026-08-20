@@ -50,6 +50,7 @@ final class H3ddleUITests: XCTestCase {
     )
 
     XCTAssertTrue(app.staticTexts["program-timeline"].exists)
+    XCTAssertTrue(app.buttons["append-text"].exists)
     XCTAssertTrue(app.buttons["append-audio"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["program-preview"].exists)
     XCTAssertTrue(app.buttons["transport-play"].exists)
@@ -59,6 +60,24 @@ final class H3ddleUITests: XCTestCase {
     click("model-status", in: app, expecting: "model-settings")
     XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
     XCTAssertTrue(app.staticTexts["MiniMax H3 · INT8"].waitForExistence(timeout: 8))
+  }
+
+  @MainActor
+  func testCommandTOpensTextPanel() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    app.launch()
+    XCTAssertTrue(
+      app.staticTexts["editor-root"].waitForExistence(timeout: 30),
+      "the editor never became accessible"
+    )
+
+    app.typeKey("t", modifierFlags: .command)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["text-panel"].waitForExistence(timeout: 8),
+      "⌘T should insert a title and open the Text inspector"
+    )
+    XCTAssertTrue(app.descendants(matching: .any)["text-content"].exists)
   }
 
   @MainActor

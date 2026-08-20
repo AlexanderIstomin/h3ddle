@@ -188,40 +188,25 @@ only 1.1% apart, with overlapping per-step distributions. That is below the
 3% noise floor and did not justify extra streaming complexity. The transpose,
 environment control, tests, and documentation were removed.
 
-### Shipped: pre-transposed FC2 sidecar
+### Shipped: full input-major transformer
 
-The useful part of the alternate layout can instead be prepared once, outside
-generation. `Scripts/optimize-h3-fc2-sidecar.py` writes the 50 INT8 FC2
-matrices in input-major order to a sibling safetensors sidecar. The source
-checkpoint, its per-output scales, and all other projections remain unchanged.
-The sidecar costs 3.589 GiB per transformer and is discovered automatically;
-`H3_DIT_FC2_INPUT_MAJOR=0` disables it and `=1` requires a valid sidecar.
+The same exact-output layout applies to all four quantized core projections in
+every transformer block: QKV, attention output, FC1, and FC2. The full repacker
+transposes those 200 matrices without dequantizing them, copies scales, ConvRot
+metadata, and non-core tensors byte-for-byte, and adds a versioned layout
+marker. The loader validates the marker and every matrix shape before routing
+resident and SSD-streamed weights through the input-major kernel.
 
-The loader checks a format marker, source file size, source-header fingerprint,
-and every FC2 tensor schema before selecting the alternate kernel. A missing or
-stale optional sidecar therefore falls back to the original output-major path
-instead of applying weights from a different checkpoint.
+On the 32 GiB M1 Pro, the confirmed FL2VA Turbo 512x512 A/B reduced eight-pass
+transformer time from 253.9 to 231.4 seconds: **22.5 seconds, or 8.9%**. Total
+generation fell from 278.7 to 256.5 seconds, and the images were identical.
+The Ref2VA Turbo 512x896 reference A/B reduced transformer time from 541.2 to
+515.3 seconds: **25.9 seconds, or 4.8%**. Total generation fell from 631.4 to
+595.9 seconds, with good reference output.
 
-The managed FL2VA Turbo package ships its source-bound sidecar from the same
-pinned Hugging Face revision as the transformer. Turbo + References ships both
-the FL2VA and Ref2VA sidecars. The standalone converter remains available for
-other compatible checkpoints; managed-package files are also size- and
-SHA-256-verified by the app before installation.
-
-An A/B/B/A run used the same optimized FL2VA Turbo checkpoint and real
-512-class latent shape for all four complete 50-block forwards:
-
-| path | first | second | mean |
-|---|---:|---:|---:|
-| original output-major FC2 | 34.452 s | 34.036 s | 34.244 s |
-| input-major FC2 sidecar | 32.025 s | 31.567 s | 31.796 s |
-
-That is 2.448 seconds per pass, or **7.15% of transformer time**; eight passes
-save about 19.6 seconds. Every run produced video hash
-`dc9158e61e05de24` and audio hash `548cddc5e876f881`, and the full 50-layer
-tiny-row oracle also remained byte-identical. Tracked peak Metal residency was
-unchanged at 1.487 GiB because the sidecar replaces each streamed FC2 matrix
-rather than becoming an additional resident copy.
+The complete transformer is the only optimized managed path; no auxiliary
+weight file is required. Turbo + References downloads two transformer files
+while accelerating all four projections in both flows.
 
 ### What is left
 

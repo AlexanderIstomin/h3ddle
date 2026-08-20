@@ -253,6 +253,43 @@ struct ProgramPreviewTests {
     }
   }
 
+  @Test("A title past the last visual is still in the preview frame")
+  func trailingOverlayIsPresent() throws {
+    var project = H3ddleProject()
+    let visual = videoAsset(name: "Picture", duration: 2)
+    project.addAsset(visual)
+    try project.timeline.appendVisual(visual)
+    let title = project.timeline.insertText(
+      TextItem(startTime: 1.5, duration: 2, text: "Hello")
+    )
+
+    let trailing = ProgramPreview.frame(at: 2.5, project: project)
+    #expect(trailing.visual == .empty)
+    #expect(trailing.overlays.map(\.item.id) == [title.id])
+    #expect(abs(trailing.duration - 3.5) < 0.000_1)
+    #expect(abs(trailing.previewDuration - 3.5) < 0.000_1)
+  }
+
+  @Test("A text-only program still produces overlays")
+  func textOnlyFrameHasOverlays() {
+    var project = H3ddleProject()
+    let title = project.timeline.insertText(
+      TextItem(startTime: 0, duration: 5, text: "Hello")
+    )
+    let frame = ProgramPreview.frame(at: 1, project: project)
+    #expect(frame.visual == .empty)
+    #expect(frame.overlays.map(\.item.id) == [title.id])
+    #expect(abs(frame.duration - 5) < 0.000_1)
+  }
+
+  @Test("Muted text omits overlays")
+  func mutedTextOmitsOverlays() {
+    var project = H3ddleProject()
+    _ = project.timeline.insertText(TextItem(startTime: 0, duration: 5, text: "Hello"))
+    let frame = ProgramPreview.frame(at: 1, project: project, textMuted: true)
+    #expect(frame.overlays.isEmpty)
+  }
+
   private func videoAsset(name: String, duration: TimeInterval) -> AssetReference {
     AssetReference(
       kind: .video,

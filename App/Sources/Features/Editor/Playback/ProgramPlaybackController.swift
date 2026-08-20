@@ -80,9 +80,14 @@ final class ProgramPlaybackController {
     project: H3ddleProject,
     visualMuted: Bool,
     audioMuted: Bool,
+    textMuted: Bool = false,
     transformOverrides: [UUID: CanvasObjectTransform] = [:]
   ) -> ProgramPreviewFrame {
-    let duration = max(project.timeline.visualDuration, project.timeline.audioTrackEnd)
+    let duration = max(
+      project.timeline.visualDuration,
+      project.timeline.audioTrackEnd,
+      project.timeline.textTrackEnd
+    )
     clock.framesPerSecond = project.settings.framesPerSecond
     clock.setTime(clock.currentTime, duration: duration)
     applyMasterGain(project.settings.masterGain)
@@ -91,6 +96,7 @@ final class ProgramPlaybackController {
       project: project,
       visualMuted: visualMuted,
       audioMuted: audioMuted,
+      textMuted: textMuted,
       transformOverrides: transformOverrides
     )
     applyVisual(frame)

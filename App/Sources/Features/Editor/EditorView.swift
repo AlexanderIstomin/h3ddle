@@ -22,6 +22,8 @@ struct EditorView: View {
             TransitionsPanelView(model: model)
           } else if model.showsEffectsPanel {
             EffectsPanelView(model: model)
+          } else if model.showsTextPanel {
+            TextInspectorPanel(model: model)
           }
           VStack(spacing: 0) {
             ProgramCanvasView(model: model, clipMenu: $clipMenu)
@@ -58,6 +60,7 @@ struct EditorView: View {
     .animation(.easeOut(duration: 0.16), value: model.activeGenerationKind)
     .animation(.easeOut(duration: 0.16), value: model.showsProjectSettings)
     .animation(.easeOut(duration: 0.16), value: model.showsExport)
+    .animation(.easeOut(duration: 0.16), value: model.showsTextPanel)
     .sheet(isPresented: $model.showsModelSettings) {
       ModelSettingsView(model: model)
     }
@@ -115,6 +118,17 @@ struct EditorView: View {
       model.deleteSelectedTimelineItem()
       return .handled
     }
+    .onKeyPress(keys: ["t", "T"], phases: .down) { press in
+      guard press.modifiers.contains(.command) else { return .ignored }
+      guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
+      if NSApp.keyWindow?.firstResponder is NSTextView { return .ignored }
+      if case .text = model.selectedTimelineItem {
+        model.openTextPanel()
+      } else {
+        model.insertTextAtPlayhead(opensInspector: true)
+      }
+      return .handled
+    }
     .onKeyPress(.escape) {
       if clipMenu != nil || appendMenu != nil {
         clipMenu = nil
@@ -130,6 +144,10 @@ struct EditorView: View {
         model.closeTransitionsPanel()
         return .handled
       }
+      if model.showsTextPanel {
+        model.closeTextPanel()
+        return .handled
+      }
       return .ignored
     }
     .onChange(of: model.activeGenerationKind) { _, _ in
@@ -143,6 +161,30 @@ struct EditorView: View {
   }
 
   private let editorSpace = "editor-root"
+
+  private func appendTrackName(_ track: AppendMenuPlacement.Track) -> String {
+    switch track {
+    case .visual: "V1"
+    case .audio: "A1"
+    case .text: "T1"
+    }
+  }
+
+  private func appendTime(_ track: AppendMenuPlacement.Track) -> TimeInterval {
+    switch track {
+    case .visual: model.project.timeline.visualDuration
+    case .audio: model.project.timeline.audioTrackEnd
+    case .text: model.playback.clock.currentTime
+    }
+  }
+
+  private func appendItems(_ track: AppendMenuPlacement.Track) -> [TimelineAppendMenuItem] {
+    switch track {
+    case .visual: TimelineAppendMenu.visualItems()
+    case .audio: TimelineAppendMenu.audioItems()
+    case .text: TimelineAppendMenu.textItems()
+    }
+  }
 
   private func presentImportPanel(ontoVisualLane: Bool) {
     let panel = NSOpenPanel()
@@ -172,15 +214,11 @@ struct EditorView: View {
             self.appendMenu = nil
           }
         TimelineAppendMenu(
-          trackName: appendMenu.isVisual ? "V1" : "A1",
-          appendTime: appendMenu.isVisual
-            ? model.project.timeline.visualDuration
-            : model.project.timeline.audioTrackEnd,
-          items: appendMenu.isVisual
-            ? TimelineAppendMenu.visualItems()
-            : TimelineAppendMenu.audioItems()
+          trackName: appendTrackName(appendMenu.track),
+          appendTime: appendTime(appendMenu.track),
+          items: appendItems(appendMenu.track)
         ) { item in
-          let importingVisual = appendMenu.isVisual
+          let importingVisual = appendMenu.track == .visual
           self.appendMenu = nil
           self.clipMenu = nil
           switch item.action {
@@ -188,6 +226,8 @@ struct EditorView: View {
             model.presentGeneration(kind)
           case .importFiles:
             presentImportPanel(ontoVisualLane: importingVisual)
+          case .addText:
+            model.insertTextAtPlayhead(opensInspector: true)
           }
         }
         .offset(x: appendMenu.origin.x, y: appendMenu.origin.y)
@@ -250,6 +290,17 @@ struct EditorView: View {
         model.project.asset(id: item.assetID)?.displayName ?? "Audio",
         TimelineClipMenu.audioItems(item: item, canSplit: model.canSplit(.audio(id)))
       )
+    case .text(let id):
+      guard let item = model.project.timeline.textItems.first(where: { $0.id == id }) else {
+        return nil
+      }
+      let title = item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Text"
+      return (
+        title.isEmpty ? "Text" : title,
+        TimelineClipMenu.textItems(item: item, canSplit: model.canSplit(.text(id)))
+      )
+    case .insertText:
+      return ("T1", TimelineClipMenu.addTextItems())
     }
   }
 
@@ -278,6 +329,8 @@ struct EditorView: View {
         model.resetVisualTransform(id)
       case .remove:
         model.removeVisual(id)
+      case .addText:
+        break
       }
     case .audio(let id):
       model.selectedTimelineItem = .audio(id)
@@ -290,8 +343,28 @@ struct EditorView: View {
         model.split(.audio(id))
       case .remove:
         model.removeAudio(id)
-      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .resetTransform:
+      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .resetTransform, .addText:
         break
+      }
+    case .text(let id):
+      model.selectedTimelineItem = .text(id)
+      switch action {
+      case .duplicate:
+        model.duplicateText(id)
+      case .toggleEnabled:
+        model.toggleText(id)
+      case .split:
+        model.split(.text(id))
+      case .resetTransform:
+        model.resetTextTransform(id)
+      case .remove:
+        model.removeText(id)
+      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .addText:
+        break
+      }
+    case .insertText:
+      if action == .addText {
+        model.insertTextAtPlayhead(opensInspector: true)
       }
     }
   }
@@ -321,6 +394,7 @@ struct EditorView: View {
             model.showsProjectSettings = false
           } else {
             model.showsEffectsPanel = false
+            model.showsTextPanel = false
             model.closeTransitionsPanel()
             model.showsProjectSettings = true
           }

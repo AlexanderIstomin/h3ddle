@@ -20,8 +20,10 @@ struct ProgramTimelineView: View {
   @State private var pointerInLanes: CGFloat?
   @State private var visualTrim: VisualTrimSession?
   @State private var audioTrim: AudioTrimSession?
+  @State private var textTrim: TextTrimSession?
   @State private var visualMove: ClipMoveSession?
   @State private var audioMove: ClipMoveSession?
+  @State private var textMove: TextMoveSession?
   @State private var transitionDrag: TransitionDragSession?
 
   private let editorSpace = "editor-root"
@@ -35,7 +37,8 @@ struct ProgramTimelineView: View {
   private var contentDuration: TimeInterval {
     TimelineRuler.contentDuration(
       visualDuration: model.project.timeline.visualDuration,
-      audioTrackEnd: model.project.timeline.audioTrackEnd
+      audioTrackEnd: model.project.timeline.audioTrackEnd,
+      textTrackEnd: model.project.timeline.textTrackEnd
     )
   }
 
@@ -76,6 +79,7 @@ struct ProgramTimelineView: View {
                 }
               }
             }
+            textLane
             visualLane
             audioLane
           }
@@ -175,6 +179,88 @@ struct ProgramTimelineView: View {
     timelineScrollPosition.scrollTo(x: nextScroll)
   }
 
+  private var textLane: some View {
+    let renderedItems = model.project.timeline.textItems.filter { item in
+      textMove?.itemID == item.id
+        || shouldRenderTimelineSpan(start: item.startTime, duration: item.duration)
+    }
+    return ZStack(alignment: .topLeading) {
+      laneBackground(alt: true)
+        .overlay {
+          GeometryReader { proxy in
+            SecondaryClickProbe { local in
+              presentClipMenu(
+                .insertText,
+                at: CGPoint(
+                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
+                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
+                )
+              )
+            }
+          }
+        }
+      ForEach(renderedItems) { item in
+        let isMoving = textMove?.itemID == item.id
+        TimelineClipView(
+          title: item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Text",
+          kind: .image,
+          duration: item.duration,
+          isEnabled: item.isEnabled,
+          isTrackMuted: model.textTrackMuted,
+          isSelected: model.selectedTimelineItem == .text(item.id),
+          metrics: metrics,
+          height: TimelineChrome.textLaneHeight,
+          accentOverride: H3Color.clipText,
+          showsFilmstrip: false,
+          showsTrimHandles: model.selectedTimelineItem == .text(item.id)
+            && textMove == nil,
+          onTrimChanged: { edge, translation in
+            trimText(item, edge: edge, translation: translation)
+          },
+          onTrimEnded: { textTrim = nil },
+          onMoved: { translation in
+            dragText(item, translation: translation)
+          },
+          onMoveEnded: endTextMove
+        )
+        .offset(x: metrics.x(for: item.startTime) + (isMoving ? (textMove?.translation ?? 0) : 0))
+        .zIndex(isMoving ? 12 : 0)
+        .opacity(isMoving ? 0.92 : 1)
+        .onTapGesture(count: 2) {
+          model.selectedTimelineItem = .text(item.id)
+          model.openTextPanel()
+        }
+        .onTapGesture {
+          model.selectedTimelineItem = .text(item.id)
+        }
+        .overlay {
+          GeometryReader { proxy in
+            SecondaryClickProbe { local in
+              presentClipMenu(
+                .text(item.id),
+                at: CGPoint(
+                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
+                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
+                )
+              )
+            }
+          }
+        }
+      }
+      appendControl(track: .text)
+        .offset(
+          x: metrics.x(for: model.project.timeline.textTrackEnd) + 8,
+          y: (TimelineChrome.textLaneHeight - TimelineChrome.appendButtonSize) / 2
+        )
+    }
+    .frame(height: TimelineChrome.textLaneHeight)
+    .overlay {
+      if model.textTrackMuted {
+        Color.black.opacity(0.16).allowsHitTesting(false)
+      }
+    }
+  }
+
   private var visualLane: some View {
     let renderedPlacements = visualPlacements.filter { placement in
       visualMove?.itemID == placement.item.id
@@ -270,7 +356,7 @@ struct ProgramTimelineView: View {
           height: TimelineChrome.visualLaneHeight
         )
       }
-      appendControl(isVisual: true)
+      appendControl(track: .visual)
         .offset(
           x: metrics.x(for: model.project.timeline.visualDuration) + 8,
           y: (TimelineChrome.visualLaneHeight - TimelineChrome.appendButtonSize) / 2
@@ -343,7 +429,7 @@ struct ProgramTimelineView: View {
           height: TimelineChrome.audioLaneHeight
         )
       }
-      appendControl(isVisual: false)
+      appendControl(track: .audio)
         .offset(
           x: metrics.x(for: model.project.timeline.audioTrackEnd) + 8,
           y: (TimelineChrome.audioLaneHeight - TimelineChrome.appendButtonSize) / 2
@@ -407,9 +493,11 @@ struct ProgramTimelineView: View {
       GeometryReader { proxy in
         let width = max(proxy.size.width, 1)
         ZStack(alignment: .topLeading) {
+          collapsedTextLane(width: width)
           collapsedLane(isAudio: false, width: width)
-          collapsedLane(isAudio: true, width: width)
             .offset(y: 19)
+          collapsedLane(isAudio: true, width: width)
+            .offset(y: 38)
           collapsedPlayhead(width: width)
         }
         .contentShape(Rectangle())
@@ -421,11 +509,32 @@ struct ProgramTimelineView: View {
             }
         )
       }
-      .frame(height: 34)
+      .frame(height: TimelineChrome.collapsedStackHeight)
     }
     .padding(.horizontal, 16)
     .padding(.top, 13)
     .padding(.bottom, 17)
+  }
+
+  private func collapsedTextLane(width: CGFloat) -> some View {
+    ZStack(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 4, style: .continuous)
+        .fill(Color.white.opacity(0.06))
+        .overlay {
+          RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .stroke(H3Color.hairSoft, lineWidth: 1)
+        }
+      ForEach(model.project.timeline.textItems) { item in
+        collapsedSegment(
+          start: item.startTime,
+          duration: item.duration,
+          color: H3Color.clipText,
+          width: width,
+          isMuted: model.textTrackMuted || !item.isEnabled
+        )
+      }
+    }
+    .frame(height: TimelineChrome.collapsedLaneHeight)
   }
 
   private func collapsedLane(isAudio: Bool, width: CGFloat) -> some View {
@@ -531,10 +640,15 @@ struct ProgramTimelineView: View {
     .zIndex(6)
   }
 
-  private func appendControl(isVisual: Bool) -> some View {
-    let trackMuted = isVisual ? model.visualTrackMuted : model.audioTrackMuted
+  private func appendControl(track: AppendMenuPlacement.Track) -> some View {
+    let trackMuted =
+      switch track {
+      case .visual: model.visualTrackMuted
+      case .audio: model.audioTrackMuted
+      case .text: model.textTrackMuted
+      }
     return Button {
-      toggleAppendMenu(isVisual: isVisual)
+      toggleAppendMenu(track: track)
     } label: {
       appendPlus
     }
@@ -546,7 +660,7 @@ struct ProgramTimelineView: View {
         Color.clear.preference(
           key: AppendButtonFrameKey.self,
           value: [
-            isVisual ? "visual" : "audio": proxy.frame(in: .named(editorSpace)),
+            appendKey(track): proxy.frame(in: .named(editorSpace)),
           ]
         )
       }
@@ -557,23 +671,51 @@ struct ProgramTimelineView: View {
     .help(
       trackMuted
         ? "Enable the track to append"
-        : (isVisual ? "Append visual" : "Append audio")
+        : appendHelp(track)
     )
-    .accessibilityLabel(isVisual ? "Append visual" : "Append audio")
-    .accessibilityIdentifier(isVisual ? "append-visual" : "append-audio")
+    .accessibilityLabel(appendHelp(track))
+    .accessibilityIdentifier(appendIdentifier(track))
   }
 
-  private func toggleAppendMenu(isVisual: Bool) {
+  private func appendKey(_ track: AppendMenuPlacement.Track) -> String {
+    switch track {
+    case .visual: "visual"
+    case .audio: "audio"
+    case .text: "text"
+    }
+  }
+
+  private func appendHelp(_ track: AppendMenuPlacement.Track) -> String {
+    switch track {
+    case .visual: "Append visual"
+    case .audio: "Append audio"
+    case .text: "Add text"
+    }
+  }
+
+  private func appendIdentifier(_ track: AppendMenuPlacement.Track) -> String {
+    switch track {
+    case .visual: "append-visual"
+    case .audio: "append-audio"
+    case .text: "append-text"
+    }
+  }
+
+  private func toggleAppendMenu(track: AppendMenuPlacement.Track) {
     clipMenu = nil
-    if appendMenu?.isVisual == isVisual {
+    if appendMenu?.track == track {
       appendMenu = nil
       return
     }
-    let key = isVisual ? "visual" : "audio"
-    let frame = appendButtonFrames[key] ?? .zero
-    let menuHeight: CGFloat = isVisual ? 154 : 122
+    let frame = appendButtonFrames[appendKey(track)] ?? .zero
+    let menuHeight: CGFloat =
+      switch track {
+      case .visual: 154
+      case .audio: 122
+      case .text: 86
+      }
     appendMenu = AppendMenuPlacement(
-      isVisual: isVisual,
+      track: track,
       origin: CGPoint(x: frame.minX, y: frame.minY - menuHeight - 8)
     )
   }
@@ -599,6 +741,10 @@ struct ProgramTimelineView: View {
       model.selectedTimelineItem = .visual(id)
     case .audio(let id):
       model.selectedTimelineItem = .audio(id)
+    case .text(let id):
+      model.selectedTimelineItem = .text(id)
+    case .insertText:
+      break
     }
     clipMenu = ClipMenuPlacement(target: target, origin: origin)
   }
@@ -762,6 +908,60 @@ struct ProgramTimelineView: View {
       .allowsHitTesting(false)
   }
 
+  private func dragText(_ item: TextItem, translation: CGFloat) {
+    if textMove?.itemID != item.id {
+      clipMenu = nil
+      appendMenu = nil
+      model.selectedTimelineItem = .text(item.id)
+      textMove = TextMoveSession(
+        itemID: item.id,
+        originStart: item.startTime,
+        translation: 0
+      )
+      NSCursor.closedHand.push()
+    }
+    guard var session = textMove else { return }
+    session.translation = translation
+    textMove = session
+  }
+
+  private func endTextMove() {
+    defer {
+      if textMove != nil {
+        NSCursor.pop()
+      }
+      textMove = nil
+    }
+    guard let textMove, abs(textMove.translation) >= 1 else { return }
+    model.setTextStart(
+      textMove.itemID,
+      startTime: max(0, textMove.originStart + metrics.time(for: textMove.translation))
+    )
+  }
+
+  private func trimText(
+    _ item: TextItem,
+    edge: TimelineTrimEdge,
+    translation: CGFloat
+  ) {
+    model.selectedTimelineItem = .text(item.id)
+    if textTrim?.itemID != item.id || textTrim?.edge != edge {
+      model.registerUndoCheckpoint()
+      textTrim = TextTrimSession(
+        itemID: item.id,
+        edge: edge,
+        origin: TextTrim(startTime: item.startTime, duration: item.duration)
+      )
+    }
+    guard let textTrim else { return }
+    model.applyTextTrim(
+      textTrim.itemID,
+      edge: textTrim.edge,
+      delta: metrics.time(for: translation),
+      origin: textTrim.origin
+    )
+  }
+
   private func trimVisual(
     _ placement: VisualPlacement,
     edge: VisualTrimEdge,
@@ -852,6 +1052,18 @@ private struct VisualTrimSession {
   var startTime: TimeInterval
   var origin: VisualTrim
   var sourceLimit: TimeInterval?
+}
+
+private struct TextTrimSession {
+  var itemID: UUID
+  var edge: TimelineTrimEdge
+  var origin: TextTrim
+}
+
+private struct TextMoveSession {
+  var itemID: UUID
+  var originStart: TimeInterval
+  var translation: CGFloat
 }
 
 private struct AudioTrimSession {

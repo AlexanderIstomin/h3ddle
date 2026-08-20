@@ -6,6 +6,8 @@ import os
 
 public struct TextLayout: Sendable {
   public var expandedSize: (width: Double, height: Double)
+  /// Offset of the content box inside the expanded raster, y-up.
+  public var contentInset: Double
   public var lineFragments: [CanvasLayout.Rect]
   public var glyphBounds: [CanvasLayout.Rect]
 }
@@ -13,19 +15,33 @@ public struct TextLayout: Sendable {
 public enum FontResolver {
   public static func font(for style: TextStyle) -> CTFont {
     let size = CGFloat(max(style.fontSize, 1))
-    if let name = style.fontPostScriptName as CFString?,
+    let base: CTFont
+    if let matched = matchFamily(style, size: size) {
+      base = matched
+    } else if let name = style.fontPostScriptName as CFString?,
       let named = CTFontCreateWithName(name, size, nil) as CTFont?
     {
-      return named
+      base = named
+    } else {
+      Logger(subsystem: "com.h3ddle.app", category: "h3ddle.media.text").info(
+        "Font fallback for \(style.fontFamily, privacy: .public)"
+      )
+      base =
+        CTFontCreateUIFontForLanguage(.system, size, nil)
+        ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
     }
-    if let matched = matchFamily(style, size: size) {
-      return matched
-    }
-    Logger(subsystem: "com.h3ddle.app", category: "h3ddle.media.text").info(
-      "Font fallback for \(style.fontFamily, privacy: .public)"
-    )
-    return CTFontCreateUIFontForLanguage(.system, size, nil)
-      ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
+    return applyTraits(base, style: style, size: size)
+  }
+
+  public static func postScriptName(for style: TextStyle) -> String? {
+    CTFontCopyPostScriptName(font(for: style)) as String
+  }
+
+  public static func resolved(_ style: TextStyle) -> TextStyle {
+    var next = style
+    next.fontPostScriptName = nil
+    next.fontPostScriptName = postScriptName(for: next)
+    return next
   }
 
   private static func matchFamily(_ style: TextStyle, size: CGFloat) -> CTFont? {
@@ -35,23 +51,66 @@ public enum FontResolver {
     let targetWeight = weightTrait(style.fontWeight)
     var best: (font: CTFont, score: Double)?
     for name in names {
-      let base = CTFontCreateWithName(name as CFString, size, nil)
-      let family = CTFontCopyFamilyName(base) as String
+      let candidate = CTFontCreateWithName(name as CFString, size, nil)
+      let family = CTFontCopyFamilyName(candidate) as String
       guard family.caseInsensitiveCompare(style.fontFamily) == .orderedSame
         || name.caseInsensitiveCompare(style.fontFamily) == .orderedSame
       else {
         continue
       }
-      let traits = CTFontCopyTraits(base) as NSDictionary
+      let traits = CTFontCopyTraits(candidate) as NSDictionary
       let weight = (traits[kCTFontWeightTrait] as? NSNumber)?.doubleValue ?? 0
       let slant = (traits[kCTFontSlantTrait] as? NSNumber)?.doubleValue ?? 0
-      let italicScore = style.italic ? abs(slant - 0.07) : abs(slant)
-      let score = abs(weight - targetWeight) + italicScore
+      let italicMismatch: Double
+      if style.italic {
+        italicMismatch = slant > 0.03 ? 0 : 3
+      } else {
+        italicMismatch = abs(slant) * 6
+      }
+      let score = abs(weight - targetWeight) + italicMismatch
       if best == nil || score < best!.score {
-        best = (base, score)
+        best = (candidate, score)
       }
     }
     return best?.font
+  }
+
+  private static func applyTraits(_ font: CTFont, style: TextStyle, size: CGFloat) -> CTFont {
+    var result = font
+    if style.italic {
+      if let italic = CTFontCreateCopyWithSymbolicTraits(
+        result,
+        size,
+        nil,
+        .traitItalic,
+        .traitItalic
+      ) {
+        result = italic
+      } else {
+        result = copy(result, size: size, slant: 0.15, weight: nil)
+      }
+    }
+    let current = (CTFontCopyTraits(result) as NSDictionary)[kCTFontWeightTrait] as? NSNumber
+    let currentWeight = current?.doubleValue ?? 0
+    let wanted = weightTrait(style.fontWeight)
+    if abs(currentWeight - wanted) > 0.08 {
+      result = copy(result, size: size, slant: nil, weight: wanted)
+    }
+    return result
+  }
+
+  private static func copy(
+    _ font: CTFont,
+    size: CGFloat,
+    slant: Double?,
+    weight: Double?
+  ) -> CTFont {
+    var traits: [CFString: Any] = [:]
+    if let slant { traits[kCTFontSlantTrait] = slant }
+    if let weight { traits[kCTFontWeightTrait] = weight }
+    let attributes = [kCTFontTraitsAttribute: traits] as CFDictionary
+    let descriptor = CTFontDescriptorCreateWithAttributes(attributes)
+    return CTFontCreateCopyWithAttributes(font, size, nil, descriptor)
   }
 
   private static func weightTrait(_ weight: Int) -> Double {
@@ -144,8 +203,34 @@ public enum TextRasterizer {
       CTFrameDraw(prepared.frame, context)
     }
     context.restoreGState()
-    guard let image = context.makeImage() else { return nil }
+    guard let raw = context.makeImage(), let image = imageIOOriented(raw) else { return nil }
     return (image, prepared.layout)
+  }
+
+  /// `makeImage()` from a y-up bitmap stores the bottom row first. ImageIO
+  /// stills are top-row-first; the compositor blit assumes that convention.
+  private static func imageIOOriented(_ image: CGImage) -> CGImage? {
+    let width = image.width
+    let height = image.height
+    var data = [UInt8](repeating: 0, count: width * height * 4)
+    guard
+      let context = CGContext(
+        data: &data,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+          | CGBitmapInfo.byteOrder32Little.rawValue
+      )
+    else {
+      return nil
+    }
+    context.translateBy(x: 0, y: CGFloat(height))
+    context.scaleBy(x: 1, y: -1)
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
   }
 
   private struct Prepared {
@@ -227,6 +312,7 @@ public enum TextRasterizer {
           Double(content.width) + inset * 2,
           Double(content.height) + inset * 2
         ),
+        contentInset: inset,
         lineFragments: lines,
         glyphBounds: glyphs
       ),

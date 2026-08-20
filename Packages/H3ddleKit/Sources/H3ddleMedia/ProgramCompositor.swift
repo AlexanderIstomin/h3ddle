@@ -135,6 +135,49 @@ public final class ProgramCompositor: @unchecked Sendable {
     return buffer
   }
 
+  /// Copies `source` and blits overlays on top. Used by live canvas drags so
+  /// the visual layer can stay frozen while text moves with the gizmo.
+  public func addingOverlays(
+    _ overlays: [ProgramTextPresentation],
+    onto source: CVPixelBuffer
+  ) -> CVPixelBuffer? {
+    guard let dest = copy(source) else { return nil }
+    draw(overlays, onto: dest)
+    return dest
+  }
+
+  private func copy(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+    guard
+      CVPixelBufferGetWidth(source) == width,
+      CVPixelBufferGetHeight(source) == height,
+      let dest = makePixelBuffer()
+    else {
+      return nil
+    }
+    CVPixelBufferLockBaseAddress(source, .readOnly)
+    CVPixelBufferLockBaseAddress(dest, [])
+    defer {
+      CVPixelBufferUnlockBaseAddress(source, .readOnly)
+      CVPixelBufferUnlockBaseAddress(dest, [])
+    }
+    guard
+      let src = CVPixelBufferGetBaseAddress(source),
+      let dst = CVPixelBufferGetBaseAddress(dest)
+    else {
+      return nil
+    }
+    let srcStride = CVPixelBufferGetBytesPerRow(source)
+    let dstStride = CVPixelBufferGetBytesPerRow(dest)
+    let rowBytes = min(srcStride, dstStride)
+    for y in 0..<height {
+      dst.advanced(by: y * dstStride).copyMemory(
+        from: src.advanced(by: y * srcStride),
+        byteCount: rowBytes
+      )
+    }
+    return dest
+  }
+
   public static func makeImage(from buffer: CVPixelBuffer) -> CGImage? {
     var image: CGImage?
     let status = VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image)

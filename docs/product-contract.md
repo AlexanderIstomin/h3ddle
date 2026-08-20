@@ -4,7 +4,9 @@
 
 - The header shows the H3ddle title on the left and the model selector plus
   Export on the right.
-- One visual lane and one audio lane share one ruler and playhead.
+- One text lane (T1), one visual lane (V1), and one audio lane (A1) share one
+  ruler and playhead. T1 sits above V1. Titles store explicit start times, may
+  overlap, and later titles draw on top.
 - Visual assets support generated or imported video and images. Audio assets
   support generated or imported audio. Import copies the file into an
   app-managed media folder and appends after the last clip on that lane.
@@ -24,20 +26,25 @@
   audio delete leaves later clips where they are.
 - Insert of generated or imported media is append-after-last only: a visual
   goes on the visual end, audio on the current audio end. There is no
-  insert-at-playhead, replace mode, or media library. Imported stills hold
-  for 3 seconds.
+  insert-at-playhead, replace mode, or media library for media. Imported stills
+  hold for 3 seconds. Text is the exception: T1 `+`, ⌘T, or an empty-canvas /
+  empty-T1 “Add text” context menu inserts a 5-second “Text” title at the
+  playhead and opens the 320 px Text inspector. Selecting a title does not
+  auto-open the panel; double-click on a T1 clip does.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
 - Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
   audio model. Duration follows the same 22+17n frame shapes as video.
 - Disabling keeps an item recoverable. Removing audio does not shift later audio.
 - Each visual video can include or mute its native soundtrack.
-- The program canvas shows the composed visual at the playhead, fitted to the
-  project aspect on the project background. A selected visual can be moved,
-  scaled (corner handles; Command scales about center), and rotated (handle;
-  Shift snaps to 15°) on the monitor. Empty-canvas drag pans the viewer;
-  Option-drag force-pans. Fit and cover remain snap-to-frame presets; Reset
-  transform zeros translation and scale and keeps rotation. Adjacent visual
+- The program canvas shows the composed visual and any T1 titles at the
+  playhead, fitted to the project aspect on the project background. A selected
+  visual or title can be moved, scaled (corner handles; Command scales about
+  center), and rotated (handle; Shift snaps to 15°) on the monitor. Unselected
+  titles hit visible glyphs only; a selected title uses its expanded bounds.
+  Empty-canvas drag pans the viewer; Option-drag force-pans. Empty-canvas
+  right-click offers Add text. Fit and cover remain snap-to-frame presets for
+  visuals; Reset transform zeros translation and scale and keeps rotation. Adjacent visual
   cuts can dissolve, fade, or wipe. Applying a transition overlaps the incoming clip over the outgoing
   tail by the transition duration and shortens the program by that amount.
   The cut + opens the Transitions panel (same 320px slot as Effects);
@@ -85,8 +92,11 @@
   frame rate, format, H.264 profile, and AAC quality. Bitrate edits select
   Custom. Loudness and hardware acceleration stay additive.
 - Formats are H.264, H.265, and ProRes. GIF and WebM are out of scope.
-- Full video or a custom in/out range can be encoded. The visual duration is
-  authoritative; trailing audio shows a warning and is truncated.
+- Full video or a custom in/out range can be encoded. Export lasts until the
+  later of the visual and, when T1 is included, the last title. A title-only
+  program exports that T1 span over the project background. Trailing audio
+  shows a warning and is truncated at that end. Disabling T1 omits overlays
+  and restores visual-length export; without a visual that is an empty program.
 - Encode uses AVFoundation and VideoToolbox on this Mac. Cancel aborts the
   writer. Completion reveals the file in Finder.
 - Optional −14 LUFS normalization is an offline mix pass, not a live meter.

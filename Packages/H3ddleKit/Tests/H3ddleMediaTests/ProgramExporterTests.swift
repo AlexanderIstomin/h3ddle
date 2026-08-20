@@ -28,6 +28,63 @@ struct ProgramExporterTests {
     }
   }
 
+  @Test("Text without a visual exports the title duration")
+  func textOnlyExportsTitleDuration() async throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("h3ddle-text-only-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .extreme)
+    project.settings.apply(frameRate: 8)
+    _ = project.timeline.insertText(TextItem(startTime: 0, duration: 1, text: "Hello"))
+
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.updateCustom {
+      $0.resolution = .extreme
+      $0.framesPerSecond = 8
+      $0.videoBitrateKbps = 400
+    }
+
+    let destination = folder.appendingPathComponent("title.mp4")
+    for try await _ in ProgramExporter().export(
+      project: project,
+      settings: settings,
+      destination: destination
+    ) {
+    }
+
+    let asset = AVURLAsset(url: destination)
+    let duration = try await asset.load(.duration)
+    #expect(duration.seconds > 0.7)
+    #expect(duration.seconds < 1.4)
+    let videoTracks = try await asset.loadTracks(withMediaType: .video)
+    #expect(videoTracks.count == 1)
+  }
+
+  @Test("Muted text without a visual cannot export")
+  func mutedTextOnlyIsEmptyProgram() async {
+    var project = H3ddleProject()
+    _ = project.timeline.insertText(TextItem(startTime: 0, duration: 5, text: "Hello"))
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.includeTextLane = false
+    let destination = FileManager.default.temporaryDirectory
+      .appendingPathComponent("h3ddle-muted-text-\(UUID().uuidString).mp4")
+    do {
+      for try await _ in ProgramExporter().export(
+        project: project,
+        settings: settings,
+        destination: destination
+      ) {
+      }
+      Issue.record("Expected an empty-program error")
+    } catch MediaExportError.emptyProgram {
+    } catch {
+      Issue.record("Unexpected error \(error)")
+    }
+  }
+
   @Test("Image plus trailing audio exports the visual duration")
   func exportsVisualDuration() async throws {
     let folder = FileManager.default.temporaryDirectory
@@ -246,6 +303,78 @@ struct ProgramExporterTests {
     } catch {
       Issue.record("Unexpected cancel error \(error)")
     }
+  }
+
+  @Test("Trailing text extends the exported file")
+  func trailingTextExtendsFile() async throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("h3ddle-text-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let imageURL = folder.appendingPathComponent("still.png")
+    try ExportTestMedia.writePNG(to: imageURL, width: 32, height: 18, red: 20, green: 80, blue: 40)
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .extreme)
+    project.settings.apply(frameRate: 8)
+    let image = AssetReference(kind: .image, displayName: "Still", url: imageURL, duration: 1)
+    project.addAsset(image)
+    try project.timeline.appendVisual(image)
+    _ = project.timeline.insertText(TextItem(startTime: 0.5, duration: 2, text: "Hello"))
+
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.updateCustom {
+      $0.resolution = .extreme
+      $0.framesPerSecond = 8
+      $0.videoBitrateKbps = 400
+    }
+
+    let destination = folder.appendingPathComponent("titled.mp4")
+    for try await _ in ProgramExporter().export(
+      project: project,
+      settings: settings,
+      destination: destination
+    ) {
+    }
+
+    let duration = try await AVURLAsset(url: destination).load(.duration)
+    #expect(duration.seconds > 2.2)
+    #expect(duration.seconds < 3.2)
+  }
+
+  @Test("Omitting the text lane keeps visual duration")
+  func omittedTextLaneStaysVisualLength() async throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("h3ddle-notext-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let imageURL = folder.appendingPathComponent("still.png")
+    try ExportTestMedia.writePNG(to: imageURL, width: 32, height: 18, red: 40, green: 40, blue: 80)
+    var project = H3ddleProject()
+    let image = AssetReference(kind: .image, displayName: "Still", url: imageURL, duration: 1)
+    project.addAsset(image)
+    try project.timeline.appendVisual(image)
+    _ = project.timeline.insertText(TextItem(startTime: 0, duration: 3, text: "Hello"))
+
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.updateCustom {
+      $0.resolution = .extreme
+      $0.framesPerSecond = 8
+      $0.videoBitrateKbps = 400
+    }
+    settings.includeTextLane = false
+
+    let destination = folder.appendingPathComponent("picture.mp4")
+    for try await _ in ProgramExporter().export(
+      project: project,
+      settings: settings,
+      destination: destination
+    ) {
+    }
+
+    let duration = try await AVURLAsset(url: destination).load(.duration)
+    #expect(abs(duration.seconds - 1) < 0.35)
   }
 }
 

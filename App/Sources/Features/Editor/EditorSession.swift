@@ -24,6 +24,7 @@ enum TimelinePresentationMode: String, CaseIterable, Identifiable {
 enum TimelineItemID: Hashable {
   case visual(UUID)
   case audio(UUID)
+  case text(UUID)
 }
 
 struct CanvasGestureSession: Equatable {

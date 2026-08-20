@@ -411,6 +411,161 @@ struct ProgramCompositorTests {
     #expect(isNear(rgb(buffer, x: 14, yFromBottom: 8), r: 220, g: 20, b: 20))
   }
 
+  @Test("A centered title lights the canvas without a visual")
+  func textOnlyCenterIsLit() async {
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .fullHD)
+    _ = project.timeline.insertText(
+      TextItem(
+        startTime: 0,
+        duration: 2,
+        text: "T",
+        style: TextStyle(fontSize: 240, fill: .white)
+      )
+    )
+    let frame = ProgramPreview.frame(at: 0.5, project: project)
+    let compositor = ProgramCompositor(
+      width: 320,
+      height: 180,
+      background: (0, 0, 0),
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
+    )
+    guard let buffer = await compositor.pixelBuffer(for: frame) else {
+      Issue.record("Expected a text-only buffer")
+      return
+    }
+    let center = rgb(buffer, x: 160, yFromBottom: 90)
+    #expect(Int(center.r) + Int(center.g) + Int(center.b) > 80)
+  }
+
+  @Test("Live overlay blit matches a full composite")
+  func addingOverlaysMatchesFullComposite() async {
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .fullHD)
+    _ = project.timeline.insertText(
+      TextItem(
+        startTime: 0,
+        duration: 2,
+        text: "T",
+        style: TextStyle(fontSize: 240, fill: .white)
+      )
+    )
+    let frame = ProgramPreview.frame(at: 0.5, project: project)
+    let compositor = ProgramCompositor(
+      width: 320,
+      height: 180,
+      background: (0, 0, 0),
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
+    )
+    var visualOnly = frame
+    visualOnly.overlays = []
+    guard
+      let visual = await compositor.pixelBuffer(for: visualOnly),
+      let live = compositor.addingOverlays(frame.overlays, onto: visual),
+      let full = await compositor.pixelBuffer(for: frame)
+    else {
+      Issue.record("Expected live and full composites")
+      return
+    }
+    let liveCenter = rgb(live, x: 160, yFromBottom: 90)
+    let fullCenter = rgb(full, x: 160, yFromBottom: 90)
+    #expect(Int(liveCenter.r) + Int(liveCenter.g) + Int(liveCenter.b) > 80)
+    #expect(isNear(liveCenter, r: fullCenter.r, g: fullCenter.g, b: fullCenter.b))
+  }
+
+  @Test("The same title occupies the same relative region at two compose sizes")
+  func lockedLayoutKeepsRelativeRegion() async {
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .fullHD)
+    _ = project.timeline.insertText(
+      TextItem(
+        startTime: 0,
+        duration: 2,
+        text: "T",
+        style: TextStyle(fontSize: 240, fill: .white)
+      )
+    )
+    let frame = ProgramPreview.frame(at: 0.5, project: project)
+    let small = ProgramCompositor(
+      width: 640,
+      height: 360,
+      background: (0, 0, 0),
+      layoutWidth: 1920,
+      layoutHeight: 1080
+    )
+    let large = ProgramCompositor(
+      width: 1920,
+      height: 1080,
+      background: (0, 0, 0),
+      layoutWidth: 1920,
+      layoutHeight: 1080
+    )
+    guard
+      let smallBuffer = await small.pixelBuffer(for: frame),
+      let largeBuffer = await large.pixelBuffer(for: frame)
+    else {
+      Issue.record("Expected both compose sizes")
+      return
+    }
+    let smallCenter = rgb(smallBuffer, x: 320, yFromBottom: 180)
+    let largeCenter = rgb(largeBuffer, x: 960, yFromBottom: 540)
+    #expect(Int(smallCenter.r) + Int(smallCenter.g) + Int(smallCenter.b) > 80)
+    #expect(Int(largeCenter.r) + Int(largeCenter.g) + Int(largeCenter.b) > 80)
+  }
+
+  @Test("A capital T is upright on the composed image")
+  func titleGlyphIsUpright() async {
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .fullHD)
+    _ = project.timeline.insertText(
+      TextItem(
+        startTime: 0,
+        duration: 2,
+        text: "T",
+        style: TextStyle(fontSize: 320, fill: .white)
+      )
+    )
+    let frame = ProgramPreview.frame(at: 0.5, project: project)
+    let compositor = ProgramCompositor(
+      width: 320,
+      height: 180,
+      background: (0, 0, 0),
+      layoutWidth: 1920,
+      layoutHeight: 1080
+    )
+    guard let buffer = await compositor.pixelBuffer(for: frame) else {
+      Issue.record("Expected a title buffer")
+      return
+    }
+    var mass = 0
+    var massY = 0
+    var minY = Int.max
+    var maxY = Int.min
+    for y in 0..<180 {
+      for x in 80..<240 {
+        let sample = rgb(buffer, x: x, yFromBottom: y)
+        let luminance = Int(sample.r) + Int(sample.g) + Int(sample.b)
+        if luminance > 40 {
+          mass += luminance
+          massY += luminance * y
+          minY = min(minY, y)
+          maxY = max(maxY, y)
+        }
+      }
+    }
+    guard mass > 0, maxY > minY else {
+      Issue.record("Expected a lit stem for T")
+      return
+    }
+    let centroid = Double(massY) / Double(mass)
+    let mid = Double(minY + maxY) / 2
+    // Same row convention as `translationMovesStill`: program +y (the top of
+    // an upright T) lands in low buffer rows, which VTCreate shows at the top.
+    #expect(centroid < mid)
+  }
+
   private func solidImage(
     width: Int,
     height: Int,
