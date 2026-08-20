@@ -1,12 +1,14 @@
 import AppKit
 import H3ddleCore
 import H3ddleDesignSystem
+import H3ddleMedia
 import SwiftUI
 
 struct TextInspectorPanel: View {
   @Bindable var model: AppModel
   @State private var contentDraft = ""
   @State private var familyQuery = ""
+  @State private var showsFamilyPicker = false
   @State private var showsAdvanced = false
   @State private var didCheckpointContent = false
 
@@ -21,17 +23,14 @@ struct TextInspectorPanel: View {
       Divider().overlay(H3Color.line)
       if let item = selected {
         ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 20) {
             contentEditor
-            familyPicker
-            weightAndItalic(item)
+            fontRow(item)
             alignmentRow(item)
             fillRow(item)
-            DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
+            H3Accordion("Advanced", isExpanded: $showsAdvanced) {
               advanced(item)
             }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(H3Color.textSecondary)
           }
           .padding(14)
         }
@@ -57,10 +56,6 @@ struct TextInspectorPanel: View {
       Text("Text")
         .font(.system(size: 13, weight: .semibold))
       Spacer()
-      Text(headerTitle)
-        .font(.system(size: 10, design: .monospaced))
-        .foregroundStyle(H3Color.textSecondary)
-        .lineLimit(1)
       Button {
         model.closeTextPanel()
       } label: {
@@ -79,11 +74,6 @@ struct TextInspectorPanel: View {
     }
     .padding(.horizontal, 12)
     .frame(height: 44)
-  }
-
-  private var headerTitle: String {
-    let line = selected?.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "No clip"
-    return line.isEmpty ? "Text" : line
   }
 
   private var emptyState: some View {
@@ -106,14 +96,12 @@ struct TextInspectorPanel: View {
 
   private var contentEditor: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Content")
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(H3Color.textSecondary)
+      fieldLabel("Content")
       TextEditor(text: $contentDraft)
         .font(.system(size: 13))
         .scrollContentBackground(.hidden)
         .padding(8)
-        .frame(minHeight: 84)
+        .frame(minHeight: 72)
         .background(H3Color.chrome)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
@@ -133,44 +121,88 @@ struct TextInspectorPanel: View {
     }
   }
 
-  private var familyPicker: some View {
+  private func fontRow(_ item: TextItem) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Family")
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(H3Color.textSecondary)
-      TextField("Search fonts", text: $familyQuery)
-        .textFieldStyle(.plain)
-        .font(.system(size: 11, design: .monospaced))
-        .padding(.horizontal, 10)
-        .frame(height: 30)
-        .background(H3Color.chrome)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+      fieldLabel("Font")
+      familyButton(item)
+      HStack(spacing: 8) {
+        weightMenu(item)
+        italicToggle(item)
+      }
+    }
+  }
+
+  private func familyButton(_ item: TextItem) -> some View {
+    Button {
+      familyQuery = ""
+      showsFamilyPicker.toggle()
+    } label: {
+      HStack(spacing: 8) {
+        Text(displayFamily(item.style.fontFamily))
+          .font(.custom(item.style.fontFamily, size: 13))
+          .foregroundStyle(H3Color.textPrimary)
+          .lineLimit(1)
+        Spacer(minLength: 0)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+      .padding(.horizontal, 11)
+      .frame(height: 34)
+      .background(H3Color.chrome)
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .popover(isPresented: $showsFamilyPicker, arrowEdge: .trailing) {
+      familyPopover(item)
+    }
+    .accessibilityIdentifier("text-font-family")
+  }
+
+  private func familyPopover(_ item: TextItem) -> some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
+        Image(systemName: "magnifyingglass")
+          .foregroundStyle(H3Color.textSecondary)
+        TextField("Search fonts", text: $familyQuery)
+          .textFieldStyle(.plain)
+          .font(.system(size: 12))
+      }
+      .padding(.horizontal, 10)
+      .frame(height: 32)
+      .background(H3Color.chrome)
+      Divider().overlay(H3Color.line)
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 2) {
+        LazyVStack(alignment: .leading, spacing: 1) {
           ForEach(filteredFamilies, id: \.self) { family in
             Button {
               applyStyle { style in
                 style.fontFamily = family
                 style.fontPostScriptName = nil
               }
+              showsFamilyPicker = false
             } label: {
               Text(family)
-                .font(.custom(family, size: 12))
+                .font(.custom(family, size: 13))
                 .foregroundStyle(H3Color.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
                 .background(
-                  RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(selected?.style.fontFamily == family ? H3Color.controlHover : Color.clear)
+                  item.style.fontFamily == family ? H3Color.accent.opacity(0.16) : Color.clear
                 )
             }
             .buttonStyle(.plain)
           }
         }
       }
-      .frame(height: 120)
     }
+    .frame(width: 260, height: 320)
+    .background(H3Color.surface)
   }
 
   private var filteredFamilies: [String] {
@@ -180,43 +212,75 @@ struct TextInspectorPanel: View {
     return all.filter { $0.localizedCaseInsensitiveContains(query) }
   }
 
-  private func weightAndItalic(_ item: TextItem) -> some View {
-    HStack(spacing: 8) {
-      Picker(
-        "Weight",
-        selection: Binding(
-          get: { item.style.fontWeight },
-          set: { weight in
-            applyStyle { $0.fontWeight = weight }
-          }
-        )
-      ) {
-        ForEach([100, 200, 300, 400, 500, 600, 700, 800, 900], id: \.self) { weight in
-          Text(weightLabel(weight)).tag(weight)
+  private func weightMenu(_ item: TextItem) -> some View {
+    Menu {
+      ForEach([100, 200, 300, 400, 500, 600, 700, 800, 900], id: \.self) { weight in
+        Button(weightLabel(weight)) {
+          applyStyle { $0.fontWeight = weight }
         }
       }
-      .labelsHidden()
-      Toggle(
-        "Italic",
-        isOn: Binding(
-          get: { item.style.italic },
-          set: { italic in applyStyle { $0.italic = italic } }
-        )
-      )
-      .toggleStyle(.checkbox)
+    } label: {
+      HStack {
+        Text(weightLabel(item.style.fontWeight))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(H3Color.textPrimary)
+        Spacer(minLength: 0)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+      .padding(.horizontal, 11)
+      .frame(height: 34)
+      .background(H3Color.chrome)
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("text-font-weight")
+  }
+
+  private func italicToggle(_ item: TextItem) -> some View {
+    Button {
+      applyStyle { $0.italic.toggle() }
+    } label: {
+      Text("I")
+        .font(.system(size: 14, weight: .semibold, design: .serif).italic())
+        .frame(width: 34, height: 34)
+        .foregroundStyle(item.style.italic ? H3Color.accent : H3Color.textPrimary)
+        .background(item.style.italic ? H3Color.accent.opacity(0.16) : H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(item.style.italic ? H3Color.accent : H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .help("Italic")
+    .accessibilityIdentifier("text-italic")
+    .accessibilityAddTraits(item.style.italic ? [.isSelected] : [])
   }
 
   private func alignmentRow(_ item: TextItem) -> some View {
-    HStack(spacing: 6) {
-      alignmentButton(item, H3ddleCore.TextAlignment.leading, "text.alignleft")
-      alignmentButton(item, H3ddleCore.TextAlignment.center, "text.aligncenter")
-      alignmentButton(item, H3ddleCore.TextAlignment.trailing, "text.alignright")
-      Spacer()
+    VStack(alignment: .leading, spacing: 6) {
+      fieldLabel("Align")
+      HStack(spacing: 0) {
+        alignmentSegment(item, .leading, "text.alignleft")
+        alignmentSegment(item, .center, "text.aligncenter")
+        alignmentSegment(item, .trailing, "text.alignright")
+      }
+      .background(H3Color.chrome)
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(H3Color.line, lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
   }
 
-  private func alignmentButton(
+  private func alignmentSegment(
     _ item: TextItem,
     _ alignment: H3ddleCore.TextAlignment,
     _ symbol: String
@@ -226,35 +290,26 @@ struct TextInspectorPanel: View {
     } label: {
       Image(systemName: symbol)
         .font(.system(size: 13, weight: .semibold))
-        .frame(width: 32, height: 32)
-        .background(
-          item.style.alignment == alignment ? H3Color.accent.opacity(0.18) : H3Color.controlFill
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
+        .foregroundStyle(
+          item.style.alignment == alignment ? H3Color.textPrimary : H3Color.textSecondary
         )
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .frame(width: 44, height: 44)
-        .contentShape(Rectangle())
+        .background(
+          item.style.alignment == alignment ? H3Color.accent.opacity(0.18) : Color.clear
+        )
     }
     .buttonStyle(.plain)
-    .foregroundStyle(H3Color.textPrimary)
+    .accessibilityIdentifier("text-align-\(alignment.rawValue)")
   }
 
   private func fillRow(_ item: TextItem) -> some View {
     HStack(spacing: 10) {
-      ColorPicker(
-        "Fill",
-        selection: Binding(
-          get: { Color(textColor: item.style.fill) },
-          set: { color in
-            applyStyle { $0.fill = TextColor(color) }
-          }
-        ),
-        supportsOpacity: true
-      )
-      .labelsHidden()
-      Text("Fill")
-        .font(.system(size: 12))
-        .foregroundStyle(H3Color.textSecondary)
+      fieldLabel("Fill")
       Spacer()
+      squareSwatch(item.style.fill) { fill in
+        applyStyle { $0.fill = fill }
+      }
     }
   }
 
@@ -274,6 +329,7 @@ struct TextInspectorPanel: View {
           }
         )
       )
+      .toggleStyle(.switch)
       labeledSlider("Font size", value: item.style.fontSize, range: 8...240) { size in
         applyStyle { $0.fontSize = size }
       }
@@ -286,25 +342,27 @@ struct TextInspectorPanel: View {
       labeledSlider("Stroke", value: item.style.strokeWidth, range: 0...12) { value in
         applyStyle { $0.strokeWidth = value }
       }
-      ColorPicker(
-        "Stroke color",
-        selection: Binding(
-          get: { Color(textColor: item.style.strokeColor) },
-          set: { color in applyStyle { $0.strokeColor = TextColor(color) } }
-        ),
-        supportsOpacity: true
-      )
+      HStack {
+        Text("Stroke color")
+          .font(.system(size: 11))
+          .foregroundStyle(H3Color.textSecondary)
+        Spacer()
+        squareSwatch(item.style.strokeColor) { color in
+          applyStyle { $0.strokeColor = color }
+        }
+      }
       labeledSlider("Shadow blur", value: item.style.shadowBlur, range: 0...24) { value in
         applyStyle { $0.shadowBlur = value }
       }
-      ColorPicker(
-        "Background",
-        selection: Binding(
-          get: { Color(textColor: item.style.backgroundColor) },
-          set: { color in applyStyle { $0.backgroundColor = TextColor(color) } }
-        ),
-        supportsOpacity: true
-      )
+      HStack {
+        Text("Background")
+          .font(.system(size: 11))
+          .foregroundStyle(H3Color.textSecondary)
+        Spacer()
+        squareSwatch(item.style.backgroundColor) { color in
+          applyStyle { $0.backgroundColor = color }
+        }
+      }
       labeledSlider("Padding", value: item.style.backgroundPadding, range: 0...48) { value in
         applyStyle { $0.backgroundPadding = value }
       }
@@ -316,7 +374,44 @@ struct TextInspectorPanel: View {
         applyStyle { $0.backgroundCornerRadius = value }
       }
     }
-    .padding(.top, 8)
+    .padding(.top, 4)
+  }
+
+  private func squareSwatch(_ color: TextColor, onChange: @escaping (TextColor) -> Void) -> some View
+  {
+    ZStack {
+      ColorPicker(
+        "",
+        selection: Binding(
+          get: { Color(textColor: color) },
+          set: { onChange(TextColor($0)) }
+        ),
+        supportsOpacity: true
+      )
+      .labelsHidden()
+      .frame(width: 22, height: 22)
+      Group {
+        if color.a < 0.04 {
+          H3Checkerboard(cell: 4)
+        } else {
+          Color(textColor: color)
+        }
+      }
+      .allowsHitTesting(false)
+      RoundedRectangle(cornerRadius: 4, style: .continuous)
+        .stroke(H3Color.line, lineWidth: 1)
+        .allowsHitTesting(false)
+    }
+    .frame(width: 22, height: 22)
+    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    .accessibilityLabel("Color")
+  }
+
+  private func fieldLabel(_ title: String) -> some View {
+    Text(title.uppercased())
+      .font(.system(size: 9, weight: .bold, design: .monospaced))
+      .tracking(0.6)
+      .foregroundStyle(H3Color.textSecondary)
   }
 
   private func labeledSlider(
@@ -348,7 +443,12 @@ struct TextInspectorPanel: View {
   private func applyStyle(_ mutate: (inout TextStyle) -> Void) {
     guard var item = selected else { return }
     mutate(&item.style)
-    model.setTextStyle(item.id, FontCatalog.resolved(item.style))
+    model.setTextStyle(item.id, FontResolver.resolved(item.style))
+  }
+
+  private func displayFamily(_ family: String) -> String {
+    if family == ".AppleSystemUIFont" { return "System" }
+    return family
   }
 
   private func weightLabel(_ weight: Int) -> String {

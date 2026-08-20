@@ -56,7 +56,6 @@ private enum ExportSessionWriter {
     emit: @Sendable (MediaExportEvent) -> Void
   ) async throws {
     let plan = ProgramCompositionPlan(project: project)
-    guard project.timeline.visualDuration > 0.001 else { throw MediaExportError.emptyProgram }
     let exportDuration = plan.exportDuration(includeTextLane: settings.includeTextLane)
     let span = settings.range.resolved(in: exportDuration)
     let duration = span.outSec - span.inSec

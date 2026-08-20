@@ -16,7 +16,7 @@ Preview duration is `max(visual, audio, text)`. Export duration is
 `max(visual, text)` when T1 is included, otherwise the visual duration. That
 is an intentional exception to ADR 0003 for overlay text only. Audio does not
 get the same exception: trailing audio still warns and truncates at the export
-end. A title-only program still cannot export.
+end. A title-only program exports the T1 span over the project background.
 
 Insert of generated or imported media stays append-after-last. Text inserts at
 the playhead. The T1 `+` menu, ⌘T, and an empty-canvas / empty-T1 “Add text”

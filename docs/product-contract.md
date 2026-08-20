@@ -93,9 +93,10 @@
   Custom. Loudness and hardware acceleration stay additive.
 - Formats are H.264, H.265, and ProRes. GIF and WebM are out of scope.
 - Full video or a custom in/out range can be encoded. Export lasts until the
-  later of the visual and, when T1 is included, the last title. Trailing audio
-  shows a warning and is truncated at that end. A title-only program cannot
-  export. Disabling T1 omits overlays and restores visual-length export.
+  later of the visual and, when T1 is included, the last title. A title-only
+  program exports that T1 span over the project background. Trailing audio
+  shows a warning and is truncated at that end. Disabling T1 omits overlays
+  and restores visual-length export; without a visual that is an empty program.
 - Encode uses AVFoundation and VideoToolbox on this Mac. Cancel aborts the
   writer. Completion reveals the file in Finder.
 - Optional −14 LUFS normalization is an offline mix pass, not a live meter.

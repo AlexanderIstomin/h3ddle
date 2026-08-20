@@ -31,9 +31,9 @@ later start times, leaving a gap rather than silently desynchronizing the mix.
 
 T1 is an overlay lane above V1. Titles store explicit start times, may overlap,
 and draw after the visual. Preview lasts `max(visual, audio, text)`. Export lasts
-`max(visual, text)` when T1 is included; a title-only program still cannot
-export. Audio shorter than that end produces silence. Trailing audio is detected
-against the export end and must be surfaced before export.
+`max(visual, text)` when T1 is included, including a title-only program over the
+project background. Audio shorter than that end produces silence. Trailing audio
+is detected against the export end and must be surfaced before export.
 Generated video may contain native audio, controlled independently from the
 dedicated audio track. `ProgramCompositor` places the current visual and any T1
 overlays on the program canvas so preview and export can share one draw path. Film grain and

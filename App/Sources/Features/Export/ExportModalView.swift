@@ -73,7 +73,7 @@ struct ExportModalView: View {
     plan.exportDuration(includeTextLane: settings.includeTextLane)
   }
   private var canExport: Bool {
-    project.timeline.visualDuration > 0.001 && programDuration > 0.001 && !isRendering
+    programDuration > 0.001 && !isRendering
   }
   private var isRendering: Bool {
     if case .active = render { return true }
@@ -546,7 +546,7 @@ struct ExportModalView: View {
         }
       } catch MediaExportError.emptyProgram {
         applyExportOutcome(generation: generation) {
-          render = .failed("Add a visual clip before exporting.")
+          render = .failed("Add a visual or title before exporting.")
         }
       } catch MediaExportError.failed(let message) {
         applyExportOutcome(generation: generation) {

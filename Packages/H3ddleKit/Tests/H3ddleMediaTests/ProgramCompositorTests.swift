@@ -439,6 +439,42 @@ struct ProgramCompositorTests {
     #expect(Int(center.r) + Int(center.g) + Int(center.b) > 80)
   }
 
+  @Test("Live overlay blit matches a full composite")
+  func addingOverlaysMatchesFullComposite() async {
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .fullHD)
+    _ = project.timeline.insertText(
+      TextItem(
+        startTime: 0,
+        duration: 2,
+        text: "T",
+        style: TextStyle(fontSize: 240, fill: .white)
+      )
+    )
+    let frame = ProgramPreview.frame(at: 0.5, project: project)
+    let compositor = ProgramCompositor(
+      width: 320,
+      height: 180,
+      background: (0, 0, 0),
+      layoutWidth: project.settings.width,
+      layoutHeight: project.settings.height
+    )
+    var visualOnly = frame
+    visualOnly.overlays = []
+    guard
+      let visual = await compositor.pixelBuffer(for: visualOnly),
+      let live = compositor.addingOverlays(frame.overlays, onto: visual),
+      let full = await compositor.pixelBuffer(for: frame)
+    else {
+      Issue.record("Expected live and full composites")
+      return
+    }
+    let liveCenter = rgb(live, x: 160, yFromBottom: 90)
+    let fullCenter = rgb(full, x: 160, yFromBottom: 90)
+    #expect(Int(liveCenter.r) + Int(liveCenter.g) + Int(liveCenter.b) > 80)
+    #expect(isNear(liveCenter, r: fullCenter.r, g: fullCenter.g, b: fullCenter.b))
+  }
+
   @Test("The same title occupies the same relative region at two compose sizes")
   func lockedLayoutKeepsRelativeRegion() async {
     var project = H3ddleProject()
@@ -479,7 +515,7 @@ struct ProgramCompositorTests {
     #expect(Int(largeCenter.r) + Int(largeCenter.g) + Int(largeCenter.b) > 80)
   }
 
-  @Test("A capital T is upright in the y-up buffer")
+  @Test("A capital T is upright on the composed image")
   func titleGlyphIsUpright() async {
     var project = H3ddleProject()
     project.settings.apply(resolution: .fullHD)
@@ -525,7 +561,9 @@ struct ProgramCompositorTests {
     }
     let centroid = Double(massY) / Double(mass)
     let mid = Double(minY + maxY) / 2
-    #expect(centroid > mid)
+    // Same row convention as `translationMovesStill`: program +y (the top of
+    // an upright T) lands in low buffer rows, which VTCreate shows at the top.
+    #expect(centroid < mid)
   }
 
   private func solidImage(

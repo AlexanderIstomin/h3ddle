@@ -1936,8 +1936,7 @@ final class AppModel {
   func insertTextAtPlayhead(opensInspector: Bool = true) -> TextItem {
     registerUndoCheckpoint()
     let height = Double(max(project.settings.height, 1))
-    var style = TextStyle(fontSize: 48 * (height / 1080))
-    style.fontPostScriptName = FontCatalog.postScriptName(for: style)
+    let style = FontResolver.resolved(TextStyle(fontSize: 48 * (height / 1080)))
     let item = project.timeline.insertText(
       TextItem(
         startTime: playback.clock.currentTime,
@@ -2520,7 +2519,6 @@ final class AppModel {
     if kind != .audio {
       let environment = ProcessInfo.processInfo.environment
       let overrides = [
-        ("H3_DIT_FC2_INPUT_MAJOR", "FC2 sidecar"),
         ("H3_QWEN_TILE", "Qwen tile"),
         ("H3_VAE_PREFETCH", "VAE prefetch"),
         ("H3_VAE_NATIVE_F16", "VAE native F16"),

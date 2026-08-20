@@ -28,16 +28,53 @@ struct ProgramExporterTests {
     }
   }
 
-  @Test("Text without a visual cannot export")
-  func textOnlyIsEmptyProgram() async {
+  @Test("Text without a visual exports the title duration")
+  func textOnlyExportsTitleDuration() async throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("h3ddle-text-only-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    var project = H3ddleProject()
+    project.settings.apply(resolution: .extreme)
+    project.settings.apply(frameRate: 8)
+    _ = project.timeline.insertText(TextItem(startTime: 0, duration: 1, text: "Hello"))
+
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.updateCustom {
+      $0.resolution = .extreme
+      $0.framesPerSecond = 8
+      $0.videoBitrateKbps = 400
+    }
+
+    let destination = folder.appendingPathComponent("title.mp4")
+    for try await _ in ProgramExporter().export(
+      project: project,
+      settings: settings,
+      destination: destination
+    ) {
+    }
+
+    let asset = AVURLAsset(url: destination)
+    let duration = try await asset.load(.duration)
+    #expect(duration.seconds > 0.7)
+    #expect(duration.seconds < 1.4)
+    let videoTracks = try await asset.loadTracks(withMediaType: .video)
+    #expect(videoTracks.count == 1)
+  }
+
+  @Test("Muted text without a visual cannot export")
+  func mutedTextOnlyIsEmptyProgram() async {
     var project = H3ddleProject()
     _ = project.timeline.insertText(TextItem(startTime: 0, duration: 5, text: "Hello"))
+    var settings = ProgramExportSettings.makeDefault(project: project)
+    settings.includeTextLane = false
     let destination = FileManager.default.temporaryDirectory
-      .appendingPathComponent("h3ddle-text-only-\(UUID().uuidString).mp4")
+      .appendingPathComponent("h3ddle-muted-text-\(UUID().uuidString).mp4")
     do {
       for try await _ in ProgramExporter().export(
         project: project,
-        settings: ProgramExportSettings.makeDefault(project: project),
+        settings: settings,
         destination: destination
       ) {
       }

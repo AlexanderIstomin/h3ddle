@@ -749,7 +749,7 @@ Defaults for "Add text":
 
 - Header code **`T1`**, title **`Text`**. This matches `V1` / `A1` and is the H3ddle-native name.
 - Height: `TimelineChrome.textLaneHeight = 56` (same as A1).
-- Color: new `H3Color.clipText` (warm amber, distinct from `clipVideo` blue and `clipAudio` green).
+- Color: new `H3Color.clipText` (mauve `#C77DD6`, distinct from `clipVideo` blue and `clipAudio` green).
 - Order, top to bottom: optional FX → **T1 Text** → V1 Visual → A1 Audio.
 - `TimelineChrome.bodyHeight` adds the text lane always (the lane exists empty, like A1).
 - Collapsed scrubber gains a third 15 pt strip. Stack height is **53** (15 + 4 + 15 + 4 + 15). Order matches expanded FX → T1 → V1 → A1: **text y=0, visual y=19, audio y=38**. The collapsed `GeometryReader` frame is 53, not 34.

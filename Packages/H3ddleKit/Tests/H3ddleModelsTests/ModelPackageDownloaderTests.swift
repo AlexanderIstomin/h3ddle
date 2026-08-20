@@ -254,7 +254,7 @@ struct ModelPackageDownloaderTests {
     #expect(try Data(contentsOf: destination) == fixture)
   }
 
-  @Test("The turbo package adds its transformer and exact-output FC2 sidecar")
+  @Test("The turbo package ships its exact-output full input-major transformer")
   func turboManifestSharing() throws {
     let standard = ModelCatalog.minimaxH3Int8
     let turbo = ModelCatalog.minimaxH3TurboInt8
@@ -270,37 +270,23 @@ struct ModelPackageDownloaderTests {
     // hosted file lives at the root of its own repository.
     #expect(turboTransformer.path == standardTransformer.path)
     #expect(turboTransformer.sha256 != standardTransformer.sha256)
+    #expect(turboTransformer.byteCount == 20_970_380_012)
+    #expect(
+      turboTransformer.sha256
+        == "1dfe28c517a937fb9876f0975f224fd6e7ecb8744219f89bb8ba954403e10dc3"
+    )
     #expect(!turboTransformer.requiresLocalSource)
     #expect(turboTransformer.localCandidatePath != nil)
     #expect(
       turbo.downloadURL(for: turboTransformer).absoluteString
         == "https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot/resolve/"
-          + "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65/"
-          + "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors"
-    )
-    let sidecar = try #require(turbo.files.first { $0.role == .transformerSidecar })
-    #expect(
-      sidecar.path
-        == "diffusion_models/"
-          + "minimax_h3_fl2va_pruned_int8_convrot_fc2_input_major.safetensors"
-    )
-    #expect(sidecar.byteCount == 3_853_522_260)
-    #expect(
-      sidecar.sha256
-        == "76a4886d1acb1cde7993bab5f6ada9a2abc2ea61be5b01a59f25451642d18a33"
-    )
-    #expect(
-      turbo.downloadURL(for: sidecar).absoluteString
-        == "https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot/resolve/"
-          + "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65/"
-          + "minimax_h3_fl2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
+          + "7a8e67cc51737428938fd9e39903a66e8ba58a18/"
+          + "minimax_h3_fl2va_pruned_turbo_int8_convrot_input_major.safetensors"
     )
     // Every base-package file is identical across the two packages, so an
-    // install of one can supply the other. The Turbo-only sidecar is excluded.
+    // install of one can supply the other.
     let sharedStandard = standard.files.filter { $0.role != .transformer }
-    let sharedTurbo = turbo.files.filter {
-      $0.role != .transformer && $0.role != .transformerSidecar
-    }
+    let sharedTurbo = turbo.files.filter { $0.role != .transformer }
     #expect(sharedStandard == sharedTurbo)
     let videoVAE = try #require(turbo.files.first { $0.role == .videoVAE })
     #expect(
@@ -309,39 +295,33 @@ struct ModelPackageDownloaderTests {
     )
   }
 
-  @Test("The reference Turbo package ships a source-bound sidecar for each transformer")
-  func referenceTurboManifestSidecars() throws {
+  @Test("The reference Turbo package ships a full input-major checkpoint for each flow")
+  func referenceTurboManifestCheckpoints() throws {
     let manifest = ModelCatalog.minimaxH3Ref2VATurboInt8
     let transformers = manifest.files.filter {
       $0.role == .transformer || $0.role == .referenceTransformer
     }
-    let sidecars = manifest.files.filter { $0.role == .transformerSidecar }
-
     #expect(transformers.count == 2)
-    #expect(sidecars.count == 2)
     for transformer in transformers {
-      let expectedPath = transformer.path.replacingOccurrences(
-        of: ".safetensors", with: "_fc2_input_major.safetensors"
-      )
-      let sidecar = try #require(sidecars.first { $0.path == expectedPath })
-      #expect(sidecar.sourceRepository == transformer.sourceRepository)
-      #expect(sidecar.sourceRevision == transformer.sourceRevision)
-      #expect(sidecar.byteCount == 3_853_522_260)
+      #expect(transformer.byteCount == 20_970_380_012)
+      #expect(transformer.sourcePath?.hasSuffix("_input_major.safetensors") == true)
     }
-
-    let referenceSidecar = try #require(
-      sidecars.first { $0.path.contains("minimax_h3_ref2va_pruned_int8_convrot_") }
+    #expect(
+      Set(transformers.map(\.sha256))
+        == [
+          "1dfe28c517a937fb9876f0975f224fd6e7ecb8744219f89bb8ba954403e10dc3",
+          "5ca6696fe1cd9a8f254594ac67ee541f151b2377735dea3557364bd868270463",
+        ]
+    )
+    let reference = try #require(
+      transformers.first { $0.role == .referenceTransformer }
     )
     #expect(
-      referenceSidecar.sha256
-        == "0ad6a5673abdf842c39d4d8de7c34c971a420b64bd5f79eb6f4331c5bfb5cd97"
-    )
-    #expect(
-      manifest.downloadURL(for: referenceSidecar).absoluteString
+      manifest.downloadURL(for: reference).absoluteString
         == "https://huggingface.co/PulpCut/"
           + "MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot/resolve/"
-          + "e64afa326a209e38078e2d64155acbf575157d77/"
-          + "minimax_h3_ref2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
+          + "1d1391e63fb2c314f7a5a616f0aff08ad4e41b04/"
+          + "minimax_h3_ref2va_pruned_turbo_int8_convrot_input_major.safetensors"
     )
   }
 

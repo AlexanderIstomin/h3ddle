@@ -80,7 +80,10 @@ struct ProgramCanvasView: View {
     .onChange(of: model.visualLaneAudible) { _, _ in refreshPreview() }
     .onChange(of: model.audioLaneAudible) { _, _ in refreshPreview() }
     .onChange(of: model.textLaneAudible) { _, _ in refreshPreview() }
-    .onChange(of: model.canvasGesture) { _, _ in refreshPreview() }
+    .onChange(of: model.canvasGesture) { _, gesture in
+      if case .text = gesture?.target { return }
+      refreshPreview()
+    }
     .onChange(of: monitorSize) { _, _ in refreshPreview() }
     .task(id: model.project.assets) {
       await loadMediaSizes(for: model.project.assets)
@@ -237,6 +240,9 @@ struct ProgramCanvasView: View {
       )
     }
     model.canvasGesture = session
+    if case .text = session.target {
+      blitLiveTextOverlays()
+    }
   }
 
   private func endPointer(_ sample: CanvasPointerSample) {
@@ -654,6 +660,28 @@ struct ProgramCanvasView: View {
     if let eventMonitor {
       NSEvent.removeMonitor(eventMonitor)
       self.eventMonitor = nil
+    }
+  }
+
+  private func blitLiveTextOverlays() {
+    var overrides: [UUID: CanvasObjectTransform] = [:]
+    if let gesture = model.canvasGesture {
+      switch gesture.target {
+      case .visual(let id), .text(let id):
+        overrides[id] = gesture.current
+      case .audio:
+        break
+      }
+    }
+    let frame = model.playback.sync(
+      project: model.project,
+      visualMuted: !model.visualLaneAudible,
+      audioMuted: !model.audioLaneAudible,
+      textMuted: !model.textLaneAudible,
+      transformOverrides: overrides
+    )
+    if !presenter.blitOverlays(frame.overlays) {
+      refreshPreview()
     }
   }
 
