@@ -666,7 +666,9 @@ final class AppModel {
       coreReuse: coreReuse,
       blockCache: blockCache,
       fastStill: fastStill,
-      previewDenoise: previewDenoise
+      previewDenoise: previewDenoise,
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight
     ) + " · model \(runningModelName)"
       + (ownPackage || !selectedGenerationProfile.usesBetaSchedule
         ? "" : " · beta-schedule")
@@ -1356,6 +1358,22 @@ final class AppModel {
   func downloadIsPermitted(for manifest: ModelPackageManifest) -> Bool {
     packageBlockingDownload(of: manifest) == nil
   }
+
+  #if DEBUG
+    /// Gives the UI test a deterministic active package without opening a
+    /// network connection or writing a partial model. Production launches
+    /// never call this; the argument gate lives in `H3ddleApp`.
+    func prepareManagedDownloadFixture(packageID: String) {
+      guard managedManifests.contains(where: { $0.id == packageID }) else { return }
+      managedStatuses[packageID] = ManagedPackageStatus(
+        state: .downloading,
+        progress: 0.25,
+        completedBytes: 1,
+        message: "Downloading UI-test fixture…"
+      )
+      refreshModelChoices()
+    }
+  #endif
 
   func cancelManagedModelDownload() {
     for task in downloadTasks.values { task.cancel() }
@@ -2325,7 +2343,9 @@ final class AppModel {
     coreReuse: Int?,
     blockCache: Bool,
     fastStill: Bool,
-    previewDenoise: Bool
+    previewDenoise: Bool,
+    canvasWidth: Int?,
+    canvasHeight: Int?
   ) -> String {
     if ownPackage {
       // These models have their own knobs, or none: reciting H3's settings
@@ -2335,13 +2355,18 @@ final class AppModel {
     guard kind == .video || kind == .image || kind == .audio else {
       return String(format: "%@ · %.0fs", kind.rawValue, duration)
     }
-    let canvas =
-      kind == .audio ? Self.audioCanvasLabel : "\(quality.canvasSize)×\(quality.canvasSize)"
+    let canvas: String = {
+      if kind == .audio { return Self.audioCanvasLabel }
+      if let canvasWidth, let canvasHeight {
+        return "\(canvasWidth)×\(canvasHeight)"
+      }
+      return "\(quality.canvasSize)×\(quality.canvasSize)"
+    }()
     let steps = denoisingSteps ?? quality.denoisingSteps
     let layers = activeDiTLayers ?? quality.activeDiTLayers
     let core = blockCache ? 1 : coreReuse ?? 1
     let reuse = blockCache || core > 1 || steps < 10 ? 1 : quality.denoiseReuse
-    return String(
+    var description = String(
       format:
         "%@ · %@ · %@ · passes %d · blocks %d · core-reuse %d · reuse %d · "
         + "cache %@%@ · preview %@ · %.2fs",
@@ -2350,6 +2375,32 @@ final class AppModel {
       kind == .image ? (fastStill ? " · still 5f" : " · still 22f") : "",
       previewDenoise ? "on" : "off", duration
     )
+    if kind != .audio {
+      let environment = ProcessInfo.processInfo.environment
+      let overrides = [
+        ("H3_DIT_FC2_INPUT_MAJOR", "FC2 sidecar"),
+        ("H3_QWEN_TILE", "Qwen tile"),
+        ("H3_VAE_PREFETCH", "VAE prefetch"),
+        ("H3_VAE_NATIVE_F16", "VAE native F16"),
+        ("H3_VAE_RESIDENT", "VAE resident"),
+        ("H3_VAE_LAYER_MAJOR", "VAE layer-major"),
+        ("H3_VAE_TILE_PIXELS", "VAE tile pixels"),
+      ]
+      for (key, label) in overrides {
+        if let value = environment[key], !value.isEmpty {
+          description += " · \(label) \(value)"
+        }
+      }
+      if environment["H3_VAE_NATIVE_F16"] == nil {
+        description += " · VAE native F16 auto"
+      }
+      if kind == .image && environment["H3_VAE_PREFETCH"] == nil
+        && ProcessInfo.processInfo.physicalMemory >= 32 * 1_024 * 1_024 * 1_024
+      {
+        description += " · VAE prefetch auto"
+      }
+    }
+    return description
   }
 
   private func beginModelAccess() {

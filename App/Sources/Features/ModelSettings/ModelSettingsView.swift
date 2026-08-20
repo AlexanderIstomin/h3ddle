@@ -146,6 +146,7 @@ struct ModelSettingsView: View {
               choice: choice,
               isSelected: model.selectedModelID(for: capability) == choice.id,
               status: managedStatus(for: choice),
+              blockedBy: blockingPackageName(for: choice),
               installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
               select: { model.selectModel(choice.id) },
               install: {
@@ -291,6 +292,7 @@ private struct ModelChoiceRow: View {
       if let blockedBy {
         Text("Waiting on \(blockedBy): they share weights, and fetching "
           + "both at once would download the shared files twice.")
+          .accessibilityIdentifier("managed-download-blocker-\(choice.id)")
           .font(.system(size: 10))
           .foregroundStyle(H3Color.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -440,7 +442,7 @@ private struct ModelChoiceRow: View {
           .buttonStyle(H3PrimaryButtonStyle())
           .disabled(blockedBy != nil)
           .opacity(blockedBy == nil ? 1 : 0.4)
-          .accessibilityIdentifier("download-managed-model")
+          .accessibilityIdentifier("download-managed-model-\(choice.id)")
       }
     }
   }

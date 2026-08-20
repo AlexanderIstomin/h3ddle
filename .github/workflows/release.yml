@@ -20,9 +20,10 @@ jobs:
       - name: Generate the Xcode project
         run: xcodegen generate --spec project.yml --project .
       - name: Archive the app
-        # Ad-hoc signing keeps the build reproducible without secrets. The
-        # download is unsigned: macOS quarantines it until the user approves
-        # it in System Settings > Privacy & Security.
+        # Ad-hoc signing keeps the build reproducible without secrets. It does
+        # not establish a trusted developer identity, but it does produce a
+        # structurally valid bundle instead of the malformed linker-only
+        # signature Gatekeeper reports as a damaged app.
         run: |
           xcodebuild \
             -project H3ddle.xcodeproj \
@@ -31,8 +32,8 @@ jobs:
             -destination 'generic/platform=macOS' \
             -archivePath build/H3ddle.xcarchive \
             CODE_SIGN_IDENTITY=- \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
             -quiet \
             archive
       - name: Verify the archived bundle
@@ -41,6 +42,7 @@ jobs:
           test -d "$APP"
           test -x "$APP/Contents/Helpers/H3ddleEngineService"
           test -f "$APP/Contents/Resources/H3Engine/h3_shaders.metal"
+          codesign --verify --deep --strict --verbose=2 "$APP"
       - name: Package the app
         run: |
           APP="build/H3ddle.xcarchive/Products/Applications/H3ddle.app"
@@ -60,11 +62,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          Unsigned development build for testing.
+          Ad-hoc-signed development build for testing. This build has a valid
+          bundle signature, but it is not yet Developer ID notarized.
 
-          **First launch:** macOS blocks unsigned downloads. After opening
-          H3ddle and seeing the warning, allow it in
-          System Settings > Privacy & Security > "Open Anyway", then launch again.
+          **First launch:** macOS may say the developer cannot be verified.
+          Control-click H3ddle in Finder, choose Open, then confirm Open; or use
+          System Settings > Privacy & Security > "Open Anyway". A "damaged" or
+          "corrupted" warning is not expected—please report it instead of
+          disabling Gatekeeper.
 
           **Requirements:** Apple silicon, macOS 15 or later, FFmpeg on PATH
           (`brew install ffmpeg`) for video output. Models are downloaded

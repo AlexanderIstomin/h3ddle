@@ -52,17 +52,18 @@ same `25dc1f79...` every configuration has produced.
 
 ## How the choice is made
 
-Resident if `9.0 GiB + 8 GiB of headroom` fits in `hw.memsize`, so a 32 GB
-machine takes it and a 16 GB one — the minimum these packages ask for — keeps
-streaming and behaves exactly as before. `H3_VAE_RESIDENT=1` forces residency,
-`=0` forces streaming.
+Resident if the stored projections plus 8 GiB of headroom fit in `hw.memsize`.
+Native F16 needs about 4.5 GiB and therefore fits the supported 16/24 GiB
+machines; `H3_VAE_NATIVE_F16=0` restores the 9.0 GiB expanded estimate, which
+needs a 32 GiB machine. `H3_VAE_RESIDENT=1` forces residency and `=0` forces
+streaming.
 
-The 9.0 GiB is counted from the decoder's own shape — 36 layers of qkv, out,
-w1 and w2, plus the ends, as f32 — rather than from the files. Two earlier
-attempts to measure it from disk were wrong in opposite directions: the
-weights live in a `vae/` subdirectory so a flat scan of the package returned
-zero, and a recursive one would have added the 21 GB transformer and the 27 GB
-text encoder to an estimate of a 5 GB decoder.
+Both estimates are counted from the decoder's own shape — 36 layers of qkv,
+out, w1 and w2, plus the ends — rather than from the files: 4.5 GiB stored as
+F16 or 9.0 GiB expanded to F32. Two earlier attempts to measure this from disk
+were wrong in opposite directions: the weights live in a `vae/` subdirectory
+so a flat scan of the package returned zero, and a recursive one would have
+added the 21 GB transformer and the 27 GB text encoder to the decoder.
 
 ## Two things this leaves
 
@@ -73,11 +74,67 @@ No package ships it. A local conversion of it existed and was deleted during a
 disk cleanup as unreferenced — correct on the evidence at the time, and worth
 re-deriving now.
 
-**Residency does not remove the reread, it amortizes it.** One pass over 9 GiB
-still happens, and at ~24 s it is now the largest single item in the decode.
-Holding the weights as bf16 rather than widening to f32 would halve both the
-residency and that first read, at the cost of a bf16-weight variant of
-`h3_gpu_linear_f32`.
+**Residency does not remove the initial read, it amortizes it.** One pass over
+the projection weights still happens. Native-F16 storage makes that pass about
+4.5 GiB while retaining F32 arithmetic.
+
+## Follow-up: remove repeated reads without residency
+
+The low-memory path no longer has to choose between nine-gigabyte residency
+and rereading the stack for every spatial tile. It now retains only one hidden
+state per tile, loads block 0 once and runs it over every tile, then does the
+same for block 1. Scratch activations remain shared and the per-tile arithmetic
+sequence is unchanged. Extra hidden states are capped at 256 MiB; a larger
+canvas is split into batches.
+
+On the M1 Pro 512x512x22 oracle, the production auto-tile plan made four
+288-pixel spatial tiles. The old streamed path loaded 144 blocks and decoded
+in 63.44 seconds; layer-major streaming loaded 36 and decoded in 29.48 seconds,
+a 2.15x speedup. The complete RGB buffers were byte-identical. Peak live GPU
+storage rose from 0.676 to 0.728 GiB, while cumulative allocation fell from
+36.540 to 9.507 GiB. `H3_VAE_LAYER_MAJOR=0` restores the old traversal for A/B
+diagnosis; the resident path is unchanged.
+
+## Done: native F16 projection weights
+
+The decoder retains the checkpoint's large projection matrices as
+IEEE F16 and explicitly widens them to F32 inside MPSGraph before matrix
+multiplication. Inputs, biases, accumulation, and outputs remain F32. Small
+shapes that the expanded path sends to a direct Metal kernel stay expanded;
+this preserves the existing dispatch and its exact low-bit behavior.
+`H3_VAE_NATIVE_F16=0` restores expanded F32 storage for diagnosis.
+
+The first app A/B appeared to reject this path, but the setting had been placed
+in Xcode's launch-argument list rather than its environment table and was never
+active. The corrected local 512x512x22 oracle is byte-identical across all RGB
+frames. Expanded F32 loaded/decoded in 7.78/20.73 seconds with 9.454 GiB peak
+Metal residency; native F16 took 0.88/20.12 seconds with 4.942 GiB peak. That
+is 28.51 versus 21.00 seconds for the VAE phase, a 7.51-second reduction and
+roughly half the memory.
+
+The corrected cold app A/B, with prefetch disabled so it could not hide the
+load, confirmed the result. Expanded F32 loaded/decoded in 10.9/23.0 seconds;
+native F16 took 2.5/23.1 seconds. The VAE phase fell from 33.9 to 25.6 seconds,
+an 8.3-second reduction, and both images looked identical. Native F16 is now
+the default. Automatic prefetch remains limited to 32 GiB or above because it
+overlaps decoder residency with the final transformer pass; its gain and the
+native-F16 load reduction are not additive.
+
+## Done: final-pass decoder prefetch
+
+`H3_VAE_PREFETCH=1` prepares the resident still-image decoder on a background
+thread while the final transformer pass runs. It changes no tensor values or
+operation order. On a cold two-pass 512x512 M1 Pro run, denoising was stable at
+67.89 seconds without prefetch and 67.48 seconds with it; the synchronous work
+after denoising fell by about ten seconds. The emitted PPM frames had identical
+SHA-256 hashes. The cold 32 GiB app A/B confirmed it at eight passes: transformer
+time was 268.4 versus 268.3 seconds, decode stayed 17.1 seconds, VAE load fell
+from 10.1 to 0.0 seconds, and total time fell from 302.9 to 292.6 seconds.
+
+The trade is temporary overlap with the decoder's Metal storage: originally
+9.45 GiB, now about 4.94 GiB with native F16. Prefetch remains conservative
+and defaults on only at 32 GiB or above. `H3_VAE_PREFETCH=0` restores
+synchronous loading, while `=1` can force the path for diagnosis.
 
 ## Measuring
 

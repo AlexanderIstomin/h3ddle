@@ -2,6 +2,9 @@ import Foundation
 
 public enum ModelPackageRole: String, Codable, Equatable, Sendable {
   case transformer
+  /// An optional, source-bound alternate tensor layout consumed beside its
+  /// transformer. It is not independently runnable model weight.
+  case transformerSidecar
   case textEncoder
   case videoVAE
   case imageVAE
@@ -387,7 +390,7 @@ public enum ModelCatalog {
         byteCount: 20_970_379_854,
         sha256: "9ad5c98b533894c122050d32804a14f49fca8edc16c52564a281cdc5825ac934",
         sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
-        sourceRevision: "4aea334367e4007d7b3630810ec28eb97639ae65",
+        sourceRevision: "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65",
         sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
         localCandidatePath: URL.applicationSupportDirectory
           .appendingPathComponent("H3ddle", isDirectory: true)
@@ -399,12 +402,24 @@ public enum ModelCatalog {
           .path
       ),
       ModelPackageFile(
+        role: .transformerSidecar,
+        path:
+          "diffusion_models/"
+          + "minimax_h3_fl2va_pruned_int8_convrot_fc2_input_major.safetensors",
+        byteCount: 3_853_522_260,
+        sha256: "76a4886d1acb1cde7993bab5f6ada9a2abc2ea61be5b01a59f25451642d18a33",
+        sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
+        sourceRevision: "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65",
+        sourcePath:
+          "minimax_h3_fl2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
+      ),
+      ModelPackageFile(
         role: .referenceTransformer,
         path: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
         byteCount: 20_970_379_854,
         sha256: "e64cef63bc2785bcd72e6103c52aa78c6cd2c4f9870a7ce79675083fd65cf2e7",
         sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
-        sourceRevision: "c0c8e368009ee8cbd498f620cd4716d4268e6f02",
+        sourceRevision: "e64afa326a209e38078e2d64155acbf575157d77",
         sourcePath: "minimax_h3_ref2va_pruned_turbo_int8_convrot.safetensors",
         localCandidatePath: URL.applicationSupportDirectory
           .appendingPathComponent("H3ddle", isDirectory: true)
@@ -414,6 +429,18 @@ public enum ModelCatalog {
             isDirectory: false
           )
           .path
+      ),
+      ModelPackageFile(
+        role: .transformerSidecar,
+        path:
+          "diffusion_models/"
+          + "minimax_h3_ref2va_pruned_int8_convrot_fc2_input_major.safetensors",
+        byteCount: 3_853_522_260,
+        sha256: "0ad6a5673abdf842c39d4d8de7c34c971a420b64bd5f79eb6f4331c5bfb5cd97",
+        sourceRepository: "PulpCut/MiniMax-H3-Ref2VA-Turbo-INT8-ConvRot",
+        sourceRevision: "e64afa326a209e38078e2d64155acbf575157d77",
+        sourcePath:
+          "minimax_h3_ref2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
       )
     ] + sharedMinimaxH3Files
   )
@@ -606,7 +633,7 @@ public enum ModelCatalog {
         byteCount: 20_970_379_854,
         sha256: "9ad5c98b533894c122050d32804a14f49fca8edc16c52564a281cdc5825ac934",
         sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
-        sourceRevision: "4aea334367e4007d7b3630810ec28eb97639ae65",
+        sourceRevision: "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65",
         sourcePath: "minimax_h3_fl2va_pruned_turbo_int8_convrot.safetensors",
         localCandidatePath: URL.applicationSupportDirectory
           .appendingPathComponent("H3ddle", isDirectory: true)
@@ -616,6 +643,18 @@ public enum ModelCatalog {
             isDirectory: false
           )
           .path
+      ),
+      ModelPackageFile(
+        role: .transformerSidecar,
+        path:
+          "diffusion_models/"
+          + "minimax_h3_fl2va_pruned_int8_convrot_fc2_input_major.safetensors",
+        byteCount: 3_853_522_260,
+        sha256: "76a4886d1acb1cde7993bab5f6ada9a2abc2ea61be5b01a59f25451642d18a33",
+        sourceRepository: "PulpCut/MiniMax-H3-Turbo-INT8-ConvRot",
+        sourceRevision: "cd17b7dd9b0dc8967976ca0f49c8e85e05e26d65",
+        sourcePath:
+          "minimax_h3_fl2va_pruned_turbo_int8_convrot_fc2_input_major.safetensors"
       )
     ] + sharedMinimaxH3Files
   )

@@ -10,6 +10,10 @@ Metal engine. Model weights are never stored in this repository or bundled with
 the app; they are downloaded from pinned, checksummed Hugging Face revisions
 into Application Support.
 
+[Download the latest macOS build](https://github.com/AlexanderIstomin/h3ddle/releases)
+from GitHub Releases. The newest development build is listed first; see its
+release notes for macOS first-launch instructions.
+
 ## Current state
 
 Generation, on the local Metal engine:
@@ -66,6 +70,22 @@ repository and app bundle. Every managed source uses an immutable Hub revision
 and every file is verified by SHA-256 before install. Packages reuse identical
 files where possible so installing a related model does not duplicate shared
 weights.
+
+The managed MiniMax H3 Turbo package now downloads its verified 3.589 GiB FC2
+performance sidecar automatically. Turbo + References includes one for each
+transformer (7.178 GiB total), so new users get the faster denoising path
+without a conversion step. The model's output is unchanged.
+
+For another compatible optimized MiniMax H3 transformer, prepare the same
+optional sidecar locally:
+
+```sh
+python3 -B Scripts/optimize-h3-fc2-sidecar.py /path/to/transformer.safetensors
+```
+
+The source model is not changed. H3ddle automatically uses the validated
+`_fc2_input_major.safetensors` sibling; FL2VA and Ref2VA transformers need
+separate sidecars if both flows should benefit.
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel
