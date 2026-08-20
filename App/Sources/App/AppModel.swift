@@ -2519,6 +2519,7 @@ final class AppModel {
     if kind != .audio {
       let environment = ProcessInfo.processInfo.environment
       let overrides = [
+        ("H3_REF2VA_HYBRID", "Ref2VA hybrid"),
         ("H3_QWEN_TILE", "Qwen tile"),
         ("H3_VAE_PREFETCH", "VAE prefetch"),
         ("H3_VAE_NATIVE_F16", "VAE native F16"),

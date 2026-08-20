@@ -90,6 +90,25 @@ layout marker when the resulting `_input_major.safetensors` checkpoint is
 selected. FL2VA and Ref2VA transformers must be repacked separately if both
 flows should benefit.
 
+An experimental hybrid Ref2VA loader is being evaluated separately from the
+managed packages. It keeps the optimized FL2VA transformer and overlays only
+Ref2VA AdaLN blocks 25–49, reducing the additional reference weight file from
+20.97 GB to 43.55 MB. Build the overlay without changing the source checkpoint:
+
+```sh
+python3 -B Scripts/build-h3-hybrid-adaln.py /path/to/ref2va.safetensors
+```
+
+Place the resulting file at
+`diffusion_models/minimax_h3_ref2va_pruned_int8_convrot_hybrid_adaln_25_49.safetensors`.
+If a full Ref2VA checkpoint is also installed, `H3_REF2VA_HYBRID=1` opts into
+the hybrid for comparison; if only the overlay is installed, the loader uses
+it automatically. The hybrid intentionally changes generation and is not an
+exact-output or speed optimization, so it remains outside the managed model
+catalog until broader reference-quality testing is complete. Standard and
+Turbo Ref2VA produce the same overlay bytes, so one overlay can be shared by
+both model variants.
+
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel
 terminates the job-specific helper immediately, releasing mapped weights and
