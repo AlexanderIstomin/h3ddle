@@ -5,6 +5,7 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 "$repository_root/Scripts/check-public-boundary.sh"
 "$repository_root/Scripts/check-untracked-sources.sh"
+python3 -B "$repository_root/Scripts/test-repack-ltx-input-major.py"
 
 # The LTX VAE decoder is native C and its tile planner deliberately has no
 # model-weight dependency. Exercise the real planner here: a Swift duplicate

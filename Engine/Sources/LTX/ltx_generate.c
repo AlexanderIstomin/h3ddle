@@ -43,6 +43,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* `LTXVGemmaTokenizer(max_length=256)`. The span is what the DiT
  * cross-attends to; the prompt itself is whatever it tokenized to, and the
@@ -53,6 +54,8 @@ enum { SPAN = 256, TEMPORAL = 8, SPATIAL = LTX_VIDEO_SPATIAL };
  * package` names; the filenames are the published ones. */
 #define DIT_PATH "diffusion_models/" \
     "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+#define DIT_INPUT_MAJOR_PATH "diffusion_models/" \
+    "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot_input_major.safetensors"
 #define ENCODER_PATH "text_encoders/" \
     "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
 #define VIDEO_VAE_PATH "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
@@ -66,6 +69,35 @@ static int fail(char *error, size_t error_size, const char *format, ...) {
         va_end(arguments);
     }
     return 0;
+}
+
+/* A local repack can sit beside the released checkpoint for an A/B without
+ * renaming or overwriting 21 GB files. Managed releases install their selected
+ * source under DIT_PATH, so this is diagnostic compatibility rather than a
+ * second production dependency. `H3_LTX_INPUT_MAJOR=0` forces the original;
+ * `=1` requires the sibling candidate; unset selects the candidate when it is
+ * present. The tensor marker, not the filename, still decides the GPU layout. */
+static int transformer_path(const ltx_request *request, char *path, size_t size,
+                            char *error, size_t error_size) {
+    const char *setting = getenv("H3_LTX_INPUT_MAJOR");
+    const int force_original = setting && !strcmp(setting, "0");
+    const int require_candidate = setting && !strcmp(setting, "1");
+    if (!force_original) {
+        snprintf(path, size, "%s/" DIT_INPUT_MAJOR_PATH, request->package);
+        if (access(path, R_OK) == 0) {
+            if (getenv("H3_PROFILE"))
+                fprintf(stderr, "ltx: using input-major candidate %s\n", path);
+            return 1;
+        }
+        if (require_candidate)
+            return fail(error, error_size,
+                        "H3_LTX_INPUT_MAJOR=1 but the candidate is missing: %s",
+                        path);
+    }
+    snprintf(path, size, "%s/" DIT_PATH, request->package);
+    if (getenv("H3_PROFILE"))
+        fprintf(stderr, "ltx: using managed transformer %s\n", path);
+    return 1;
 }
 
 /* ------------------------------------------------------------------- plan */
@@ -369,7 +401,9 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
     /* ---- connect and denoise ----------------------------------------- */
 
     if (ok) {
-        snprintf(path, sizeof(path), "%s/" DIT_PATH, request->package);
+        ok = transformer_path(request, path, sizeof(path), error, error_size);
+    }
+    if (ok) {
         h3_weight_store *dit = h3_weight_store_open(path, error, error_size);
         ok = dit != NULL;
         if (ok) ok = announce(&report, "connector");
