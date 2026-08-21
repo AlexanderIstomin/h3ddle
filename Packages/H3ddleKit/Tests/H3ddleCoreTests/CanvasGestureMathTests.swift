@@ -340,4 +340,58 @@ struct CanvasGestureMathTests {
     #expect(abs(overlay.translationX) < 1e-6)
     #expect(abs(overlay.translationY) < 1e-6)
   }
+
+  @Test("A corner scales inward and in the inner zone, and rotates farther out")
+  func smartCornerIntent() {
+    let corner = (x: 100.0, y: 0.0)
+    let centroid = (x: 0.0, y: 0.0)
+    #expect(
+      CanvasGestureMath.cornerIntent(pointer: (105, 0), corner: corner, centroid: centroid)
+        == .scale
+    )
+    #expect(
+      CanvasGestureMath.cornerIntent(pointer: (60, 0), corner: corner, centroid: centroid)
+        == .scale
+    )
+    #expect(
+      CanvasGestureMath.cornerIntent(pointer: (100, 0), corner: corner, centroid: centroid)
+        == .scale
+    )
+    #expect(
+      CanvasGestureMath.cornerIntent(
+        pointer: (100 + CanvasGestureMath.cornerScaleZone, 0),
+        corner: corner,
+        centroid: centroid
+      ) == .scale
+    )
+    #expect(
+      CanvasGestureMath.cornerIntent(pointer: (140, 0), corner: corner, centroid: centroid)
+        == .rotate
+    )
+  }
+
+  @Test("A large corner hit sits outside the object while the shape stays on the point")
+  func outsetHandleLeavesShapeOnPoint() {
+    let diagonal = CanvasGestureMath.outsetHandle(
+      point: (20, 20),
+      centroid: (0, 0),
+      hitSize: (40, 40),
+      shapeSize: (12, 12)
+    )
+    #expect(abs(diagonal.hitX - 34) < 0.001)
+    #expect(abs(diagonal.hitY - 34) < 0.001)
+    #expect(abs(diagonal.hitX + diagonal.shapeOffsetX - 20) < 0.001)
+    #expect(abs(diagonal.hitY + diagonal.shapeOffsetY - 20) < 0.001)
+
+    let collapsed = CanvasGestureMath.outsetHandle(
+      point: (0, 0),
+      centroid: (0, 0),
+      hitSize: (40, 40),
+      shapeSize: (12, 12)
+    )
+    #expect(abs(collapsed.hitX) < 0.001)
+    #expect(abs(collapsed.hitY) < 0.001)
+    #expect(abs(collapsed.shapeOffsetX) < 0.001)
+    #expect(abs(collapsed.shapeOffsetY) < 0.001)
+  }
 }

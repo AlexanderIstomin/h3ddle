@@ -41,7 +41,7 @@ struct ProgramCanvasView: View {
           .allowsHitTesting(false)
 
         if let gizmo = gizmoLayout {
-          CanvasGizmoOverlay(layout: gizmo)
+          CanvasGizmoOverlay(layout: gizmo, badge: gizmoBadge)
             .accessibilityIdentifier("canvas-gizmo")
         }
 
@@ -329,6 +329,9 @@ struct ProgramCanvasView: View {
         return .rotate(target)
       }
       if let corner = CanvasGizmoGeometry.hitCorner(at: point, in: layout) {
+        if CanvasGizmoGeometry.cornerIntent(at: point, corner: corner, in: layout) == .rotate {
+          return .rotate(target)
+        }
         return .scale(target, corner)
       }
       if let program,
@@ -363,25 +366,27 @@ struct ProgramCanvasView: View {
   }
 
   private func cursor(at viewPoint: CGPoint) -> NSCursor? {
-    guard let layout = gizmoLayout,
-      let corner = CanvasGizmoGeometry.hitCorner(
-        at: (Double(viewPoint.x), Double(viewPoint.y)),
-        in: layout
-      ),
+    guard let layout = gizmoLayout, gizmoTarget?.isEnabled == true else { return nil }
+    let point = (x: Double(viewPoint.x), y: Double(viewPoint.y))
+    let center = CanvasGizmoGeometry.centroid(of: layout)
+    if CanvasGizmoGeometry.hitsRotate(at: point, in: layout) {
+      let radial = atan2(
+        layout.rotateHandle.y - center.y,
+        layout.rotateHandle.x - center.x
+      )
+      return CanvasGizmoCursor.rotate(radians: CanvasGizmoCursor.rotateRadians(radial: radial))
+    }
+    guard
+      let corner = CanvasGizmoGeometry.hitCorner(at: point, in: layout),
       let handle = layout.corners[corner]
     else {
       return nil
     }
-    let centerX = layout.quad.reduce(0) { $0 + $1.x } / Double(layout.quad.count)
-    let centerY = layout.quad.reduce(0) { $0 + $1.y } / Double(layout.quad.count)
-    let position: NSCursor.FrameResizePosition =
-      switch (handle.x >= centerX, handle.y >= centerY) {
-      case (false, false): .topLeft
-      case (true, false): .topRight
-      case (false, true): .bottomLeft
-      case (true, true): .bottomRight
-      }
-    return NSCursor.frameResize(position: position, directions: .all)
+    let radial = atan2(handle.y - center.y, handle.x - center.x)
+    if CanvasGizmoGeometry.cornerIntent(at: point, corner: corner, in: layout) == .rotate {
+      return CanvasGizmoCursor.rotate(radians: CanvasGizmoCursor.rotateRadians(radial: radial))
+    }
+    return CanvasGizmoCursor.scale(radians: radial)
   }
 
   private func presentClipMenu(at local: CGPoint) {
@@ -434,6 +439,26 @@ struct ProgramCanvasView: View {
     case .audio, nil:
       return nil
     }
+  }
+
+  private var gizmoBadge: String? {
+    guard let gesture = model.canvasGesture else { return nil }
+    switch gesture.kind {
+    case .rotate:
+      return "\(Self.displayDegrees(gesture.current.rotationRadians))°"
+    case .scale:
+      return "\(Int((gesture.current.scale * 100).rounded()))%"
+    case .move:
+      return nil
+    }
+  }
+
+  private static func displayDegrees(_ radians: Double) -> Int {
+    var degrees = radians * 180 / .pi
+    degrees = degrees.truncatingRemainder(dividingBy: 360)
+    if degrees > 180 { degrees -= 360 }
+    if degrees <= -180 { degrees += 360 }
+    return Int(degrees.rounded())
   }
 
   private var gizmoLayout: CanvasGizmoGeometry.Layout? {
