@@ -80,10 +80,15 @@ class InputMajorRepackTests(unittest.TestCase):
                 source_before = source_file.read()
 
             name = "model.diffusion_model.transformer_blocks.0.test.weight"
-            size = REPACK.repack(source_path, output_path, {name: (2, 3)})
-            converted, untouched = REPACK.verify_repack(
-                source_path, output_path, {name: (2, 3)}
-            )
+            numpy = REPACK.np
+            REPACK.np = None
+            try:
+                size = REPACK.repack(source_path, output_path, {name: (2, 3)})
+                converted, untouched = REPACK.verify_repack(
+                    source_path, output_path, {name: (2, 3)}
+                )
+            finally:
+                REPACK.np = numpy
             self.assertEqual(converted, 1)
             self.assertEqual(untouched, 2)
 
@@ -97,9 +102,9 @@ class InputMajorRepackTests(unittest.TestCase):
                         REPACK.METADATA_NAME: "input-major-v1",
                     },
                 )
+                weight_begin, weight_end = output.raw_bounds(name)
                 self.assertEqual(
-                    output.int8(name, (3, 2)).tobytes(),
-                    bytes([1, 4, 2, 5, 3, 6]),
+                    output.map[weight_begin:weight_end], bytes([1, 4, 2, 5, 3, 6])
                 )
                 scale_begin, scale_end = output.raw_bounds(name + "_scale")
                 self.assertEqual(

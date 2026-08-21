@@ -20,7 +20,10 @@ import shutil
 import struct
 import sys
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
 
 
 BLOCKS = 48
@@ -32,6 +35,10 @@ FORMAT_VERSION = 1
 MARKER_NAME = "ltx.transformer_input_major.version"
 METADATA_NAME = "h3ddle_ltx_transformer_layout"
 COPY_CHUNK_BYTES = 64 * 1024 * 1024
+# Keep the tool importable and its exact fixture tests runnable on a clean
+# Python installation. Full checkpoints still use NumPy: a Python-level
+# transpose of multi-megabyte projection matrices would take unreasonably long.
+STDLIB_TRANSPOSE_LIMIT = 1024 * 1024
 
 
 ATTENTIONS = (
@@ -111,7 +118,7 @@ class TensorFile:
         self.map.close()
         self.file.close()
 
-    def int8(self, name, shape):
+    def int8_bounds(self, name, shape):
         descriptor = self.tensors.get(name)
         if not descriptor or descriptor.get("dtype") != "I8":
             raise ValueError(f"{name}: required I8 tensor is absent")
@@ -120,10 +127,21 @@ class TensorFile:
                 f"{name}: shape {descriptor.get('shape')} != {list(shape)}"
             )
         begin, end = descriptor["data_offsets"]
-        expected = int(np.prod(shape, dtype=np.int64))
+        expected = 1
+        for dimension in shape:
+            expected *= dimension
         if end - begin != expected:
             raise ValueError(f"{name}: byte count does not match its shape")
         absolute = self.data_offset + begin
+        return absolute, expected
+
+    def int8(self, name, shape):
+        absolute, _ = self.int8_bounds(name, shape)
+        if np is None:
+            raise RuntimeError(
+                "NumPy is required for full LTX checkpoint repacking; "
+                "install it with `python3 -m pip install numpy`"
+            )
         return np.ndarray(shape, dtype=np.int8, buffer=self.map, offset=absolute)
 
     def raw_bounds(self, name):
@@ -148,7 +166,7 @@ def validate_projections(source, projection_shapes):
     if MARKER_NAME in source.tensors:
         raise ValueError("checkpoint is already marked LTX input-major")
     for name, shape in projection_shapes.items():
-        source.int8(name, shape)
+        source.int8_bounds(name, shape)
         scale = source.tensors.get(name + "_scale")
         output_rows = shape[0]
         if (
@@ -157,6 +175,70 @@ def validate_projections(source, projection_shapes):
             or scale.get("shape") not in ([output_rows], [output_rows, 1])
         ):
             raise ValueError(f"{name}_scale: invalid per-output scale tensor")
+
+
+def require_fast_transpose(projection_shapes):
+    if np is not None:
+        return
+    largest = max((rows * columns for rows, columns in projection_shapes.values()),
+                  default=0)
+    if largest > STDLIB_TRANSPOSE_LIMIT:
+        raise RuntimeError(
+            "NumPy is required for full LTX checkpoint repacking; "
+            "install it with `python3 -m pip install numpy`"
+        )
+
+
+def write_transpose(output, source, name, shape):
+    if np is not None:
+        matrix = source.int8(name, shape)
+        transposed = np.ascontiguousarray(matrix.T)
+        output.write(memoryview(transposed).cast("B"))
+        return
+
+    absolute, byte_count = source.int8_bounds(name, shape)
+    columns = shape[1]
+    view = memoryview(source.map)[absolute:absolute + byte_count]
+    try:
+        for column in range(columns):
+            output.write(view[column:byte_count:columns].tobytes())
+    finally:
+        view.release()
+
+
+def transpose_matches(source, output, name, source_shape):
+    if np is not None:
+        source_matrix = source.int8(name, source_shape)
+        output_shape = tuple(reversed(source_shape))
+        output_matrix = output.int8(name, output_shape)
+        # Bound the temporary transpose to a few MiB even for the
+        # 4096x16384 feed-forward matrices.
+        rows_per_chunk = max(1, COPY_CHUNK_BYTES // output_shape[1])
+        for begin in range(0, output_shape[0], rows_per_chunk):
+            end = min(begin + rows_per_chunk, output_shape[0])
+            expected = np.ascontiguousarray(source_matrix[:, begin:end].T)
+            if not np.array_equal(output_matrix[begin:end], expected):
+                return False
+        return True
+
+    source_begin, byte_count = source.int8_bounds(name, source_shape)
+    output_begin, output_count = output.int8_bounds(
+        name, tuple(reversed(source_shape))
+    )
+    if output_count != byte_count:
+        return False
+    columns = source_shape[1]
+    source_view = memoryview(source.map)[source_begin:source_begin + byte_count]
+    try:
+        cursor = output_begin
+        for column in range(columns):
+            expected = source_view[column:byte_count:columns].tobytes()
+            if output.map[cursor:cursor + len(expected)] != expected:
+                return False
+            cursor += len(expected)
+        return cursor == output_begin + output_count
+    finally:
+        source_view.release()
 
 
 def output_document(source, projection_shapes):
@@ -209,6 +291,7 @@ def verify_repack(source_path, output_path, projection_shapes):
     output = TensorFile(output_path)
     try:
         validate_projections(source, projection_shapes)
+        require_fast_transpose(projection_shapes)
         expected_names = set(source.tensors) | {MARKER_NAME}
         if set(output.tensors) != expected_names:
             missing = sorted(expected_names - set(output.tensors))
@@ -246,17 +329,10 @@ def verify_repack(source_path, output_path, projection_shapes):
                 expected_schema["shape"] = list(reversed(projection_shapes[name]))
                 if repacked_schema != expected_schema:
                     raise ValueError(f"repacked projection schema differs: {name}")
-                source_matrix = source.int8(name, projection_shapes[name])
-                output_shape = tuple(reversed(projection_shapes[name]))
-                output_matrix = output.int8(name, output_shape)
-                # Bound the temporary transpose to a few MiB even for the
-                # 4096x16384 feed-forward matrices.
-                rows_per_chunk = max(1, COPY_CHUNK_BYTES // output_shape[1])
-                for begin in range(0, output_shape[0], rows_per_chunk):
-                    end = min(begin + rows_per_chunk, output_shape[0])
-                    expected = np.ascontiguousarray(source_matrix[:, begin:end].T)
-                    if not np.array_equal(output_matrix[begin:end], expected):
-                        raise ValueError(f"repacked projection differs: {name}")
+                if not transpose_matches(
+                    source, output, name, projection_shapes[name]
+                ):
+                    raise ValueError(f"repacked projection differs: {name}")
                 converted += 1
             else:
                 if repacked_schema != original_schema:
@@ -289,6 +365,7 @@ def repack(source_path, output_path, projection_shapes, force=False):
     source = TensorFile(source_path)
     try:
         validate_projections(source, projection_shapes)
+        require_fast_transpose(projection_shapes)
         document, payload_size = output_document(source, projection_shapes)
         header = padded_header(document)
         required = 8 + len(header) + payload_size
@@ -306,9 +383,7 @@ def repack(source_path, output_path, projection_shapes, force=False):
             output.write(header)
             for name in source.ordered_names:
                 if name in projection_shapes:
-                    matrix = source.int8(name, projection_shapes[name])
-                    transposed = np.ascontiguousarray(matrix.T)
-                    output.write(memoryview(transposed).cast("B"))
+                    write_transpose(output, source, name, projection_shapes[name])
                     completed += 1
                     if completed % 28 == 0 or completed == total:
                         print(
@@ -374,7 +449,7 @@ def main():
             return
         output_path = args.out or default_output(os.path.abspath(args.transformer))
         size = repack(args.transformer, output_path, projection_shapes, args.force)
-    except (OSError, ValueError) as exception:
+    except (OSError, RuntimeError, ValueError) as exception:
         parser.error(str(exception))
     print(f"wrote {size / (1024 ** 3):.3f} GiB: {os.path.abspath(output_path)}")
 
