@@ -72,14 +72,15 @@ and every file is verified by SHA-256 before install. Packages reuse identical
 files where possible so installing a related model does not duplicate shared
 weights.
 
-The managed MiniMax H3 standard and Turbo packages ship full input-major FL2VA
+The two managed MiniMax H3 packages are reference-capable: Standard + Hybrid
+References and Turbo + Hybrid References. Both ship full input-major FL2VA
 transformers. All 200 quantized core projections are pre-transposed for the
 faster Metal path; the tensor values and prompt-only output are unchanged.
 The standard artifact is published in
 [PulpCut/MiniMax-H3-INT8-ConvRot](https://huggingface.co/PulpCut/MiniMax-H3-INT8-ConvRot),
 and the distilled artifact remains in
 [PulpCut/MiniMax-H3-Turbo-INT8-ConvRot](https://huggingface.co/PulpCut/MiniMax-H3-Turbo-INT8-ConvRot).
-Both INT8 + Hybrid References packages add the same 43.55 MB Ref2VA AdaLN
+Both managed packages add the same 43.55 MB Ref2VA AdaLN
 overlay instead of a second 20.97 GB transformer. Full standard Ref2VA weights
 remain in the
 [upstream repository](https://huggingface.co/Comfy-Org/MiniMax-H3), while both
@@ -99,10 +100,11 @@ layout marker when the resulting `_input_major.safetensors` checkpoint is
 selected. FL2VA and Ref2VA transformers must be repacked separately if both
 flows should benefit.
 
-The managed standard and Turbo + Hybrid References packages keep their
-respective FL2VA transformers and overlay only Ref2VA AdaLN blocks 25–49,
-reducing the additional reference weight file from 20.97 GB to 43.55 MB. Build
-the same overlay locally without changing a source checkpoint:
+The managed Standard + Hybrid References and Turbo + Hybrid References
+packages keep their respective FL2VA transformers and overlay only Ref2VA
+AdaLN blocks 25–49, reducing the additional reference weight file from
+20.97 GB to 43.55 MB. Build the same overlay locally without changing a source
+checkpoint:
 
 ```sh
 python3 -B Scripts/build-h3-hybrid-adaln.py /path/to/ref2va.safetensors
@@ -115,6 +117,19 @@ the hybrid for comparison; if only the overlay is installed, the loader uses
 it automatically. The hybrid intentionally changes generation and is not an
 exact-output or speed optimization. Standard and Turbo Ref2VA produce the same
 overlay bytes, so the managed packages share one pinned download.
+
+The managed LTX-2.5 transformer is likewise stored input-major. Its 1,344 INT8
+projections are exact transposes of Lightricks' regular layout and its other
+5,885 tensors are byte-identical. On a 32 GiB M1 Pro, a matched five-second,
+512-square, eight-pass run fell from 655.7 to 565.5 seconds overall: 13.8%
+faster end to end and 19.4% faster in denoising, with visually identical
+quality. The optimized layout and the memory-gated F32 video self-attention
+path are selected automatically; the released app needs no environment
+variables. To prepare a compatible checkpoint locally:
+
+```sh
+python3 -B Scripts/repack-ltx-input-major.py /path/to/transformer.safetensors
+```
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel
@@ -139,9 +154,9 @@ by Salvatore Sanfilippo, MIT licensed, vendored under `Engine/Vendor/h3.c`.
 
 **MiniMax H3** — video, image, and joint audio generation. Weights by MiniMax
 under the MiniMax H3 Community License Agreement, fetched from
-`Comfy-Org/MiniMax-H3`. The two step-distilled transformers under `PulpCut`
-are conversions of those weights made for this project and carry the same
-licence.
+`Comfy-Org/MiniMax-H3`. The input-major and step-distilled transformers under
+`PulpCut` are conversions of those weights made for this project and carry the
+same licence.
 
 **MiniMax H3 TAE** — the 9 MB preview decoder behind live denoising previews,
 by Kijai, Apache-2.0.

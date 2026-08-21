@@ -411,9 +411,11 @@ public enum ModelCatalog {
     ] + sharedMinimaxH3Files
   )
 
-  /// LTX-2.5, mirrored rather than repackaged: Lightricks publishes these four
-  /// files in the identical Comfy INT8 ConvRot format h3.c already reads, so
-  /// there was no conversion to do. Every SHA-256 below matches upstream.
+  /// LTX-2.5, mirrored as a runtime-sized subset. The text encoder and VAEs
+  /// remain byte-identical to Lightricks' release. The distilled transformer
+  /// is an exact-value layout repack: its 1,344 quantized projections are
+  /// transposed input-major for H3ddle's Metal kernel, while every other source
+  /// tensor is copied byte-for-byte and a versioned layout marker is added.
   ///
   /// The mirror exists because the source repository is gated, and a gated
   /// repository cannot be fetched on a user's behalf — the download builds a
@@ -433,7 +435,7 @@ public enum ModelCatalog {
       + "square, and landscape output from 320p to 1080p; eight steps is the "
       + "recommended balance.",
     repository: "PulpCut/LTX-2.5-INT8-ConvRot-safetensors",
-    revision: "d28e7aae3bfdb47184682838cd11989f1c8aa5dc",
+    revision: "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f",
     licenseName: "LTX-2.x Community License Agreement",
     licenseURL: URL(
       string:
@@ -454,8 +456,8 @@ public enum ModelCatalog {
         role: .transformer,
         path: "diffusion_models/"
           + "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
-        byteCount: 21_504_034_224,
-        sha256: "c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334"
+        byteCount: 21_504_034_388,
+        sha256: "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb"
       ),
       ModelPackageFile(
         role: .textEncoder,

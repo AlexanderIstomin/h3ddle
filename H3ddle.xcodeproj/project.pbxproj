@@ -547,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.5;
+				MARKETING_VERSION = 0.7.6;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;
@@ -572,7 +572,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.5;
+				MARKETING_VERSION = 0.7.6;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;

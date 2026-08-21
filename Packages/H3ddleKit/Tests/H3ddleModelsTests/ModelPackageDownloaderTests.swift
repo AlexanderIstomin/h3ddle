@@ -36,6 +36,28 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.licenseURL.absoluteString.contains("939557dc319dd91227e30195a763f272ba7f8765"))
   }
 
+  @Test("LTX pins the released input-major transformer")
+  func ltxInputMajorManifest() throws {
+    let manifest = ModelCatalog.ltx25
+    let transformer = try #require(
+      manifest.files.first { $0.role == .transformer }
+    )
+
+    #expect(manifest.revision == "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f")
+    #expect(manifest.totalByteCount == 38_694_140_224)
+    #expect(transformer.byteCount == 21_504_034_388)
+    #expect(
+      transformer.sha256
+        == "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb"
+    )
+    #expect(
+      manifest.downloadURL(for: transformer).absoluteString
+        == "https://huggingface.co/PulpCut/LTX-2.5-INT8-ConvRot-safetensors/resolve/"
+          + "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f/"
+          + "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+    )
+  }
+
   @Test("Video and image package descriptions name user-facing capabilities")
   func packageCapabilityDescriptions() {
     let ltx = ModelCatalog.ltx25.detail
