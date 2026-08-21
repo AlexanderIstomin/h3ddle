@@ -187,23 +187,33 @@ half-finished decode.
 
 ## Speed
 
-512 square, 65 pixel frames, 8 steps, with nothing else on the GPU: **36 s a
-denoise step**, 297 s for the sampler, and the eight steps within 1.8 s of each
-other. The prefetch worker has already taken weight loading down to under a
-second of that.
+The managed transformer stores all 1,344 INT8 projections input-major and the
+engine automatically takes F32 MPSGraph video self-attention above 512 rows
+when its memory guard passes. Neither needs an environment variable; the
+environment switches are diagnostic opt-outs.
+
+On a 32 GiB M1 Pro, matched five-second, 512-square, 65-frame, eight-step app
+runs measured:
+
+| path | denoising | total |
+|---|---:|---:|
+| regular output-major + BF16 attention | 458.0 s | 655.7 s |
+| input-major + BF16 attention | 401.5 s | 598.3 s |
+| input-major + F32 video attention | 369.2 s | 565.5 s |
+
+Together the shipped paths reduce denoising by 19.4% and end-to-end time by
+13.8%, with visually identical output in the matched runs. The VAE decode is
+now about 172 seconds and more than 30% of the complete time.
 
 An earlier figure of 65 s a step was measured while another generation had the
 GPU. It is not this engine's number, and it is the second time a timing taken
 on a shared machine has had to be withdrawn here — see the prefetch A/B in
 `ltx_dit.c`.
 
-## Not done
+## Deliberately absent
 
-Nothing is wired to the engine protocol, the manifest or the app yet — this is
-the port, not the feature. `ltx_generate()` also hardcodes the published
-filenames inside the snapshot's three directories, which is what an app-side
-package will have to match or what will have to become a parameter.
-
-Nothing longer than 2.7 s has ever been generated, and nothing but 512 square.
-The resolution ladder, the guidance path and the 16→48 kHz bandwidth extender
-are all unported.
+The app and protocol support text, start/end frames, ordered references,
+2–20-second durations, and portrait, square, or landscape output from 320p to
+1080p. The non-distilled development transformer, guidance path, stage-2
+latent upscalers, duration head, and 16→48 kHz bandwidth extender remain
+unported because the managed package does not ship those weights.

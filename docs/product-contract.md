@@ -40,7 +40,8 @@
 - The program canvas shows the composed visual and any T1 titles at the
   playhead, fitted to the project aspect on the project background. A selected
   visual or title can be moved, scaled (corner handles; Command scales about
-  center), and rotated (handle; Shift snaps to 15°) on the monitor. Unselected
+  center), and rotated (top-middle disc or the outer corner; the pointer shows
+  scale vs rotate; Shift snaps to 15°) on the monitor. Unselected
   titles hit visible glyphs only; a selected title uses its expanded bounds.
   Empty-canvas drag pans the viewer; Option-drag force-pans. Empty-canvas
   right-click offers Add text. Fit and cover remain snap-to-frame presets for

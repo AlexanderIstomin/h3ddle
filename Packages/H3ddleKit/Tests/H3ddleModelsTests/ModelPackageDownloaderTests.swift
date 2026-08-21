@@ -12,12 +12,12 @@ import Testing
 struct ModelPackageDownloaderTests {
   @Test("The curated INT8 package is immutable and selective")
   func curatedManifest() throws {
-    let manifest = ModelCatalog.minimaxH3Int8
+    let manifest = ModelCatalog.minimaxH3Ref2VAInt8
 
     #expect(manifest.repository == "Comfy-Org/MiniMax-H3")
     #expect(manifest.revision == "014cd40f7e177756c6b2473c0d93b1c89a790dd2")
-    #expect(manifest.files.count == 10)
-    #expect(manifest.totalByteCount == 53_941_614_829)
+    #expect(manifest.files.count == 11)
+    #expect(manifest.totalByteCount == 53_985_166_009)
     #expect(manifest.files.filter { $0.role != .runtimeMetadata }.allSatisfy {
       $0.path.hasSuffix(".safetensors")
     })
@@ -34,6 +34,28 @@ struct ModelPackageDownloaderTests {
     )
     #expect(manifest.compatibility == .ready)
     #expect(manifest.licenseURL.absoluteString.contains("939557dc319dd91227e30195a763f272ba7f8765"))
+  }
+
+  @Test("LTX pins the released input-major transformer")
+  func ltxInputMajorManifest() throws {
+    let manifest = ModelCatalog.ltx25
+    let transformer = try #require(
+      manifest.files.first { $0.role == .transformer }
+    )
+
+    #expect(manifest.revision == "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f")
+    #expect(manifest.totalByteCount == 38_694_140_224)
+    #expect(transformer.byteCount == 21_504_034_388)
+    #expect(
+      transformer.sha256
+        == "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb"
+    )
+    #expect(
+      manifest.downloadURL(for: transformer).absoluteString
+        == "https://huggingface.co/PulpCut/LTX-2.5-INT8-ConvRot-safetensors/resolve/"
+          + "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f/"
+          + "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+    )
   }
 
   @Test("Video and image package descriptions name user-facing capabilities")
@@ -261,10 +283,10 @@ struct ModelPackageDownloaderTests {
     #expect(try Data(contentsOf: destination) == fixture)
   }
 
-  @Test("The turbo package ships its exact-output full input-major transformer")
+  @Test("The reference packages ship their exact-output input-major prompt transformers")
   func turboManifestSharing() throws {
-    let standard = ModelCatalog.minimaxH3Int8
-    let turbo = ModelCatalog.minimaxH3TurboInt8
+    let standard = ModelCatalog.minimaxH3Ref2VAInt8
+    let turbo = ModelCatalog.minimaxH3Ref2VATurboInt8
 
     #expect(turbo.generationProfile == .turbo)
     #expect(turbo.generationProfile.defaultDenoisingSteps == 8)
@@ -387,7 +409,7 @@ struct ModelPackageDownloaderTests {
     let encoder = JSONEncoder()
     var object = try #require(
       try JSONSerialization.jsonObject(
-        with: encoder.encode(ModelCatalog.minimaxH3Int8)
+        with: encoder.encode(ModelCatalog.minimaxH3Ref2VAInt8)
       ) as? [String: Any]
     )
     object.removeValue(forKey: "generationProfile")
@@ -406,8 +428,10 @@ struct ModelPackageDownloaderTests {
     #expect(decoded.files.allSatisfy { !$0.requiresLocalSource })
     #expect(decoded.files.allSatisfy { $0.localCandidatePath == nil })
     #expect(decoded.files.allSatisfy { $0.sourcePath == nil })
-    #expect(decoded.id == ModelCatalog.minimaxH3Int8.id)
-    #expect(decoded.files.map(\.sha256) == ModelCatalog.minimaxH3Int8.files.map(\.sha256))
+    #expect(decoded.id == ModelCatalog.minimaxH3Ref2VAInt8.id)
+    #expect(
+      decoded.files.map(\.sha256) == ModelCatalog.minimaxH3Ref2VAInt8.files.map(\.sha256)
+    )
   }
 
   /// What the user is told before they agree to anything. An update that adds

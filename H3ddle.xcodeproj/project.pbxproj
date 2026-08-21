@@ -15,6 +15,7 @@
 		2F326CFAF21C4DD0992E083F /* TimeRulerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */; };
 		32E499B7269BB7EBFDE89192 /* CanvasGizmoOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */; };
 		388EF6D763445F890EE23922 /* ExportModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDE22F1F6245036A1DE4230C /* ExportModalView.swift */; };
+		38E4D5B4048DAA49D577FA4D /* CanvasGizmoCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30B22A3AFAAEC2DCE86EFEE /* CanvasGizmoCursor.swift */; };
 		3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */; };
 		4143C0887613C548157CE456 /* GeneratedAssetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E7E87AF0B2CCE306CCA94F /* GeneratedAssetPreview.swift */; };
 		45129FAA941B44DFCBD13A6B /* EditorSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69F35D81C9968F32C725B215 /* EditorSession.swift */; };
@@ -105,6 +106,7 @@
 		CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationStudioView.swift; sourceTree = "<group>"; };
 		CFB197A56139F880CD4A81C7 /* H3ddle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = H3ddle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D29A52016F6B64B97F33127C /* TextInspectorPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInspectorPanel.swift; sourceTree = "<group>"; };
+		D30B22A3AFAAEC2DCE86EFEE /* CanvasGizmoCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoCursor.swift; sourceTree = "<group>"; };
 		D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeRulerView.swift; sourceTree = "<group>"; };
 		D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoOverlay.swift; sourceTree = "<group>"; };
 		DF87CD329EDE32AD0A1ACB8F /* H3ddleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = H3ddleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -232,6 +234,7 @@
 		8A6F344EB4997F4C458F2CD0 /* Canvas */ = {
 			isa = PBXGroup;
 			children = (
+				D30B22A3AFAAEC2DCE86EFEE /* CanvasGizmoCursor.swift */,
 				A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */,
 				D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */,
 				C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */,
@@ -474,6 +477,7 @@
 			files = (
 				8F8AD1AF67979F6F90EA4B85 /* AppModel.swift in Sources */,
 				CC4F9A5AA9DD7E28C23E15FA /* AudioPreviewPlayer.swift in Sources */,
+				38E4D5B4048DAA49D577FA4D /* CanvasGizmoCursor.swift in Sources */,
 				1A11C0FCE6740ACFF083AB72 /* CanvasGizmoGeometry.swift in Sources */,
 				32E499B7269BB7EBFDE89192 /* CanvasGizmoOverlay.swift in Sources */,
 				2340DB253E47E718A1EAE4C8 /* CanvasInteractionProbe.swift in Sources */,
@@ -543,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.5;
+				MARKETING_VERSION = 0.7.6;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;
@@ -568,7 +572,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.5;
+				MARKETING_VERSION = 0.7.6;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;

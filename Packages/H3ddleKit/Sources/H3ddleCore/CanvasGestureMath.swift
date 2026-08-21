@@ -156,9 +156,23 @@ public enum CanvasViewportMath: Sendable {
   }
 }
 
+public enum CanvasHandleIntent: Equatable, Sendable {
+  case scale
+  case rotate
+}
+
+public struct CanvasOutsetHandle: Sendable {
+  public var hitX: Double
+  public var hitY: Double
+  public var shapeOffsetX: Double
+  public var shapeOffsetY: Double
+}
+
 public enum CanvasGestureMath: Sendable {
   public static let minimumScale = 0.05
   public static let rotationSnap = Double.pi / 12
+  /// Distance from a projected corner that still scales; farther outward rotates.
+  public static let cornerScaleZone = 12.0
 
   public static func moved(
     origin: CanvasObjectTransform,
@@ -309,6 +323,50 @@ public enum CanvasGestureMath: Sendable {
       }
     }
     return true
+  }
+
+  /// Inside the scale zone, or anywhere inward toward the centroid, the corner
+  /// scales. Only a press beyond the zone on the outward side rotates.
+  public static func cornerIntent(
+    pointer: (x: Double, y: Double),
+    corner: (x: Double, y: Double),
+    centroid: (x: Double, y: Double),
+    scaleZone: Double = cornerScaleZone
+  ) -> CanvasHandleIntent {
+    let outward = (x: corner.x - centroid.x, y: corner.y - centroid.y)
+    let length = hypot(outward.x, outward.y)
+    let fromCorner = (x: pointer.x - corner.x, y: pointer.y - corner.y)
+    let dot = length > 1e-3 ? (fromCorner.x * outward.x + fromCorner.y * outward.y) / length : 0
+    let distance = hypot(fromCorner.x, fromCorner.y)
+    return distance > scaleZone && dot > 0 ? .rotate : .scale
+  }
+
+  /// Pushes a large hit target mostly outside the object so the interior stays
+  /// a move. The visible shape stays on `point` via `shapeOffset`.
+  public static func outsetHandle(
+    point: (x: Double, y: Double),
+    centroid: (x: Double, y: Double),
+    hitSize: (width: Double, height: Double),
+    shapeSize: (width: Double, height: Double)
+  ) -> CanvasOutsetHandle {
+    let axis = (x: point.x - centroid.x, y: point.y - centroid.y)
+    let length = hypot(axis.x, axis.y)
+    guard length > 1e-6 else {
+      return CanvasOutsetHandle(hitX: point.x, hitY: point.y, shapeOffsetX: 0, shapeOffsetY: 0)
+    }
+    let nx = axis.x / length
+    let ny = axis.y / length
+    let outset =
+      (abs(nx) * max(0, hitSize.width - shapeSize.width)) / 2
+      + (abs(ny) * max(0, hitSize.height - shapeSize.height)) / 2
+    let offsetX = nx * outset
+    let offsetY = ny * outset
+    return CanvasOutsetHandle(
+      hitX: point.x + offsetX,
+      hitY: point.y + offsetY,
+      shapeOffsetX: offsetX == 0 ? 0 : -offsetX,
+      shapeOffsetY: offsetY == 0 ? 0 : -offsetY
+    )
   }
 
   private static func placed(

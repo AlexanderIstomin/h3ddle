@@ -166,10 +166,8 @@ final class AppModel {
   var modelValidationMessage = "Choose a local MiniMax H3 model folder."
   var engineCapabilities: EngineCapabilities?
   var modelReport: EngineModelReport?
-  let managedModel = ModelCatalog.minimaxH3Int8
+  let managedModel = ModelCatalog.minimaxH3Ref2VAInt8
   let managedManifests = [
-    ModelCatalog.minimaxH3Int8,
-    ModelCatalog.minimaxH3TurboInt8,
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,

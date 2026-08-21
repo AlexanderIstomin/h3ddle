@@ -59,7 +59,9 @@ final class H3ddleUITests: XCTestCase {
 
     click("model-status", in: app, expecting: "model-settings")
     XCTAssertTrue(app.buttons["choose-model-folder-video"].exists)
-    XCTAssertTrue(app.staticTexts["MiniMax H3 · INT8"].waitForExistence(timeout: 8))
+    XCTAssertTrue(
+      app.staticTexts["MiniMax H3 · INT8 + Hybrid References"].waitForExistence(timeout: 8)
+    )
   }
 
   @MainActor
@@ -309,11 +311,7 @@ final class H3ddleUITests: XCTestCase {
     )
 
     click("model-status", in: app, expecting: "model-settings")
-    let otherH3Packages = [
-      "comfy-minimax-h3-int8-v1",
-      "h3ddle-minimax-h3-turbo-int8-v1",
-      "comfy-minimax-h3-int8-ref2va-v1",
-    ]
+    let otherH3Packages = ["comfy-minimax-h3-int8-ref2va-v1"]
     for packageID in otherH3Packages {
       let button = app.buttons["download-managed-model-\(packageID)"]
       XCTAssertTrue(button.waitForExistence(timeout: 8), "missing button for \(packageID)")
@@ -321,7 +319,7 @@ final class H3ddleUITests: XCTestCase {
     }
 
     XCTAssertTrue(
-      app.staticTexts["managed-download-blocker-comfy-minimax-h3-int8-v1"]
+      app.staticTexts["managed-download-blocker-comfy-minimax-h3-int8-ref2va-v1"]
         .waitForExistence(timeout: 8),
       "the Models window did not explain which H3 download is blocking the others"
     )

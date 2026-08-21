@@ -4,10 +4,11 @@ import H3ddleCore
 
 enum CanvasGizmoGeometry {
   static let padding = 32.0
-  static let handleSize = 8.0
-  static let cornerHandleHit: Double = 12
-  static let rotateHandleHit: Double = 14
-  static let rotateStem: Double = 22
+  static let handleSize = 10.0
+  static let cornerHitSize = 40.0
+  static let rotateDiscSize = 20.0
+  static let rotateHandleHit = 11.0
+  static let rotateStem = 28.0
 
   struct Layout {
     var quad: [(x: Double, y: Double)]
@@ -94,18 +95,46 @@ enum CanvasGizmoGeometry {
     )
   }
 
+  static func centroid(of layout: Layout) -> (x: Double, y: Double) {
+    let count = Double(max(layout.quad.count, 1))
+    return (
+      layout.quad.reduce(0) { $0 + $1.x } / count,
+      layout.quad.reduce(0) { $0 + $1.y } / count
+    )
+  }
+
   static func hitCorner(
     at viewPoint: (x: Double, y: Double),
     in layout: Layout
   ) -> CanvasCorner? {
-    layout.corners.min(by: { lhs, rhs in
+    let center = centroid(of: layout)
+    let half = cornerHitSize / 2
+    let hits = layout.corners.filter { _, corner in
+      let placed = CanvasGestureMath.outsetHandle(
+        point: corner,
+        centroid: center,
+        hitSize: (cornerHitSize, cornerHitSize),
+        shapeSize: (handleSize, handleSize)
+      )
+      return abs(viewPoint.x - placed.hitX) <= half && abs(viewPoint.y - placed.hitY) <= half
+    }
+    return hits.min(by: { lhs, rhs in
       hypot(lhs.value.x - viewPoint.x, lhs.value.y - viewPoint.y)
         < hypot(rhs.value.x - viewPoint.x, rhs.value.y - viewPoint.y)
-    }).flatMap { candidate in
-      hypot(candidate.value.x - viewPoint.x, candidate.value.y - viewPoint.y) <= cornerHandleHit
-        ? candidate.key
-        : nil
-    }
+    })?.key
+  }
+
+  static func cornerIntent(
+    at viewPoint: (x: Double, y: Double),
+    corner: CanvasCorner,
+    in layout: Layout
+  ) -> CanvasHandleIntent {
+    guard let point = layout.corners[corner] else { return .scale }
+    return CanvasGestureMath.cornerIntent(
+      pointer: viewPoint,
+      corner: point,
+      centroid: centroid(of: layout)
+    )
   }
 
   static func hitsRotate(at viewPoint: (x: Double, y: Double), in layout: Layout) -> Bool {

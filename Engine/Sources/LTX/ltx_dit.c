@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 
 enum {
     VIDEO_DIM = LTX_DIT_VIDEO_DIM,
@@ -89,6 +90,14 @@ static const double ROPE_THETA = 10000.0;
 typedef struct {
     h3_gpu *gpu;
     const h3_weight_store *store;
+    /* Set only after the version marker and every quantized projection shape
+     * agree. A mismatched layout produces plausible but wrong output, so this
+     * cannot be inferred independently while blocks stream in. */
+    int input_major;
+    /* F32 MPSGraph path for the quadratic video self-attention. The four
+     * scratch tensors are allocated only when the request fits the memory
+     * budget; every other attention remains on the BF16 path. */
+    int f32_self_attention;
     /* Latent geometry, which the driver had as compile-time constants. */
     uint32_t frames, height, width;
     uint32_t video_rows, audio_rows, text_rows;
@@ -195,6 +204,144 @@ static h3_gpu_tensor *upload(run *r, const float *values, size_t count) {
     free(staged);
     if (!tensor) oops(r, "cannot upload a tensor");
     return tensor;
+}
+
+enum { LTX_INPUT_MAJOR_VERSION = 1 };
+static const char LTX_INPUT_MAJOR_MARKER[] =
+    "ltx.transformer_input_major.version";
+
+static uint32_t little_u32(const unsigned char bytes[4]) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static int validate_projection_schema(const h3_weight_store *store,
+                                      const char *name, uint64_t out_dim,
+                                      uint64_t in_dim, int input_major,
+                                      char *error, size_t error_size) {
+    const h3_st_tensor *weight = h3_weight_find(store, name, NULL);
+    const uint64_t stored_rows = input_major ? in_dim : out_dim;
+    const uint64_t stored_columns = input_major ? out_dim : in_dim;
+    if (!weight || weight->dtype != H3_DTYPE_I8 || weight->ndim != 2 ||
+        weight->shape[0] != stored_rows ||
+        weight->shape[1] != stored_columns) {
+        if (error && error_size)
+            snprintf(error, error_size,
+                     "LTX %s projection has the wrong schema: %s",
+                     input_major ? "input-major" : "output-major", name);
+        return 0;
+    }
+
+    char scale_name[300];
+    const int length = snprintf(scale_name, sizeof(scale_name), "%s_scale", name);
+    if (length < 0 || (size_t)length >= sizeof(scale_name)) {
+        if (error && error_size)
+            snprintf(error, error_size, "LTX projection name is too long: %s",
+                     name);
+        return 0;
+    }
+    const h3_st_tensor *scale = h3_weight_find(store, scale_name, NULL);
+    if (!scale || scale->dtype != H3_DTYPE_F32 ||
+        !((scale->ndim == 1 && scale->shape[0] == out_dim) ||
+          (scale->ndim == 2 && scale->shape[0] == out_dim &&
+           scale->shape[1] == 1))) {
+        if (error && error_size)
+            snprintf(error, error_size,
+                     "LTX projection scale has the wrong schema: %s", scale_name);
+        return 0;
+    }
+    return 1;
+}
+
+static int validate_attention_schema(const h3_weight_store *store,
+                                     const char *block, const char *attention,
+                                     uint64_t query_in, uint64_t kv_in,
+                                     uint64_t inner, uint64_t out_dim,
+                                     int input_major,
+                                     char *error, size_t error_size) {
+    char prefix[256], name[300];
+    const int length = snprintf(prefix, sizeof(prefix), "%s%s.", block, attention);
+    if (length < 0 || (size_t)length >= sizeof(prefix)) {
+        if (error && error_size)
+            snprintf(error, error_size, "LTX attention name is too long");
+        return 0;
+    }
+#define VALIDATE(suffix, out, in) do {                                         \
+    snprintf(name, sizeof(name), "%s%s.weight", prefix, suffix);             \
+    if (!validate_projection_schema(store, name, out, in, input_major,         \
+                                    error, error_size)) return 0;               \
+} while (0)
+    VALIDATE("to_q", inner, query_in);
+    VALIDATE("to_k", inner, kv_in);
+    VALIDATE("to_v", inner, kv_in);
+    VALIDATE("to_out.0", out_dim, inner);
+#undef VALIDATE
+    return 1;
+}
+
+static int validate_block_schema(const h3_weight_store *store, int index,
+                                 int input_major,
+                                 char *error, size_t error_size) {
+    char block[192], name[300];
+    const int length = snprintf(
+        block, sizeof(block),
+        "model.diffusion_model.transformer_blocks.%d.", index);
+    if (length < 0 || (size_t)length >= sizeof(block)) {
+        if (error && error_size)
+            snprintf(error, error_size, "LTX block name is too long");
+        return 0;
+    }
+#define ATTENTION(name, query, kv, inner, out)                                 \
+    if (!validate_attention_schema(store, block, name, query, kv, inner, out,  \
+                                   input_major, error, error_size)) return 0
+    ATTENTION("attn1", VIDEO_DIM, VIDEO_DIM, VIDEO_DIM, VIDEO_DIM);
+    ATTENTION("attn2", VIDEO_DIM, VIDEO_DIM, VIDEO_DIM, VIDEO_DIM);
+    ATTENTION("audio_attn1", AUDIO_DIM, AUDIO_DIM, AUDIO_DIM, AUDIO_DIM);
+    ATTENTION("audio_attn2", AUDIO_DIM, AUDIO_DIM, AUDIO_DIM, AUDIO_DIM);
+    ATTENTION("audio_to_video_attn", VIDEO_DIM, AUDIO_DIM, AUDIO_DIM, VIDEO_DIM);
+    ATTENTION("video_to_audio_attn", AUDIO_DIM, VIDEO_DIM, AUDIO_DIM, AUDIO_DIM);
+#undef ATTENTION
+#define PROJECTION(suffix, out, in) do {                                       \
+    snprintf(name, sizeof(name), "%s%s.weight", block, suffix);              \
+    if (!validate_projection_schema(store, name, out, in, input_major,         \
+                                    error, error_size)) return 0;               \
+} while (0)
+    PROJECTION("ff.net.0.proj", VIDEO_FF, VIDEO_DIM);
+    PROJECTION("ff.net.2", VIDEO_DIM, VIDEO_FF);
+    PROJECTION("audio_ff.net.0.proj", AUDIO_FF, AUDIO_DIM);
+    PROJECTION("audio_ff.net.2", AUDIO_DIM, AUDIO_FF);
+#undef PROJECTION
+    return 1;
+}
+
+static int configure_weight_layout(const h3_weight_store *store,
+                                   int *input_major,
+                                   char *error, size_t error_size) {
+    const h3_st_header *header = NULL;
+    const h3_st_tensor *marker = h3_weight_find(
+        store, LTX_INPUT_MAJOR_MARKER, &header);
+    int layout = 0;
+    if (marker) {
+        unsigned char version[4];
+        if (!header || marker->dtype != H3_DTYPE_U32 || marker->ndim != 1 ||
+            marker->shape[0] != 1 ||
+            !h3_st_read_data(header, marker, version, sizeof(version),
+                             error, error_size) ||
+            little_u32(version) != LTX_INPUT_MAJOR_VERSION) {
+            if (error && error_size && !error[0])
+                snprintf(error, error_size,
+                         "LTX input-major checkpoint has an unsupported marker");
+            return 0;
+        }
+        layout = 1;
+    }
+    for (int index = 0; index < TOTAL_BLOCKS; index++)
+        if (!validate_block_schema(store, index, layout, error, error_size))
+            return 0;
+    *input_major = layout;
+    if (layout && getenv("H3_PROFILE"))
+        fprintf(stderr, "ltx: full input-major DiT checkpoint enabled\n");
+    return 1;
 }
 
 static void read_bf16_as_f32(run *r, const h3_gpu_tensor *tensor, float *out,
@@ -411,9 +558,14 @@ static void load_projection(run *r, const char *prefix, const char *suffix,
     if (r->failed) return;
     char name[256], why[512];
     snprintf(name, sizeof(name), "%s%s.weight", prefix, suffix);
-    if (!h3_weight_load_i8_linear(r->store, r->gpu, name, out_dim, in_dim,
-                                  &into->weight, &into->scales,
-                                  why, sizeof(why))) {
+    const int loaded = r->input_major
+        ? h3_weight_load_i8_linear_input_major(
+              r->store, r->gpu, name, in_dim, out_dim,
+              &into->weight, &into->scales, why, sizeof(why))
+        : h3_weight_load_i8_linear(
+              r->store, r->gpu, name, out_dim, in_dim,
+              &into->weight, &into->scales, why, sizeof(why));
+    if (!loaded) {
         oops(r, "cannot load %s: %s", name, why);
         return;
     }
@@ -569,8 +721,21 @@ static h3_gpu_tensor *modulate_context(run *r, const char *block,
 typedef struct {
     h3_gpu_tensor *query, *key, *value, *heads, *logits;
     h3_gpu_tensor *rotated_query, *rotated_kv, *inner;
+    h3_gpu_tensor *query32, *key32, *value32, *heads32;
     h3_gpu_tensor *ones_video, *ones_audio, *row_map_video, *row_map_audio;
 } scratch;
+
+static int project_i8(run *r, h3_gpu_tensor *output,
+                      const h3_gpu_tensor *input, const projection *weight,
+                      uint32_t rows, uint32_t in_dim, uint32_t out_dim) {
+    return r->input_major
+        ? h3_gpu_linear_i8_weight_bf16_square(
+              r->gpu, output, input, weight->weight, weight->scales,
+              weight->bias, rows, in_dim, out_dim)
+        : h3_gpu_linear_i8_weight_bf16_square_output_major(
+              r->gpu, output, input, weight->weight, weight->scales,
+              weight->bias, rows, in_dim, out_dim);
+}
 
 static void run_attention(run *r, const attention *a, h3_gpu_tensor *out,
                           const h3_gpu_tensor *query_input, uint32_t query_rows,
@@ -593,16 +758,13 @@ static void run_attention(run *r, const attention *a, h3_gpu_tensor *out,
                "context ConvRot");
         rotated_kv = space->rotated_kv;
     }
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, space->query, space->rotated_query, a->query.weight,
-                  a->query.scales, a->query.bias, query_rows, a->query_in,
-                  a->inner), "query projection");
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, space->key, rotated_kv, a->key.weight, a->key.scales,
-                  a->key.bias, kv_rows, a->kv_in, a->inner), "key projection");
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, space->value, rotated_kv, a->value.weight,
-                  a->value.scales, a->value.bias, kv_rows, a->kv_in, a->inner),
+    GPU_OP(r, project_i8(r, space->query, space->rotated_query, &a->query,
+                         query_rows, a->query_in, a->inner),
+           "query projection");
+    GPU_OP(r, project_i8(r, space->key, rotated_kv, &a->key,
+                         kv_rows, a->kv_in, a->inner), "key projection");
+    GPU_OP(r, project_i8(r, space->value, rotated_kv, &a->value,
+                         kv_rows, a->kv_in, a->inner),
            "value projection");
     GPU_OP(r, h3_gpu_rms_norm_bf16(r->gpu, space->query, space->query,
                                    a->query_norm, query_rows, a->inner,
@@ -619,20 +781,40 @@ static void run_attention(run *r, const attention *a, h3_gpu_tensor *out,
         GPU_OP(r, h3_gpu_rope_rows_bf16(r->gpu, space->key, key_cos, key_sin,
                                         kv_rows, HEADS, head_dim,
                                         kv_rows * (head_dim / 2)), "key rope");
-    GPU_OP(r, h3_gpu_sdpa_cross_bf16(r->gpu, space->heads, space->query,
-                                     space->key, space->value, query_rows,
-                                     kv_rows, HEADS, head_dim,
-                                     1.0f / sqrtf((float)head_dim)),
-           "attention");
+    if (r->f32_self_attention && query_rows == kv_rows &&
+        query_rows > 512 && a->inner == VIDEO_DIM) {
+        const uint32_t span = query_rows * a->inner;
+        GPU_OP(r, h3_gpu_cast_bf16_to_f32(r->gpu, space->query32,
+                                          space->query, span),
+               "F32 attention query cast");
+        GPU_OP(r, h3_gpu_cast_bf16_to_f32(r->gpu, space->key32,
+                                          space->key, span),
+               "F32 attention key cast");
+        GPU_OP(r, h3_gpu_cast_bf16_to_f32(r->gpu, space->value32,
+                                          space->value, span),
+               "F32 attention value cast");
+        GPU_OP(r, h3_gpu_sdpa_f32(r->gpu, space->heads32, space->query32,
+                                  space->key32, space->value32, query_rows,
+                                  HEADS, head_dim,
+                                  1.0f / sqrtf((float)head_dim)),
+               "F32 self-attention");
+        GPU_OP(r, h3_gpu_cast_f32_to_bf16(r->gpu, space->heads,
+                                          space->heads32, span),
+               "F32 attention output cast");
+    } else {
+        GPU_OP(r, h3_gpu_sdpa_cross_bf16(r->gpu, space->heads, space->query,
+                                         space->key, space->value, query_rows,
+                                         kv_rows, HEADS, head_dim,
+                                         1.0f / sqrtf((float)head_dim)),
+               "attention");
+    }
     GPU_OP(r, h3_gpu_head_gate_bf16(r->gpu, space->heads, space->logits,
                                     query_rows, HEADS, head_dim), "head gate");
     GPU_OP(r, h3_gpu_convrot_bf16(r->gpu, space->heads, space->heads,
                                   query_rows, a->inner, CONVROT_GROUP),
            "output ConvRot");
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, out, space->heads, a->output.weight,
-                  a->output.scales, a->output.bias, query_rows, a->inner,
-                  a->out_dim), "output projection");
+    GPU_OP(r, project_i8(r, out, space->heads, &a->output, query_rows,
+                         a->inner, a->out_dim), "output projection");
 }
 
 typedef struct {
@@ -782,17 +964,15 @@ static void feed_forward(run *r, const projection *in, const projection *out,
            "feed-forward modulation");
     GPU_OP(r, h3_gpu_convrot_bf16(r->gpu, scaled, scaled, rows, dim,
                                   CONVROT_GROUP), "feed-forward ConvRot");
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, space->inner, scaled, in->weight, in->scales,
-                  in->bias, rows, dim, width), "feed-forward in");
+    GPU_OP(r, project_i8(r, space->inner, scaled, in, rows, dim, width),
+           "feed-forward in");
     GPU_OP(r, h3_gpu_gelu_bf16(r->gpu, space->inner, space->inner, rows * width,
                                1), "feed-forward activation");
     GPU_OP(r, h3_gpu_convrot_bf16(r->gpu, space->inner, space->inner, rows,
                                   width, CONVROT_GROUP),
            "feed-forward out ConvRot");
-    GPU_OP(r, h3_gpu_linear_i8_weight_bf16_square_output_major(
-                  r->gpu, branch, space->inner, out->weight, out->scales,
-                  out->bias, rows, width, dim), "feed-forward out");
+    GPU_OP(r, project_i8(r, branch, space->inner, out, rows, width, dim),
+           "feed-forward out");
     GPU_OP(r, h3_gpu_gate_bf16(r->gpu, x, x, branch, modulation, row_map, rows,
                                dim, ADA_SLOTS, 5), "feed-forward residual");
 }
@@ -1180,6 +1360,8 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
     run r = {0};
     r.gpu = gpu;
     r.store = dit;
+    if (!configure_weight_layout(dit, &r.input_major, error, error_size))
+        return 0;
     r.frames = request->frames;
     r.height = request->height;
     r.width = request->width;
@@ -1374,6 +1556,39 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
             !space.inner)
             oops(&r, "cannot allocate attention scratch");
     }
+    /* H3's same MPSGraph trade crosses over above 512 rows: converting Q/K/V
+     * to F32 and the result back is still faster than BF16 attention there.
+     * LTX measured 5.6% faster end to end at 512x512x65 on M1 Pro. Refuse the
+     * fast path when four full-width F32 tensors would exceed one sixteenth
+     * of physical memory. Setting H3_LTX_F32_SELF_ATTENTION=0 keeps the old
+     * path available for diagnosis and untested OS/GPU combinations. */
+    const char *f32_attention = getenv("H3_LTX_F32_SELF_ATTENTION");
+    const int allow_f32_attention =
+        !f32_attention || strcmp(f32_attention, "0") != 0;
+    if (!r.failed && allow_f32_attention && video_rows > 512) {
+        uint64_t physical = 0;
+        size_t physical_size = sizeof(physical);
+        const uint64_t bytes = (uint64_t)widest * sizeof(float) * 4u;
+        if (sysctlbyname("hw.memsize", &physical, &physical_size, NULL, 0) == 0 &&
+            bytes <= physical / 16u) {
+            space.query32 = h3_gpu_tensor_new_f32(gpu, widest);
+            space.key32 = h3_gpu_tensor_new_f32(gpu, widest);
+            space.value32 = h3_gpu_tensor_new_f32(gpu, widest);
+            space.heads32 = h3_gpu_tensor_new_f32(gpu, widest);
+            if (space.query32 && space.key32 && space.value32 && space.heads32)
+                r.f32_self_attention = 1;
+            else {
+                h3_gpu_tensor_free(space.query32); space.query32 = NULL;
+                h3_gpu_tensor_free(space.key32); space.key32 = NULL;
+                h3_gpu_tensor_free(space.value32); space.value32 = NULL;
+                h3_gpu_tensor_free(space.heads32); space.heads32 = NULL;
+            }
+        }
+    }
+    if (!r.failed && getenv("H3_PROFILE") && video_rows > 512)
+        fprintf(stderr, "ltx: F32 video self-attention %s\n",
+                r.f32_self_attention ? "enabled" :
+                (allow_f32_attention ? "unavailable" : "disabled"));
     if (!r.failed) {
         uint16_t *ones = malloc(VIDEO_DIM * sizeof(*ones));
         if (!ones) oops(&r, "cannot allocate a norm weight");
@@ -1599,6 +1814,8 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
     h3_gpu_tensor_free(s.audio_cross_pe.sin);
     h3_gpu_tensor_free(space.query); h3_gpu_tensor_free(space.key);
     h3_gpu_tensor_free(space.value); h3_gpu_tensor_free(space.heads);
+    h3_gpu_tensor_free(space.query32); h3_gpu_tensor_free(space.key32);
+    h3_gpu_tensor_free(space.value32); h3_gpu_tensor_free(space.heads32);
     h3_gpu_tensor_free(space.logits);
     h3_gpu_tensor_free(space.rotated_query);
     h3_gpu_tensor_free(space.rotated_kv); h3_gpu_tensor_free(space.inner);
