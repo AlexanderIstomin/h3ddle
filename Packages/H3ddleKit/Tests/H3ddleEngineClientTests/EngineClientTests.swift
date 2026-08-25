@@ -227,6 +227,47 @@ struct EngineClientTests {
     #expect((speech["referenceAudioURL"] as? String)?.hasSuffix("/tmp/voice.wav") == true)
   }
 
+  @Test("An H3 inpainting request crosses the protocol with source and mask")
+  func inpaintingRequestCrossesTheProtocol() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/h3-package", isDirectory: true)
+    )
+    let request = GenerationRequest(
+      kind: .video,
+      videoEngine: .h3,
+      videoInpainting: EngineVideoInpaintingOptions(
+        sourceVideoURL: URL(fileURLWithPath: "/tmp/source.mov"),
+        maskURL: URL(fileURLWithPath: "/tmp/mask.png"),
+        preserveSourceAudio: true
+      ),
+      prompt: "replace the white mask with flowers",
+      duration: 5,
+      referenceImageURLs: [URL(fileURLWithPath: "/tmp/flowers.png")]
+    )
+
+    var sent: [String: Any]?
+    for try await event in provider.events(for: request) {
+      if case .progress(let phase, _) = event,
+        let data = phase.data(using: .utf8),
+        let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        sent = decoded
+      }
+    }
+
+    let generation = try #require(sent)
+    let video = try #require(generation["video"] as? [String: Any])
+    let inpainting = try #require(video["inpainting"] as? [String: Any])
+    #expect(video["model"] as? String == "h3")
+    #expect((inpainting["sourceVideoURL"] as? String)?.hasSuffix("/tmp/source.mov") == true)
+    #expect((inpainting["maskURL"] as? String)?.hasSuffix("/tmp/mask.png") == true)
+    #expect(inpainting["maskKind"] as? String == "still")
+    #expect(inpainting["preserveSourceAudio"] as? Bool == true)
+  }
+
   /// The neutral voice: no clip, and the options still have to travel. An
   /// empty `speech` block would be a request the engine refuses outright, so
   /// "no reference" must not collapse into "no speech settings".

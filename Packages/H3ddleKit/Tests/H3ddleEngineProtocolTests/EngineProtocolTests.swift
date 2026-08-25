@@ -54,6 +54,32 @@ struct EngineProtocolTests {
     #expect(decoded == request)
   }
 
+  @Test("H3 inpainting inputs survive a round trip")
+  func videoInpaintingRoundTrip() throws {
+    let inpainting = EngineVideoInpaintingOptions(
+      sourceVideoURL: URL(fileURLWithPath: "/tmp/source.mov"),
+      maskURL: URL(fileURLWithPath: "/tmp/mask.mov"),
+      maskKind: .video,
+      preserveSourceAudio: false
+    )
+    let request = EngineGenerationRequest(
+      kind: .video,
+      prompt: "replace the sign",
+      duration: 5,
+      referenceImageURLs: [URL(fileURLWithPath: "/tmp/sign.png")],
+      video: EngineVideoOptions(model: .h3, inpainting: inpainting),
+      outputURL: URL(fileURLWithPath: "/tmp/inpaint.mp4")
+    )
+
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+
+    #expect(decoded.video?.inpainting == inpainting)
+    #expect(decoded.video?.inpainting?.maskKind == .video)
+    #expect(decoded.video?.inpainting?.preserveSourceAudio == false)
+    #expect(decoded == request)
+  }
+
   @Test("High-memory consent defaults to denied")
   func memoryOvercommitDefaultsToDenied() throws {
     let json = Data(

@@ -458,7 +458,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "#!/bin/sh\nset -eu\n\nif [ -n \"${SRCROOT:-}\" ]; then\n    repository_root=$SRCROOT\nelse\n    repository_root=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd)\nfi\nengine_configuration=debug\nif [ \"${CONFIGURATION:-Debug}\" = \"Release\" ]; then\n    engine_configuration=release\nfi\n\nswift build \\\n    --package-path \"$repository_root/Engine\" \\\n    --configuration \"$engine_configuration\"\n\nengine_binary=\"$repository_root/Engine/.build/$engine_configuration/H3ddleEngineService\"\nhelper_directory=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\nshader_directory=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/H3Engine\"\nmkdir -p \"$helper_directory\"\nmkdir -p \"$shader_directory\"\n/bin/rm -f \"$helper_directory/h3_shaders.metal\"\n/usr/bin/ditto \"$engine_binary\" \"$helper_directory/H3ddleEngineService\"\n/usr/bin/ditto \\\n    \"$repository_root/Engine/Vendor/h3.c/h3_shaders.metal\" \\\n    \"$shader_directory/h3_shaders.metal\"\n\nair=\"$shader_directory/h3_shaders.air\"\nmetallib=\"$shader_directory/h3_shaders.metallib\"\nmetal_bin=$(/usr/bin/xcrun --sdk macosx --find metal 2>/dev/null || true)\nif [ -n \"$metal_bin\" ] && [ -x \"$metal_bin\" ] \\\n    && \"$metal_bin\" -c \\\n        \"$repository_root/Engine/Vendor/h3.c/h3_shaders.metal\" \\\n        -o \"$air\" >/dev/null 2>&1 \\\n    && /usr/bin/xcrun --sdk macosx metallib \"$air\" -o \"$metallib\" >/dev/null 2>&1; then\n    /bin/rm -f \"$air\"\nelse\n    /bin/rm -f \"$air\" \"$metallib\"\nfi\n\nif [ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"NO\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n    /usr/bin/codesign \\\n        --force \\\n        --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n        --options runtime \\\n        \"$helper_directory/H3ddleEngineService\"\nfi\n";
+			shellScript = "#!/bin/sh\nset -eu\n\nif [ -n \"${SRCROOT:-}\" ]; then\n    repository_root=$SRCROOT\nelse\n    repository_root=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd)\nfi\nengine_configuration=debug\nif [ \"${CONFIGURATION:-Debug}\" = \"Release\" ]; then\n    engine_configuration=release\nfi\n\nswift build \\\n    --package-path \"$repository_root/Engine\" \\\n    --configuration \"$engine_configuration\"\n\nengine_binary=\"$repository_root/Engine/.build/$engine_configuration/H3ddleEngineService\"\nhelper_directory=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\nshader_directory=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/H3Engine\"\nmkdir -p \"$helper_directory\"\nmkdir -p \"$shader_directory\"\n/bin/rm -f \\\n    \"$shader_directory/h3_shaders.metal\" \\\n    \"$shader_directory/h3_sol_attention.metal\"\n/usr/bin/ditto \"$engine_binary\" \"$helper_directory/H3ddleEngineService\"\n/usr/bin/ditto \\\n    \"$repository_root/Engine/Vendor/h3.c/h3_shaders.metal\" \\\n    \"$shader_directory/h3_shaders.metal\"\n/usr/bin/ditto \\\n    \"$repository_root/Engine/Vendor/h3.c/h3_sol_attention.metal\" \\\n    \"$shader_directory/h3_sol_attention.metal\"\n\nmetal_bin=$(/usr/bin/xcrun --sdk macosx --find metal 2>/dev/null || true)\nfor shader in h3_shaders h3_sol_attention; do\n    air=\"$shader_directory/$shader.air\"\n    metallib=\"$shader_directory/$shader.metallib\"\n    if [ -n \"$metal_bin\" ] && [ -x \"$metal_bin\" ] \\\n        && \"$metal_bin\" -c \\\n            \"$repository_root/Engine/Vendor/h3.c/$shader.metal\" \\\n            -o \"$air\" >/dev/null 2>&1 \\\n        && /usr/bin/xcrun --sdk macosx metallib \"$air\" \\\n            -o \"$metallib\" >/dev/null 2>&1; then\n        /bin/rm -f \"$air\"\n    else\n        /bin/rm -f \"$air\" \"$metallib\"\n    fi\ndone\n\nif [ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"NO\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n    /usr/bin/codesign \\\n        --force \\\n        --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n        --options runtime \\\n        \"$helper_directory/H3ddleEngineService\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -547,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.6;
+				MARKETING_VERSION = 0.7.7;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;
@@ -572,7 +572,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.6;
+				MARKETING_VERSION = 0.7.7;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;

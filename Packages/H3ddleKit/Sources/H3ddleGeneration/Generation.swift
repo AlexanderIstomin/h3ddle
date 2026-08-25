@@ -120,6 +120,9 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var imageEngine: ImageGenerationEngine = .h3
   /// Video only; ignored by the other kinds.
   public var videoEngine: VideoGenerationEngine = .h3
+  /// H3 video only. When present, the source clip is partly regenerated
+  /// through the Ref2VA transformer according to its hard mask.
+  public var videoInpainting: EngineVideoInpaintingOptions?
   /// Required when `audioEngine` is `.speech`, ignored otherwise: the line to
   /// speak travels in `prompt`, and everything else about the voice here.
   public var speech: EngineSpeechOptions?
@@ -165,6 +168,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     audioEngine: AudioGenerationEngine = .h3,
     imageEngine: ImageGenerationEngine = .h3,
     videoEngine: VideoGenerationEngine = .h3,
+    videoInpainting: EngineVideoInpaintingOptions? = nil,
     speech: EngineSpeechOptions? = nil,
     prompt: String,
     duration: TimeInterval,
@@ -189,6 +193,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.audioEngine = audioEngine
     self.imageEngine = imageEngine
     self.videoEngine = videoEngine
+    self.videoInpainting = videoInpainting
     self.speech = speech
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     self.duration = max(0, duration)

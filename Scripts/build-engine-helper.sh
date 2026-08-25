@@ -20,24 +20,32 @@ helper_directory="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
 shader_directory="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/H3Engine"
 mkdir -p "$helper_directory"
 mkdir -p "$shader_directory"
-/bin/rm -f "$helper_directory/h3_shaders.metal"
+/bin/rm -f \
+    "$shader_directory/h3_shaders.metal" \
+    "$shader_directory/h3_sol_attention.metal"
 /usr/bin/ditto "$engine_binary" "$helper_directory/H3ddleEngineService"
 /usr/bin/ditto \
     "$repository_root/Engine/Vendor/h3.c/h3_shaders.metal" \
     "$shader_directory/h3_shaders.metal"
+/usr/bin/ditto \
+    "$repository_root/Engine/Vendor/h3.c/h3_sol_attention.metal" \
+    "$shader_directory/h3_sol_attention.metal"
 
-air="$shader_directory/h3_shaders.air"
-metallib="$shader_directory/h3_shaders.metallib"
 metal_bin=$(/usr/bin/xcrun --sdk macosx --find metal 2>/dev/null || true)
-if [ -n "$metal_bin" ] && [ -x "$metal_bin" ] \
-    && "$metal_bin" -c \
-        "$repository_root/Engine/Vendor/h3.c/h3_shaders.metal" \
-        -o "$air" >/dev/null 2>&1 \
-    && /usr/bin/xcrun --sdk macosx metallib "$air" -o "$metallib" >/dev/null 2>&1; then
-    /bin/rm -f "$air"
-else
-    /bin/rm -f "$air" "$metallib"
-fi
+for shader in h3_shaders h3_sol_attention; do
+    air="$shader_directory/$shader.air"
+    metallib="$shader_directory/$shader.metallib"
+    if [ -n "$metal_bin" ] && [ -x "$metal_bin" ] \
+        && "$metal_bin" -c \
+            "$repository_root/Engine/Vendor/h3.c/$shader.metal" \
+            -o "$air" >/dev/null 2>&1 \
+        && /usr/bin/xcrun --sdk macosx metallib "$air" \
+            -o "$metallib" >/dev/null 2>&1; then
+        /bin/rm -f "$air"
+    else
+        /bin/rm -f "$air" "$metallib"
+    fi
+done
 
 if [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
     /usr/bin/codesign \

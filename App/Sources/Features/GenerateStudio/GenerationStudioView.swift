@@ -19,6 +19,8 @@ struct GenerationStudioView: View {
   @Bindable var model: AppModel
   let kind: GenerationKind
 
+  private let featureFlags = GenerationStudioFeatureFlags()
+
   private static let h3FPS = 24.0
   /// The bottom of the range the model was trained on, not the shortest clip
   /// the grid can express. Below it H3 drifts off prompt — at 73 frames about
@@ -252,6 +254,8 @@ struct GenerationStudioView: View {
             .padding(10)
         }
       }
+      .frame(minHeight: 220)
+      .layoutPriority(1)
 
       // H3's trained prompt schema, composed into labelled sections it was
       // taught to read. LTX takes one prose prompt and denoises its soundtrack
@@ -280,7 +284,9 @@ struct GenerationStudioView: View {
       // pictures rather than dropping them, so offering these would collect
       // conditioning that turns the generation into an error.
       if acceptsConditioning {
-        frameAnchorSection
+        if !supportsVideoInpainting || !model.studioHasInpaintingInput {
+          frameAnchorSection
+        }
         if worksFromAPicture {
           sourceStrengthControls
         } else {
@@ -498,7 +504,8 @@ struct GenerationStudioView: View {
         Spacer()
         Text(
           model.studioReferenceImages.isEmpty
-            ? "optional"
+            ? (supportsVideoInpainting && model.studioHasInpaintingInput
+              ? "required" : "optional")
             : "\(model.studioReferenceImages.count)/\(AppModel.studioReferenceLimit)")
           .font(.system(size: 9, design: .monospaced))
           .foregroundStyle(H3Color.textSecondary.opacity(0.55))
@@ -525,6 +532,132 @@ struct GenerationStudioView: View {
     .opacity(disabled ? 0.38 : 1)
     .allowsHitTesting(!disabled)
     .accessibilityIdentifier("generation-references")
+  }
+
+  /// Ref2VA inpainting takes the footage it is changing, a hard black/white
+  /// mask, and at least one ordered picture describing the replacement. The
+  /// source and mask stay visible as filenames because a video does not have
+  /// a single honest thumbnail, and an animated mask may change every frame.
+  private var videoInpaintingSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text("MASKED SOURCE")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .tracking(1.6)
+          .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+        Spacer()
+        Text(model.studioHasInpaintingInput ? "inpainting" : "optional")
+          .font(.system(size: 9, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.55))
+      }
+
+      HStack(spacing: 10) {
+        inpaintingFileWell(
+          title: "Source clip",
+          systemImage: "film",
+          url: model.studioInpaintSourceURL,
+          choose: pickInpaintSource,
+          clear: model.clearStudioInpaintSource
+        )
+        inpaintingFileWell(
+          title: model.studioInpaintMaskKind == .video ? "Mask clip" : "Mask image",
+          systemImage: "circle.lefthalf.filled",
+          url: model.studioInpaintMaskURL,
+          choose: pickInpaintMask,
+          clear: model.clearStudioInpaintMask
+        )
+      }
+
+      HStack(spacing: 8) {
+        Text("MASK")
+          .font(.system(size: 9, weight: .bold, design: .monospaced))
+          .foregroundStyle(H3Color.textSecondary.opacity(0.7))
+        settingChips(
+          selection: model.studioInpaintMaskKind,
+          options: [(.still, "Still"), (.video, "Video")],
+          set: model.setStudioInpaintMaskKind
+        )
+        .frame(width: 150)
+        Spacer()
+        Toggle("Keep source audio", isOn: $model.studioPreservesInpaintAudio)
+          .toggleStyle(.checkbox)
+          .font(.system(size: 10))
+      }
+
+      Text("White is repainted; black is preserved. Use a hard black-and-white "
+        + "mask. The source, video mask, and requested duration must match at 24 fps.")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityIdentifier("generation-video-inpainting")
+  }
+
+  private func inpaintingFileWell(
+    title: String,
+    systemImage: String,
+    url: URL?,
+    choose: @escaping () -> Void,
+    clear: @escaping () -> Void
+  ) -> some View {
+    HStack(spacing: 9) {
+      Button(action: choose) {
+        HStack(spacing: 8) {
+          Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .medium))
+          VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+              .font(.system(size: 10, weight: .semibold))
+            Text(url?.lastPathComponent ?? "Choose…")
+              .font(.system(size: 9, design: .monospaced))
+              .foregroundStyle(H3Color.textSecondary)
+              .lineLimit(1)
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 46)
+        .background(H3Color.chrome)
+        .overlay {
+          RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      if url != nil {
+        Button(action: clear) {
+          Image(systemName: "xmark")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(H3Color.textSecondary)
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private func pickInpaintSource() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.allowedContentTypes = [.movie]
+    panel.prompt = "Use Source"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    model.setStudioInpaintSource(url)
+  }
+
+  private func pickInpaintMask() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.allowedContentTypes = model.studioInpaintMaskKind == .video
+      ? [.movie] : [.png, .jpeg, .heic, .webP, .tiff, .bmp]
+    panel.prompt = "Use Mask"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    model.setStudioInpaintMask(url)
   }
 
   private func frameWell(
@@ -636,6 +769,10 @@ struct GenerationStudioView: View {
   /// promise the engine will not keep.
   private var isLTX: Bool { kind == .video && model.videoEngine == .ltx }
 
+  private var supportsVideoInpainting: Bool {
+    featureFlags.h3MaskedSource && kind == .video && model.videoEngine == .h3
+  }
+
   private var promptOnlyModel: Bool {
     (kind == .image && model.imageEngine == .zImage)
       || (kind == .video && model.videoEngine == .ltx)
@@ -665,6 +802,14 @@ struct GenerationStudioView: View {
     // the separate Ref2VA checkpoint, which the next clause covers.
     if model.studioHasReferences, model.modelReport?.hasReferenceTransformer == false {
       return "Ordered references need the Ref2VA transformer in the selected model folder."
+    }
+    if supportsVideoInpainting, model.studioHasInpaintingInput {
+      if model.studioVideoInpainting == nil {
+        return "Choose both a source clip and a mask to inpaint."
+      }
+      if model.studioReferenceImages.isEmpty {
+        return "Add at least one reference image describing what should fill the white mask."
+      }
     }
     if model.studioHasFrameAnchors, model.studioHasReferences {
       return "Start/end frames cannot be combined with references."
@@ -709,6 +854,9 @@ struct GenerationStudioView: View {
               durationSection
             }
             modelSection
+            if supportsVideoInpainting {
+              videoInpaintingSection
+            }
           } else {
             noModelSection
           }
@@ -1242,14 +1390,16 @@ struct GenerationStudioView: View {
           .foregroundStyle(H3Color.textSecondary)
       }
 
-      labeled("TRANSFORMER BLOCKS") {
-        settingChips(
-          selection: knobs.activeDiTLayers,
-          options: [(50, "All 50"), (45, "Fast 45"), (40, "Aggressive 40")]
-        ) { layers in
-          model.updateStudioKnobs { $0.activeDiTLayers = layers }
+      if featureFlags.advancedH3Controls {
+        labeled("TRANSFORMER BLOCKS") {
+          settingChips(
+            selection: knobs.activeDiTLayers,
+            options: [(50, "All 50"), (45, "Fast 45"), (40, "Aggressive 40")]
+          ) { layers in
+            model.updateStudioKnobs { $0.activeDiTLayers = layers }
+          }
+          .accessibilityIdentifier("generation-dit-layers")
         }
-        .accessibilityIdentifier("generation-dit-layers")
       }
 
       if kind == .image {
@@ -1264,17 +1414,19 @@ struct GenerationStudioView: View {
         }
       }
 
-      labeled("CORE REUSE") {
-        settingChips(
-          selection: knobs.coreReuse,
-          options: [(1, "Off"), (4, "Every 4th"), (6, "Every 6th")]
-        ) { reuse in
-          model.updateStudioKnobs { $0.coreReuse = reuse }
+      if featureFlags.advancedH3Controls {
+        labeled("CORE REUSE") {
+          settingChips(
+            selection: knobs.coreReuse,
+            options: [(1, "Off"), (4, "Every 4th"), (6, "Every 6th")]
+          ) { reuse in
+            model.updateStudioKnobs { $0.coreReuse = reuse }
+          }
+          .accessibilityIdentifier("generation-core-reuse")
         }
-        .accessibilityIdentifier("generation-core-reuse")
+        .opacity(knobs.blockCache ? 0.38 : 1)
+        .allowsHitTesting(!knobs.blockCache)
       }
-      .opacity(knobs.blockCache ? 0.38 : 1)
-      .allowsHitTesting(!knobs.blockCache)
 
       Toggle(isOn: Binding(
         get: { knobs.blockCache },
@@ -1516,6 +1668,9 @@ struct GenerationStudioView: View {
     allowsLTXMemoryOvercommit: Bool = false
   ) {
     modelMenuOpen = false
+    let effectiveActiveDiTLayers = featureFlags.effectiveActiveDiTLayers(
+      knobs.activeDiTLayers)
+    let effectiveCoreReuse = featureFlags.effectiveCoreReuse(coreReuse)
     // A model built for stills brings its own square ladder; the video one is
     // a short edge that the project's aspect ratio widens, which is the pair
     // this renderer refuses.
@@ -1535,7 +1690,7 @@ struct GenerationStudioView: View {
     {
       pendingMemoryIntensiveGeneration = PendingMemoryIntensiveGeneration(
         denoisingSteps: denoisingSteps,
-        coreReuse: coreReuse,
+        coreReuse: effectiveCoreReuse,
         blockCache: blockCache,
         fastStill: fastStill,
         warning: warning
@@ -1549,8 +1704,8 @@ struct GenerationStudioView: View {
       duration: requestedDuration,
       quality: knobs.canvas.engineQuality,
       denoisingSteps: denoisingSteps,
-      activeDiTLayers: knobs.activeDiTLayers,
-      coreReuse: coreReuse,
+      activeDiTLayers: effectiveActiveDiTLayers,
+      coreReuse: effectiveCoreReuse,
       blockCache: blockCache,
       fastStill: fastStill,
       previewDenoise: model.previewDenoise,
@@ -1669,8 +1824,10 @@ struct GenerationStudioView: View {
   }
 
   private var canGenerate: Bool {
-    !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && !model.isGenerating
+    let inpaintingIsReady = !supportsVideoInpainting || !model.studioHasInpaintingInput
+      || (model.studioVideoInpainting != nil && !model.studioReferenceImages.isEmpty)
+    return !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !model.isGenerating && inpaintingIsReady
   }
 
   private var knobs: GenerationKnobSnapshot {

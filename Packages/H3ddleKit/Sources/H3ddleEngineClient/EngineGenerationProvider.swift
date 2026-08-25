@@ -112,8 +112,20 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           image: request.kind == .image && request.imageEngine == .zImage
             ? EngineImageOptions(model: .zImage, steps: request.denoisingSteps)
             : nil,
-          video: request.kind == .video && request.videoEngine == .ltx
-            ? EngineVideoOptions(model: .ltx, steps: request.denoisingSteps)
+          video: request.kind == .video
+            ? (request.videoEngine == .ltx
+              ? EngineVideoOptions(
+                model: .ltx,
+                steps: request.denoisingSteps,
+                inpainting: request.videoInpainting
+              )
+              : request.videoInpainting.map {
+                EngineVideoOptions(
+                  model: .h3,
+                  steps: request.denoisingSteps,
+                  inpainting: $0
+                )
+              })
             : nil,
           allowsLTXMemoryOvercommit: request.allowsLTXMemoryOvercommit == true,
           modelDirectory: modelDirectory,

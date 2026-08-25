@@ -325,7 +325,7 @@ public struct GenerationKnobSnapshot: Hashable, Codable, Sendable {
       )
     case .standard:
       GenerationKnobSnapshot(
-        canvas: .p512, denoisingSteps: 20, activeDiTLayers: 45, coreReuse: 1
+        canvas: .p512, denoisingSteps: 20, activeDiTLayers: 50, coreReuse: 1
       )
     case .high:
       GenerationKnobSnapshot(

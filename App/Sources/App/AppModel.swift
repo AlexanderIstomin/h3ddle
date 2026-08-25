@@ -70,6 +70,7 @@ struct ManagedPackageStatus: Equatable {
   var completedBytes: Int64 = 0
   var message = "Checking managed model storage…"
   var installedURL: URL?
+  var updateIsAvailable = false
 
   var downloadIsActive: Bool {
     switch state {
@@ -155,7 +156,11 @@ final class AppModel {
   /// countdown an immediate useful value, then yields to timing from the run.
   private var generationProjectedDuration: TimeInterval?
   var generationPreviewImage: CGImage?
-  var generationPrompt = ""
+  var generationPrompt = "" {
+    didSet {
+      userDefaults.set(generationPrompt, forKey: Self.generationPromptKey)
+    }
+  }
   var errorMessage: String?
   var importErrorMessage: String?
   var showsExport = false
@@ -237,6 +242,13 @@ final class AppModel {
   var studioSourceStrength: Double = 0.85
   var studioEndFrame: StudioImageAttachment?
   var studioReferenceImages: [StudioImageAttachment] = []
+  /// H3-only masked source footage. These are URLs rather than image
+  /// attachments because both the source and, optionally, the mask are
+  /// videos sampled on the output's 24 fps clock.
+  var studioInpaintSourceURL: URL?
+  var studioInpaintMaskURL: URL?
+  var studioInpaintMaskKind: EngineVideoInpaintMaskKind = .still
+  var studioPreservesInpaintAudio = true
   /// Optional schema fields for the composed prompt: the ambient soundscape
   /// and non-diegetic music sections H3 was trained to read. Empty fields are
   /// omitted or become the guide's N/A marker; see H3StructuredPrompt.
@@ -348,6 +360,7 @@ final class AppModel {
 
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
+  private static let generationPromptKey = "H3ddle.generationPrompt"
   private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
   /// Stable Audio is distilled to this many passes. Fewer degrades it
   /// sharply and more buys nothing, so it is a default rather than a
@@ -383,6 +396,7 @@ final class AppModel {
     self.engineInspector = engineInspector ?? session
     self.modelDownloader = modelDownloader
     self.userDefaults = userDefaults
+    generationPrompt = userDefaults.string(forKey: Self.generationPromptKey) ?? ""
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
     }
@@ -530,13 +544,33 @@ final class AppModel {
     !studioReferenceImages.isEmpty
   }
 
+  var studioHasInpaintingInput: Bool {
+    studioInpaintSourceURL != nil || studioInpaintMaskURL != nil
+  }
+
+  var studioVideoInpainting: EngineVideoInpaintingOptions? {
+    guard let sourceVideoURL = studioInpaintSourceURL,
+      let maskURL = studioInpaintMaskURL
+    else { return nil }
+    return EngineVideoInpaintingOptions(
+      sourceVideoURL: sourceVideoURL,
+      maskURL: maskURL,
+      maskKind: studioInpaintMaskKind,
+      preserveSourceAudio: studioPreservesInpaintAudio
+    )
+  }
+
   func setStudioStartFrame(_ url: URL) {
     guard !studioHasReferences else { return }
+    studioInpaintSourceURL = nil
+    studioInpaintMaskURL = nil
     studioStartFrame = StudioImageAttachment(url: url)
   }
 
   func setStudioEndFrame(_ url: URL) {
     guard !studioHasReferences else { return }
+    studioInpaintSourceURL = nil
+    studioInpaintMaskURL = nil
     studioEndFrame = StudioImageAttachment(url: url)
   }
 
@@ -546,6 +580,32 @@ final class AppModel {
 
   func clearStudioEndFrame() {
     studioEndFrame = nil
+  }
+
+  func setStudioInpaintSource(_ url: URL) {
+    studioStartFrame = nil
+    studioEndFrame = nil
+    studioInpaintSourceURL = url
+  }
+
+  func clearStudioInpaintSource() {
+    studioInpaintSourceURL = nil
+  }
+
+  func setStudioInpaintMask(_ url: URL) {
+    studioStartFrame = nil
+    studioEndFrame = nil
+    studioInpaintMaskURL = url
+  }
+
+  func clearStudioInpaintMask() {
+    studioInpaintMaskURL = nil
+  }
+
+  func setStudioInpaintMaskKind(_ kind: EngineVideoInpaintMaskKind) {
+    guard studioInpaintMaskKind != kind else { return }
+    studioInpaintMaskKind = kind
+    studioInpaintMaskURL = nil
   }
 
   /// Ref2VA accepts 12 references overall but only 9 of them images, and every
@@ -615,9 +675,14 @@ final class AppModel {
     let audioEngine = kind == .audio ? audioMode.engine : .h3
     let imageEngine: ImageGenerationEngine = kind == .image ? self.imageEngine : .h3
     let videoEngine: VideoGenerationEngine = kind == .video ? self.videoEngine : .h3
+    let usesVideoInpainting = kind == .video && videoEngine == .h3
+      && studioVideoInpainting != nil
+    let effectiveCoreReuse = usesVideoInpainting ? 1 : coreReuse
+    let effectiveBlockCache = usesVideoInpainting ? false : blockCache
     let ownPackage =
       audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
       || videoEngine.usesOwnPackage
+    let useBetaSchedule = !ownPackage && selectedGenerationProfile.usesBetaSchedule
     /// Frames and references are H3's conditioning. The engine *refuses* a
     /// request carrying them rather than dropping them, so this has to be
     /// right on the way out.
@@ -663,15 +728,14 @@ final class AppModel {
       quality: quality,
       denoisingSteps: denoisingSteps,
       activeDiTLayers: activeDiTLayers,
-      coreReuse: coreReuse,
-      blockCache: blockCache,
+      coreReuse: effectiveCoreReuse,
+      blockCache: effectiveBlockCache,
       fastStill: fastStill,
       previewDenoise: previewDenoise,
       canvasWidth: canvasWidth,
       canvasHeight: canvasHeight
     ) + " · model \(runningModelName)"
-      + (ownPackage || !selectedGenerationProfile.usesBetaSchedule
-        ? "" : " · beta-schedule")
+      + (ownPackage || !useBetaSchedule ? "" : " · beta-schedule")
       + (audioEngine == .speech
         ? " · \(studioSpeechLanguage.displayName)"
           + " · temperature \(String(format: "%.2f", studioSpeechTemperature))"
@@ -722,8 +786,8 @@ final class AppModel {
         let frames = kind == .image
           ? (fastStill ? 5 : 22)
           : H3Duration.aligned(frames: Int((duration * H3Duration.fps).rounded()))
-        let core = blockCache ? 1 : coreReuse ?? 1
-        let reuse = blockCache || core > 1 || resolvedSteps < 10
+        let core = effectiveBlockCache ? 1 : effectiveCoreReuse ?? 1
+        let reuse = usesVideoInpainting || effectiveBlockCache || core > 1 || resolvedSteps < 10
           ? 1 : quality.denoiseReuse
         return GenerationDurationEstimate.h3(
           width: width,
@@ -733,7 +797,7 @@ final class AppModel {
           activeDiTLayers: activeDiTLayers ?? quality.activeDiTLayers,
           denoiseReuse: reuse,
           coreReuse: core,
-          blockCache: blockCache,
+          blockCache: effectiveBlockCache,
           physicalMemoryBytes: modelReport?.device.physicalMemory
             ?? ProcessInfo.processInfo.physicalMemory
         )
@@ -752,6 +816,12 @@ final class AppModel {
     }()
     let conditioningDescription: String? = {
       guard kind != .audio else { return nil }
+      if kind == .video, videoEngine == .h3, studioVideoInpainting != nil {
+        let mask = studioInpaintMaskKind == .video ? "animated mask" : "still mask"
+        let references = studioReferenceImages.count
+        return "masked source clip (\(mask)) + \(references) reference image"
+          + (references == 1 ? "" : "s")
+      }
       if acceptsSourcePicture {
         guard studioStartFrame != nil else { return "none" }
         return "picture to work from (repaint \(Int((studioSourceStrength * 100).rounded()))%)"
@@ -779,8 +849,9 @@ final class AppModel {
       aspectRatio: kind == .audio ? nil : studioAspect.rawValue,
       transformerBlocks: usesH3Settings
         ? (activeDiTLayers ?? quality.activeDiTLayers) : nil,
-      coreReuse: usesH3Settings ? (blockCache ? 1 : coreReuse ?? 1) : nil,
-      blockCache: usesH3Settings ? blockCache : nil,
+      coreReuse: usesH3Settings
+        ? (effectiveBlockCache ? 1 : effectiveCoreReuse ?? 1) : nil,
+      blockCache: usesH3Settings ? effectiveBlockCache : nil,
       stillFrameCount: kind == .image && imageEngine == .h3
         ? (fastStill ? 5 : 22) : nil,
       previewDenoise: usesH3Settings && kind != .audio ? previewDenoise : nil,
@@ -828,6 +899,8 @@ final class AppModel {
       audioEngine: audioEngine,
       imageEngine: imageEngine,
       videoEngine: videoEngine,
+      videoInpainting: kind == .video && videoEngine == .h3
+        ? studioVideoInpainting : nil,
       // The duration is a ceiling for speech, not a target: the model stops
       // when the line is spoken.
       // Always present for speech, even with no clip: a nil reference means
@@ -846,11 +919,11 @@ final class AppModel {
       denoisingSteps: audioEngine == .stableAudio
         ? (denoisingSteps ?? Self.soundEffectDefaultSteps) : denoisingSteps,
       activeDiTLayers: activeDiTLayers,
-      coreReuse: coreReuse,
+      coreReuse: effectiveCoreReuse,
       fastStill: fastStill,
-      blockCache: blockCache,
+      blockCache: effectiveBlockCache,
       previewDenoise: previewDenoise,
-      useBetaSchedule: selectedGenerationProfile.usesBetaSchedule,
+      useBetaSchedule: useBetaSchedule,
       seed: seed,
       sourceStrength: acceptsSourcePicture && studioStartFrame != nil
         ? studioSourceStrength : nil,
@@ -859,9 +932,11 @@ final class AppModel {
       // A selection made under one model outlives a switch to another, so
       // dropping them here is what actually keeps them out of the request.
       // Z-Image takes the start frame and nothing else.
-      firstFrameURL: acceptsImageInputs || acceptsSourcePicture
+      firstFrameURL: (acceptsImageInputs || acceptsSourcePicture)
+        && studioVideoInpainting == nil
         ? studioStartFrame?.url : nil,
-      lastFrameURL: acceptsImageInputs ? studioEndFrame?.url : nil,
+      lastFrameURL: acceptsImageInputs && studioVideoInpainting == nil
+        ? studioEndFrame?.url : nil,
       referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : [],
       allowsLTXMemoryOvercommit: allowsLTXMemoryOvercommit
     )
@@ -1463,6 +1538,7 @@ final class AppModel {
         if managedStatuses[manifest.id]?.downloadIsActive == true { continue }
         pendingDownloadBytesByID[manifest.id] =
           await downloader.pendingByteCount(for: manifest)
+        let updateIsAvailable = await downloader.installedPackageNeedsUpdate(for: manifest)
         if let installedURL = await downloader.installedPackageURL(for: manifest) {
           managedStatuses[manifest.id] = ManagedPackageStatus(
             state: .installed,
@@ -1483,7 +1559,10 @@ final class AppModel {
             completedBytes: stagedBytes,
             message: stagedBytes > 0
               ? "A partial download is available and can be resumed."
-              : availableMessage(for: manifest)
+              : (updateIsAvailable
+                ? updateMessage(for: manifest)
+                : availableMessage(for: manifest)),
+            updateIsAvailable: updateIsAvailable
           )
         } catch {
           managedStatuses[manifest.id]?.state = .failed
@@ -1506,6 +1585,14 @@ final class AppModel {
       return "Installs instantly from the local conversion; shared files are reused."
     }
     return "Pinned INT8 package recommended for Macs with 32 GB or more."
+  }
+
+  private func updateMessage(for manifest: ModelPackageManifest) -> String {
+    let pending = pendingDownloadBytes(for: manifest)
+    if pending == 0 {
+      return "An optimized update is ready from files already on this Mac."
+    }
+    return "An optimized update is available; existing files will be reused."
   }
 
   private func applyManagedModelProgress(
@@ -2517,6 +2604,12 @@ final class AppModel {
     if kind != .audio {
       let environment = ProcessInfo.processInfo.environment
       let overrides = [
+        ("H3_SOL_ATTN", "Sol request"),
+        ("H3_SOL_ATTN_TAU", "Sol tau"),
+        ("H3_SOL_ATTN_MIN_ROWS", "Sol min rows"),
+        ("H3_SOL_ATTN_ALL_STEPS", "Sol all steps"),
+        ("H3_TURBO_AUDIO_REFINE_STEPS", "audio refine passes"),
+        ("H3_DIT_F32_FINAL", "DiT final F32"),
         ("H3_REF2VA_HYBRID", "Ref2VA hybrid"),
         ("H3_QWEN_TILE", "Qwen tile"),
         ("H3_VAE_PREFETCH", "VAE prefetch"),
@@ -2529,6 +2622,21 @@ final class AppModel {
         if let value = environment[key], !value.isEmpty {
           description += " · \(label) \(value)"
         }
+      }
+      if let adapterPath = environment["H3_LIGHTX2V_LORA_PATH"],
+        !adapterPath.isEmpty
+      {
+        let strength = environment["H3_LIGHTX2V_LORA_STRENGTH"] ?? "1.0"
+        let lowercasedPath = adapterPath.lowercased()
+        let adapterLabel = lowercasedPath.contains("turbo_v4")
+          ? "LightX2V Turbo v4"
+          : (lowercasedPath.contains("8step-v1.0")
+            ? "LightX2V 8-step v1.0"
+            : "LightX2V runtime adapter")
+        description += " · \(adapterLabel) · LoRA strength \(strength)"
+      }
+      if environment["H3_DIT_PATH"]?.isEmpty == false {
+        description += " · DiT override on"
       }
       if environment["H3_VAE_NATIVE_F16"] == nil {
         description += " · VAE native F16 auto"

@@ -163,6 +163,23 @@ public actor ModelPackageDownloader {
     return installedURL
   }
 
+  /// Whether this package ID is already installed but its verified file set
+  /// predates the current catalog entry. The UI calls this an update rather
+  /// than asking the user to install a model they can plainly see on disk.
+  public func installedPackageNeedsUpdate(for manifest: ModelPackageManifest) -> Bool {
+    let installedURL = store.installedURL(for: manifest)
+    let manifestURL = installedURL.appendingPathComponent(
+      ModelPackageStore.installedManifestName,
+      isDirectory: false
+    )
+    guard
+      let data = try? Data(contentsOf: manifestURL),
+      let installed = try? JSONDecoder().decode(ModelPackageManifest.self, from: data),
+      installed.id == manifest.id
+    else { return false }
+    return !installed.describesSameFiles(as: manifest)
+  }
+
   public func download(
     _ manifest: ModelPackageManifest,
     progress: @escaping ProgressHandler = { _ in }
@@ -579,7 +596,7 @@ public actor ModelPackageDownloader {
     guard
       let data = try? Data(contentsOf: manifestURL),
       let installed = try? JSONDecoder().decode(ModelPackageManifest.self, from: data),
-      installed.id == manifest.id, installed.revision == manifest.revision
+      installed.id == manifest.id
     else { return false }
     return installed.files.contains {
       $0.path == file.path && $0.byteCount == file.byteCount && $0.sha256 == file.sha256

@@ -56,7 +56,7 @@ struct ModelSettingsView: View {
       }
     }
     .confirmationDialog(
-      "Get \(manifestPendingDownload?.displayName ?? "model")?",
+      confirmationTitle,
       isPresented: Binding(
         get: { manifestPendingDownload != nil },
         set: { if !$0 { manifestPendingDownload = nil } }
@@ -87,11 +87,21 @@ struct ModelSettingsView: View {
   }
 
   private func confirmActionTitle(for manifest: ModelPackageManifest) -> String {
-    manifest.generationProfile == .turbo
+    if model.status(for: manifest).updateIsAvailable {
+      return "Agree & Update"
+    }
+    return manifest.generationProfile == .turbo
       ? "Agree & Install"
       : "Agree & Download "
         + ByteCountFormatter.string(
           fromByteCount: model.pendingDownloadBytes(for: manifest), countStyle: .file)
+  }
+
+  private var confirmationTitle: String {
+    guard let manifest = manifestPendingDownload else { return "Get model?" }
+    return model.status(for: manifest).updateIsAvailable
+      ? "Update \(manifest.displayName)?"
+      : "Get \(manifest.displayName)?"
   }
 
   private var header: some View {
@@ -450,6 +460,9 @@ private struct ModelChoiceRow: View {
   private var installTitle: String {
     if status?.state == .cancelled {
       return "Resume"
+    }
+    if status?.updateIsAvailable == true {
+      return "Update"
     }
     return choice.generationProfile == .turbo ? "Install" : "Download"
   }

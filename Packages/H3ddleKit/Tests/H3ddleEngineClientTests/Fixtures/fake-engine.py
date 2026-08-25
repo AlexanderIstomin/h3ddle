@@ -21,6 +21,7 @@ CAPABILITIES = {
         "embeddedAudio",
         "cancellation",
         "denoisingPreviews",
+        "videoInpainting",
     ],
 }
 

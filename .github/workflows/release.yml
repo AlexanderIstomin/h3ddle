@@ -42,6 +42,7 @@ jobs:
           test -d "$APP"
           test -x "$APP/Contents/Helpers/H3ddleEngineService"
           test -f "$APP/Contents/Resources/H3Engine/h3_shaders.metal"
+          test -f "$APP/Contents/Resources/H3Engine/h3_sol_attention.metal"
           codesign --verify --deep --strict --verbose=2 "$APP"
       - name: Package the app
         run: |
@@ -71,10 +72,15 @@ jobs:
           "corrupted" warning is not expected—please report it instead of
           disabling Gatekeeper.
 
-          **Requirements:** Apple silicon, macOS 15 or later, FFmpeg on PATH
-          (`brew install ffmpeg`) for video output. Models are downloaded
-          inside the app from Model Settings; ~32 GB of unified memory is
-          recommended for local generation.
+          This update corrects native H3 audio timing and stereo layout, adds
+          automatic GPU-generation-specific H3 performance paths, keeps the
+          quality-changing Sol attention experiment disabled by default, adds
+          an opt-in masked-source workflow, and improves managed-model upgrades.
+
+          **Requirements:** Apple silicon and macOS 15 or later. FFmpeg is an
+          optional fallback for containers the system frameworks cannot read.
+          Models are downloaded inside the app from Model Settings; ~32 GB of
+          unified memory is recommended for local generation.
           NOTES
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "H3ddle $GITHUB_REF_NAME" \
