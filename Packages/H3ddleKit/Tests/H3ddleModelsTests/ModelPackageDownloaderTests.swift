@@ -51,6 +51,12 @@ struct ModelPackageDownloaderTests {
         == "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb"
     )
     #expect(
+      transformer.localCandidatePath?.hasSuffix(
+        "h3ddle-ltx-2-5-int8-v1/diffusion_models/"
+          + "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot_input_major.safetensors"
+      ) == true
+    )
+    #expect(
       manifest.downloadURL(for: transformer).absoluteString
         == "https://huggingface.co/PulpCut/LTX-2.5-INT8-ConvRot-safetensors/resolve/"
           + "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f/"
@@ -77,10 +83,96 @@ struct ModelPackageDownloaderTests {
 
     let hybrid = ModelCatalog.minimaxH3Ref2VATurboInt8
     #expect(hybrid.displayName.contains("Hybrid References"))
-    #expect(hybrid.detail.contains("compact hybrid references"))
+    #expect(hybrid.detail.contains("5–15 second videos with synchronized sound"))
+    #expect(hybrid.detail.contains("still images"))
+    #expect(hybrid.detail.contains("start/end frames"))
+    #expect(hybrid.detail.contains("up to nine ordered reference images"))
+    #expect(hybrid.detail.contains("256p"))
+    #expect(hybrid.detail.contains("native 768p"))
+    #expect(hybrid.detail.contains("distilled for 8 passes"))
     let standardHybrid = ModelCatalog.minimaxH3Ref2VAInt8
     #expect(standardHybrid.displayName.contains("Hybrid References"))
-    #expect(standardHybrid.detail.contains("compact hybrid references"))
+    #expect(standardHybrid.detail.contains("5–15 second videos with synchronized sound"))
+    #expect(standardHybrid.detail.contains("still images"))
+    #expect(standardHybrid.detail.contains("start/end frames"))
+    #expect(standardHybrid.detail.contains("up to nine ordered reference images"))
+    #expect(standardHybrid.detail.contains("256p"))
+    #expect(standardHybrid.detail.contains("native 768p"))
+    #expect(standardHybrid.detail.contains("20 passes"))
+  }
+
+  @Test("A released LTX repack upgrades the old package without downloading")
+  func ltxRepackCandidateUpgradesOffline() async throws {
+    let oldTransformer = Data("old output-major transformer".utf8)
+    let repackedTransformer = Data("new input-major transformer".utf8)
+    let sharedVAE = Data("unchanged VAE bytes".utf8)
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ModelPackageStore(rootURL: root)
+    let packageID = "fixture-ltx"
+    let installedURL = root.appendingPathComponent(packageID, isDirectory: true)
+    let transformerURL = installedURL.appendingPathComponent("dit.safetensors")
+    let candidateURL = installedURL.appendingPathComponent("dit_input_major.safetensors")
+    let vaeURL = installedURL.appendingPathComponent("vae.safetensors")
+    try FileManager.default.createDirectory(at: installedURL, withIntermediateDirectories: true)
+    try oldTransformer.write(to: transformerURL)
+    try repackedTransformer.write(to: candidateURL)
+    try sharedVAE.write(to: vaeURL)
+
+    func digest(_ data: Data) -> String {
+      SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+    let oldManifest = ModelPackageManifest(
+      id: packageID, displayName: "LTX fixture", detail: "old",
+      repository: "example/ltx", revision: String(repeating: "a", count: 40),
+      licenseName: "Test", licenseURL: URL(string: "https://example.com/license")!,
+      minimumUnifiedMemoryBytes: 1, compatibility: .ready, files: [
+        ModelPackageFile(
+          role: .transformer, path: "dit.safetensors",
+          byteCount: Int64(oldTransformer.count), sha256: digest(oldTransformer)
+        ),
+        ModelPackageFile(
+          role: .videoVAE, path: "vae.safetensors",
+          byteCount: Int64(sharedVAE.count), sha256: digest(sharedVAE)
+        ),
+      ]
+    )
+    try JSONEncoder().encode(oldManifest).write(
+      to: installedURL.appendingPathComponent(ModelPackageStore.installedManifestName)
+    )
+
+    let newManifest = ModelPackageManifest(
+      id: packageID, displayName: "LTX fixture", detail: "optimized",
+      repository: "example/ltx", revision: String(repeating: "b", count: 40),
+      licenseName: "Test", licenseURL: URL(string: "https://example.com/license")!,
+      minimumUnifiedMemoryBytes: 1, compatibility: .ready, files: [
+        ModelPackageFile(
+          role: .transformer, path: "dit.safetensors",
+          byteCount: Int64(repackedTransformer.count), sha256: digest(repackedTransformer),
+          localCandidatePath: candidateURL.path
+        ),
+        ModelPackageFile(
+          role: .videoVAE, path: "vae.safetensors",
+          byteCount: Int64(sharedVAE.count), sha256: digest(sharedVAE)
+        ),
+      ]
+    )
+    let downloader = ModelPackageDownloader(
+      store: store, transport: RefusingTransport(),
+      capacityChecker: FixedCapacityChecker(bytes: .max)
+    )
+
+    #expect(await downloader.installedPackageNeedsUpdate(for: newManifest))
+    #expect(await downloader.pendingByteCount(for: newManifest) == 0)
+    let upgradedURL = try await downloader.download(newManifest)
+
+    #expect(try Data(contentsOf: upgradedURL.appendingPathComponent("dit.safetensors"))
+      == repackedTransformer)
+    #expect(try Data(contentsOf: upgradedURL.appendingPathComponent("vae.safetensors"))
+      == sharedVAE)
+    #expect(!FileManager.default.fileExists(atPath: candidateURL.path))
+    #expect(await downloader.installedPackageURL(for: newManifest) == upgradedURL)
+    #expect(!(await downloader.installedPackageNeedsUpdate(for: newManifest)))
   }
 
   @Test("Z-Image carries an immutable TAEF1 live-preview decoder")

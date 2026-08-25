@@ -98,7 +98,14 @@ def lora_delta(lora, template_name, strength):
         return None
     a = lora.f32(a_name)
     b = lora.f32(b_name)
-    return (strength * (b @ a)).astype(np.float32)
+    pair_scale = 1.0
+    alpha_name = f"{stem}.alpha"
+    if alpha_name in lora.header:
+        alpha = lora.f32(alpha_name).reshape(-1)
+        if alpha.size != 1 or not np.isfinite(alpha[0]):
+            raise ValueError(f"{alpha_name}: expected one finite value")
+        pair_scale = float(alpha[0]) / a.shape[0]
+    return (strength * pair_scale * (b @ a)).astype(np.float32)
 
 
 def quantize_convrot(weight, hadamard):

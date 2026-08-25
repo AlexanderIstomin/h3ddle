@@ -6,6 +6,7 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 "$repository_root/Scripts/check-public-boundary.sh"
 "$repository_root/Scripts/check-untracked-sources.sh"
 python3 -B "$repository_root/Scripts/test-repack-ltx-input-major.py"
+python3 -B "$repository_root/Scripts/test-convert-turbo-package.py"
 
 # The LTX VAE decoder is native C and its tile planner deliberately has no
 # model-weight dependency. Exercise the real planner here: a Swift duplicate
@@ -17,6 +18,17 @@ xcrun clang -std=c11 -Wall -Wextra -Werror \
     -I"$repository_root/Engine/Sources/LTX" \
     -o "$ltx_tiling_test"
 "$ltx_tiling_test"
+
+# The inpainting mask crosses the VAE's non-uniform temporal grouping and the
+# transformer's 2x2 latent patches. Keep that geometry executable without
+# requiring model weights or a GPU.
+h3_inpaint_test="${TMPDIR:-/tmp}/h3ddle-h3-inpaint-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror \
+    "$repository_root/Engine/Vendor/h3.c/h3_inpaint.c" \
+    "$repository_root/Engine/Tests/H3InpaintTests/h3_inpaint_test.c" \
+    -I"$repository_root/Engine/Vendor/h3.c" \
+    -o "$h3_inpaint_test"
+"$h3_inpaint_test"
 
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
 swift test --package-path "$repository_root/Packages/H3ddleKit"
@@ -34,7 +46,7 @@ case "$engine_handshake" in
         ;;
 esac
 case "$engine_handshake" in
-    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"ltxGeneration"'*'"standaloneAudioGeneration"'*'"referenceInputs"'*) ;;
+    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"ltxGeneration"'*'"standaloneAudioGeneration"'*'"referenceInputs"'*'"videoInpainting"'*) ;;
     *)
         echo "Engine generation capabilities are incomplete." >&2
         exit 1
@@ -70,6 +82,7 @@ if [ "${H3DDLE_UI_TESTS:-0}" != "1" ]; then
     echo "UI tests: skipped (set H3DDLE_UI_TESTS=1 to run them locally)."
     test -x "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Helpers/H3ddleEngineService"
     test -f "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Resources/H3Engine/h3_shaders.metal"
+    test -f "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Resources/H3Engine/h3_sol_attention.metal"
     exit 0
 fi
 
@@ -119,3 +132,4 @@ echo "UI tests: $expected_ui_tests ran, ${skipped_ui_tests:-0} skipped."
 
 test -x "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Helpers/H3ddleEngineService"
 test -f "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Resources/H3Engine/h3_shaders.metal"
+test -f "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app/Contents/Resources/H3Engine/h3_sol_attention.metal"

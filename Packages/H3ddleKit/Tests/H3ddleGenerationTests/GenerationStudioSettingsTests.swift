@@ -120,7 +120,42 @@ struct GenerationStudioSettingsTests {
     #expect(settings.preset == .standard)
     #expect(settings.knobs.canvas == .p512)
     #expect(settings.knobs.denoisingSteps == 20)
-    #expect(settings.knobs.activeDiTLayers == 45)
+    #expect(settings.knobs.activeDiTLayers == 50)
+  }
+
+  @Test("Experimental H3 studio features are hidden and neutral by default")
+  func experimentalH3FeatureDefaults() {
+    let flags = GenerationStudioFeatureFlags(environment: [:])
+    #expect(!flags.advancedH3Controls)
+    #expect(!flags.h3MaskedSource)
+    #expect(flags.effectiveActiveDiTLayers(40) == 50)
+    #expect(flags.effectiveCoreReuse(6) == 1)
+  }
+
+  @Test("Experimental H3 studio features accept explicit truthy environment values")
+  func experimentalH3FeatureOptIn() {
+    for truthy in ["1", "true", "TRUE", "yes", "on"] {
+      let flags = GenerationStudioFeatureFlags(environment: [
+        GenerationStudioFeatureFlags.advancedH3ControlsKey: truthy,
+        GenerationStudioFeatureFlags.h3MaskedSourceKey: truthy,
+      ])
+      #expect(flags.advancedH3Controls)
+      #expect(flags.h3MaskedSource)
+      #expect(flags.effectiveActiveDiTLayers(40) == 40)
+      #expect(flags.effectiveCoreReuse(6) == 6)
+    }
+  }
+
+  @Test("Zero and ambiguous values do not expose experimental H3 controls")
+  func experimentalH3FeatureFalseValues() {
+    for disabled in ["", "0", "false", "no", "disabled", "  "] {
+      let flags = GenerationStudioFeatureFlags(environment: [
+        GenerationStudioFeatureFlags.advancedH3ControlsKey: disabled,
+        GenerationStudioFeatureFlags.h3MaskedSourceKey: disabled,
+      ])
+      #expect(!flags.advancedH3Controls)
+      #expect(!flags.h3MaskedSource)
+    }
   }
 
   @Test("H3 exposes denoising budgets through 50 passes")

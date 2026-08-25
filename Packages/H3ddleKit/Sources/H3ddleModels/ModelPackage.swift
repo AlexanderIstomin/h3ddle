@@ -330,7 +330,11 @@ public enum ModelCatalog {
   public static let minimaxH3Ref2VAInt8 = ModelPackageManifest(
     id: "comfy-minimax-h3-int8-ref2va-v1",
     displayName: "MiniMax H3 · INT8 + Hybrid References",
-    detail: "Adds compact hybrid references for ordered reference images",
+    detail:
+      "Creates 5–15 second videos with synchronized sound and still images "
+      + "from a prompt, start/end frames, or up to nine ordered reference "
+      + "images. Supports portrait, square, and landscape output at 256p, "
+      + "512p, or native 768p; 20 passes is the standard default.",
     repository: "Comfy-Org/MiniMax-H3",
     revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
     licenseName: "MiniMax H3 Community License Agreement",
@@ -366,8 +370,10 @@ public enum ModelCatalog {
     id: "h3ddle-minimax-h3-ref2va-turbo-int8-v1",
     displayName: "MiniMax H3 · Turbo + Hybrid References",
     detail:
-      "Step-distilled prompt transformer with compact hybrid references: "
-      + "8 passes, ordered reference images, loose prompt control.",
+      "Creates 5–15 second videos with synchronized sound and still images "
+      + "from a prompt, start/end frames, or up to nine ordered reference "
+      + "images. Supports portrait, square, and landscape output at 256p, "
+      + "512p, or native 768p; distilled for 8 passes with looser prompt control.",
     repository: "Comfy-Org/MiniMax-H3",
     revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
     licenseName: "MiniMax H3 Community License Agreement",
@@ -457,7 +463,21 @@ public enum ModelCatalog {
         path: "diffusion_models/"
           + "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
         byteCount: 21_504_034_388,
-        sha256: "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb"
+        sha256: "b39322c2d03cb85509b148b19f602275a88df8f86be48f28e0c38ba2b25f2dfb",
+        // Builds used to validate the optimization wrote the exact released
+        // repack beside the old checkpoint. Reuse that 21 GB file when the
+        // released app upgrades the package instead of downloading the same
+        // bytes again. Fresh installs simply fall through to Hugging Face.
+        localCandidatePath: URL.applicationSupportDirectory
+          .appendingPathComponent("H3ddle", isDirectory: true)
+          .appendingPathComponent("Models", isDirectory: true)
+          .appendingPathComponent("h3ddle-ltx-2-5-int8-v1", isDirectory: true)
+          .appendingPathComponent("diffusion_models", isDirectory: true)
+          .appendingPathComponent(
+            "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot_input_major.safetensors",
+            isDirectory: false
+          )
+          .path
       ),
       ModelPackageFile(
         role: .textEncoder,

@@ -113,6 +113,7 @@ private let engineCapabilities = EngineCapabilities(
     [
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
+      .videoInpainting,
       .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
       .zImageGeneration, .ltxGeneration,
     ]
@@ -676,6 +677,10 @@ private final class EngineRuntime: @unchecked Sendable {
       /* Two models render a clip and they are gated separately: an engine may
        * have one package and not the other. */
       if request.video?.model == .ltx {
+        guard request.video?.inpainting == nil else {
+          EngineOutput.fail(command, message: "Video inpainting requires H3")
+          return
+        }
         guard engineCapabilities.supports(.ltxGeneration) else {
           EngineOutput.fail(command, message: "This engine cannot run LTX-2.5")
           return
@@ -738,6 +743,27 @@ private final class EngineRuntime: @unchecked Sendable {
         guard engineCapabilities.supports(.videoGeneration) else {
           EngineOutput.fail(command, message: "FFmpeg is required for H3 video output")
           return
+        }
+        if let inpainting = request.video?.inpainting {
+          guard engineCapabilities.supports(.videoInpainting) else {
+            EngineOutput.fail(command, message: "This engine cannot inpaint video")
+            return
+          }
+          guard inpainting.sourceVideoURL.isFileURL, inpainting.maskURL.isFileURL else {
+            EngineOutput.fail(
+              command, message: "Inpainting source and mask must be local files")
+            return
+          }
+          guard !request.referenceImageURLs.isEmpty else {
+            EngineOutput.fail(
+              command, message: "H3 video inpainting needs at least one reference image")
+            return
+          }
+          guard request.firstFrameURL == nil, request.lastFrameURL == nil else {
+            EngineOutput.fail(
+              command, message: "Inpainting cannot be combined with start or end frames")
+            return
+          }
         }
       }
     case .image:
@@ -1385,7 +1411,27 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.core_reuse = 1
         parameters.denoise_reuse = 1
       }
+      if request.video?.inpainting != nil {
+        // Clean source rows have to be restored after every sampler step.
+        // Reuse and row reduction skip those boundaries, so inpainting takes
+        // the exact path regardless of the selected quality preset.
+        parameters.denoise_reuse = 1
+        parameters.core_reuse = 1
+        parameters.block_cache = 0
+        parameters.token_reduction = 0
+      }
       parameters.use_beta_schedule = request.useBetaSchedule ? 1 : 0
+      if request.kind == .video, request.useBetaSchedule,
+        let rawRefineSteps = ProcessInfo.processInfo.environment[
+          "H3_TURBO_AUDIO_REFINE_STEPS"
+        ]
+      {
+        let value = rawRefineSteps.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Preserve invalid input as an invalid native parameter so the caller
+        // receives a useful engine error instead of silently running the
+        // unrefined path after a misspelled experiment value.
+        parameters.audio_refine_steps = Int32(value) ?? -1
+      }
       if let seed = request.seed {
         parameters.seed = seed
       }
@@ -1401,90 +1447,161 @@ private final class EngineRuntime: @unchecked Sendable {
         return
       }
 
+      let environment = ProcessInfo.processInfo.environment
+      let lightX2VLoraPath: String? = {
+        guard let raw = environment["H3_LIGHTX2V_LORA_PATH"] else { return nil }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+      }()
+      if let lightX2VLoraPath {
+        let standardPackageIDs = [
+          "comfy-minimax-h3-int8-ref2va-v1",
+          "comfy-minimax-h3-int8-v1",
+        ]
+        guard request.kind == .video else {
+          EngineOutput.fail(
+            command,
+            message: "The LightX2V experiment currently supports H3 video only."
+          )
+          return
+        }
+        guard standardPackageIDs.contains(modelDirectory.lastPathComponent),
+          !request.useBetaSchedule
+        else {
+          EngineOutput.fail(
+            command,
+            message:
+              "LightX2V must run on MiniMax H3 · INT8, not on the already-merged Turbo model."
+          )
+          return
+        }
+        guard parameters.steps == 8 else {
+          EngineOutput.fail(
+            command,
+            message:
+              "The LightX2V runtime-adapter experiment requires exactly 8 passes in this build."
+          )
+          return
+        }
+        guard references.isEmpty else {
+          EngineOutput.fail(
+            command,
+            message:
+              "Ordered Ref2VA references are disabled for the initial LightX2V FL2VA experiment."
+          )
+          return
+        }
+        guard FileManager.default.fileExists(atPath: lightX2VLoraPath) else {
+          EngineOutput.fail(
+            command,
+            message: "The LightX2V adapter file does not exist at the configured path."
+          )
+          return
+        }
+        let rawStrength = environment["H3_LIGHTX2V_LORA_STRENGTH"] ?? "1.0"
+        parameters.lora_strength =
+          Float(rawStrength.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .nan
+      }
+
       let firstPath = request.firstFrameURL?.path
       let lastPath = request.lastFrameURL?.path
       let referencePaths = references.map(\.path)
+      let sourceVideoPath = request.video?.inpainting?.sourceVideoURL.path
+      let maskPath = request.video?.inpainting?.maskURL.path
 
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque
       defer { Unmanaged<GenerationCallbackContext>.fromOpaque(opaque).release() }
 
-      withOptionalCString(firstPath) { firstC in
-        withOptionalCString(lastPath) { lastC in
-          withCStringList(referencePaths) { referenceCs in
-            parameters.first_frame = firstC
-            parameters.last_frame = lastC
-            let referenceRecords = referenceCs.map { path in
-              h3_reference(
-                kind: H3_REFERENCE_IMAGE,
-                path: path,
-                audio_path: nil,
-                include_embedded_audio: 0
-              )
-            }
-            referenceRecords.withUnsafeBufferPointer { buffer in
-              if !buffer.isEmpty {
-                parameters.references = buffer.baseAddress
-                parameters.reference_count = buffer.count
+      withOptionalCString(lightX2VLoraPath) { loraC in
+        withOptionalCString(firstPath) { firstC in
+          withOptionalCString(lastPath) { lastC in
+            withOptionalCString(sourceVideoPath) { sourceVideoC in
+              withOptionalCString(maskPath) { maskC in
+                withCStringList(referencePaths) { referenceCs in
+                  parameters.lora_path = loraC
+                parameters.first_frame = firstC
+                parameters.last_frame = lastC
+                parameters.source_video = sourceVideoC
+                parameters.inpaint_mask = maskC
+                parameters.inpaint_mask_is_video =
+                  request.video?.inpainting?.maskKind == .video ? 1 : 0
+                parameters.preserve_source_audio =
+                  request.video?.inpainting?.preserveSourceAudio == true ? 1 : 0
+                let referenceRecords = referenceCs.map { path in
+                  h3_reference(
+                    kind: H3_REFERENCE_IMAGE,
+                    path: path,
+                    audio_path: nil,
+                    include_embedded_audio: 0
+                  )
+                }
+                referenceRecords.withUnsafeBufferPointer { buffer in
+                  if !buffer.isEmpty {
+                    parameters.references = buffer.baseAddress
+                    parameters.reference_count = buffer.count
+                  }
+                  request.prompt.withCString { prompt in
+                    request.outputURL.path.withCString { outputPath in
+                      // Stills skip the container and keep a PNG. Audio writes a WAV.
+                      parameters.output_path = stillRequested ? nil : outputPath
+                      guard let result = h3_generate(context, prompt, &parameters) else {
+                        if callbackContext.isCancelled {
+                          EngineOutput.emit(
+                            EngineEvent(
+                              requestID: command.requestID,
+                              jobID: command.jobID,
+                              kind: .cancelled
+                            )
+                          )
+                        } else {
+                          EngineOutput.fail(command, message: lastH3Error(context))
+                        }
+                        return
+                      }
+                      let muxedDuration =
+                        result.pointee.fps > 0
+                        ? Double(result.pointee.frames) / Double(result.pointee.fps)
+                        : request.duration
+                      h3_result_free(result)
+
+                      if callbackContext.isCancelled {
+                        EngineOutput.emit(
+                          EngineEvent(
+                            requestID: command.requestID,
+                            jobID: command.jobID,
+                            kind: .cancelled
+                          )
+                        )
+                        return
+                      }
+
+                      if stillRequested {
+                        do {
+                          try callbackContext.writeStill(to: request.outputURL)
+                        } catch {
+                          EngineOutput.fail(
+                            command,
+                            message: "H3 finished without a decodable still frame"
+                          )
+                          return
+                        }
+                      }
+
+                      EngineOutput.emit(
+                        EngineEvent(
+                          requestID: command.requestID,
+                          jobID: command.jobID,
+                          kind: .completed,
+                          outputURL: request.outputURL,
+                          outputDuration: stillRequested ? request.duration : muxedDuration
+                        )
+                      )
+                    }
+                  }
+                }
+                }
               }
-      request.prompt.withCString { prompt in
-        request.outputURL.path.withCString { outputPath in
-          // Stills skip the container and keep a PNG. Audio writes a WAV.
-          parameters.output_path = stillRequested ? nil : outputPath
-          guard let result = h3_generate(context, prompt, &parameters) else {
-            if callbackContext.isCancelled {
-              EngineOutput.emit(
-                EngineEvent(
-                  requestID: command.requestID,
-                  jobID: command.jobID,
-                  kind: .cancelled
-                )
-              )
-            } else {
-              EngineOutput.fail(command, message: lastH3Error(context))
-            }
-            return
-          }
-          let muxedDuration =
-            result.pointee.fps > 0
-            ? Double(result.pointee.frames) / Double(result.pointee.fps)
-            : request.duration
-          h3_result_free(result)
-
-          if callbackContext.isCancelled {
-            EngineOutput.emit(
-              EngineEvent(
-                requestID: command.requestID,
-                jobID: command.jobID,
-                kind: .cancelled
-              )
-            )
-            return
-          }
-
-          if stillRequested {
-            do {
-              try callbackContext.writeStill(to: request.outputURL)
-            } catch {
-              EngineOutput.fail(
-                command,
-                message: "H3 finished without a decodable still frame"
-              )
-              return
-            }
-          }
-
-          EngineOutput.emit(
-            EngineEvent(
-              requestID: command.requestID,
-              jobID: command.jobID,
-              kind: .completed,
-              outputURL: request.outputURL,
-              outputDuration: stillRequested ? request.duration : muxedDuration
-            )
-          )
-        }
-      }
             }
           }
         }

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 16
+  public static let currentVersion = 17
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -145,6 +145,41 @@ public enum EngineVideoModel: String, Codable, Sendable {
   case ltx
 }
 
+/// How a video inpainting mask is sampled. A still is held for the complete
+/// clip; a video is sampled on the same 24 fps clock as the source footage.
+public enum EngineVideoInpaintMaskKind: String, Codable, Sendable {
+  case still
+  case video
+}
+
+/// Inputs that turn an H3 video request into masked Ref2VA inpainting.
+///
+/// White mask pixels are repainted and black pixels are preserved. The native
+/// engine deliberately hardens the mask before it reaches the transformer's
+/// 2x2 latent-patch rows: hard boundaries are the reliable H3 workflow, and
+/// they keep the AdaLN schedule to the two levels the checkpoint was trained
+/// to read (target and clean conditioning).
+public struct EngineVideoInpaintingOptions: Hashable, Codable, Sendable {
+  public var sourceVideoURL: URL
+  public var maskURL: URL
+  public var maskKind: EngineVideoInpaintMaskKind
+  /// Keep the source soundtrack in the output and present its encoded rows as
+  /// clean conditioning while the video is denoised.
+  public var preserveSourceAudio: Bool
+
+  public init(
+    sourceVideoURL: URL,
+    maskURL: URL,
+    maskKind: EngineVideoInpaintMaskKind = .still,
+    preserveSourceAudio: Bool = true
+  ) {
+    self.sourceVideoURL = sourceVideoURL
+    self.maskURL = maskURL
+    self.maskKind = maskKind
+    self.preserveSourceAudio = preserveSourceAudio
+  }
+}
+
 /// Settings that apply to a clip and to nothing else. Absent means H3, which
 /// is what `.video` meant before this existed.
 public struct EngineVideoOptions: Hashable, Codable, Sendable {
@@ -171,10 +206,17 @@ public struct EngineVideoOptions: Hashable, Codable, Sendable {
   /// Overrides the model's released schedule when set. Ignored by H3, which
   /// takes its budget from `denoisingSteps`.
   public var steps: Int?
+  /// H3-only masked source footage. LTX refuses this settings group.
+  public var inpainting: EngineVideoInpaintingOptions?
 
-  public init(model: EngineVideoModel = .h3, steps: Int? = nil) {
+  public init(
+    model: EngineVideoModel = .h3,
+    steps: Int? = nil,
+    inpainting: EngineVideoInpaintingOptions? = nil
+  ) {
     self.model = model
     self.steps = steps.map { Self.stepsRange.clamping($0) }
+    self.inpainting = inpainting
   }
 
   /// The frame count LTX will actually render for `seconds`, which is the
@@ -262,6 +304,7 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case cancellation
   case denoisingPreviews
   case referenceInputs
+  case videoInpainting
 }
 
 public struct EngineCapabilities: Hashable, Codable, Sendable {

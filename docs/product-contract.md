@@ -66,10 +66,13 @@
   duration slider; inserted stills hold for 3 seconds. Generate replaces that
   composer with a full-width result (progress, then the finished media).
   Completed results show the wall-clock generate time.
-- Visual jobs can attach a start and/or end frame, or up to 12 ordered
-  reference stills. The two modes are mutually exclusive. Live native
-  conditioning needs a released FL2VA folder (frames) or Ref2VA (references);
-  the optimized INT8 package stays prompt-only.
+- Visual jobs can attach a start and/or end frame, or up to 9 ordered
+  reference stills. The two modes are mutually exclusive. H3 video can instead
+  take a source clip and a still or 24 fps video mask; white pixels are
+  repainted and black pixels are preserved, and at least one ordered reference
+  is required. Live native conditioning needs FL2VA weights for frame anchors
+  or a reference-capable full/compact Ref2VA package for references and
+  inpainting.
 - Native generation settings sit below the model selector: named presets
   (Preview / Standard / High) plus Custom, a resolution picker (256, 512, and
   the two native H3 canvases), denoising, transformer blocks, core reuse, and

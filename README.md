@@ -20,7 +20,7 @@ release notes for macOS first-launch instructions.
 Generation, on the local Metal engine:
 
 - MiniMax H3 and LTX-2.5 video with synchronized sound, including prompt,
-  keyframe, and reference-image workflows;
+  keyframe, reference-image, and reference-audio workflows;
 - Z-Image-Turbo stills from a prompt or source image, plus H3 still generation;
 - Stable Audio 3 music, sound effects, and ambience;
 - Qwen3-TTS speech in a voice cloned from a short reference recording;
@@ -46,6 +46,73 @@ prompt, quality ladder, and block-cache path; LTX and Z-Image use their native
 distilled sampling controls; Stable Audio and Qwen3-TTS provide dedicated
 audio workflows. Generation and export use system media frameworks and do not
 require a cloud service.
+
+Transformer-block thinning and core reuse remain available for engine research,
+but are hidden from the normal studio because both can move a result away from
+the full model. Launch with `H3DDLE_ENABLE_H3_ADVANCED_CONTROLS=1` to expose
+them. H3 masked-source video inpainting is also experimental and appears only
+with `H3DDLE_ENABLE_H3_MASKED_SOURCE=1`. With neither variable set, H3ddle runs
+all 50 transformer blocks and leaves core reuse off, including when older saved
+settings contain experimental values.
+
+## H3 performance
+
+The released H3 stack is optimized for the Mac it is running on; no environment
+variables are needed. Its main implemented paths are:
+
+- pre-quantized INT8 ConvRot transformers whose 200 core projections are stored
+  input-major, avoiding a transpose in every projection without changing tensor
+  values;
+- bounded, overlapped transformer and Qwen weight streaming for 16/32 GB Macs,
+  with prompt-length-aware Qwen kernels and a prefetched text-encoder ring;
+- prefetched, layer-major Video VAE decode, native F16 execution when memory
+  permits, and resident VAE reuse between generations;
+- compact hybrid-reference overlays, replacing a second 20.97 GB transformer
+  download with 43.55 MB while preserving the full FL2VA base;
+- exact-attention scheduling, activation-buffer aliasing, retained immutable
+  graph bindings, and fused patch/head kernels selected by GPU generation; and
+- M5-only, runtime-guarded Metal 4/TensorOps projection, quantization, QKV/RoPE,
+  and GPU-sampler paths. M3 and earlier Macs retain their measured faster Metal
+  paths rather than being forced through M5 kernels.
+
+The short-shape measurements below are completed A/B generations on a 32 GB
+M1 Pro. Input-major is an exact layout change; the paired outputs were identical.
+
+| H3 workload | Regular layout | Input-major layout | Measured gain |
+|---|---:|---:|---:|
+| Turbo FL2VA still, 512×512, 8 passes | 278.7 s | 256.5 s | 8.0% end to end; 8.9% denoise |
+| Turbo Ref2VA still, 512×896, 8 passes | 631.4 s | 595.9 s | 5.6% end to end; 4.8% denoise |
+
+Long 768p H3 video is a very different workload: the open release uses full
+attention, whose cost grows approximately with the square of sequence length.
+The official model describes sparse attention but does not yet publish that
+inference implementation. The following therefore reports engineering
+projections, not completed 10-second benchmarks. The workload is 16:9
+1344×768, 243 frames (10.125 seconds at 24 fps), audio enabled, all 50 blocks,
+reuse and block cache off. “Unoptimized” means the Standard 20-pass,
+output-major INT8 stack. “Full stack” means the shipped Turbo 8-pass,
+input-major INT8 weights plus the automatic app/engine optimizations above.
+Turbo is step-distilled, so this is a product-stack comparison rather than an
+exact-output A/B.
+
+| Mac configuration | Evidence level | Unoptimized | Full optimized stack | Stack gain |
+|---|---|---:|---:|---:|
+| M1 Pro, 16-core GPU, 32 GB | M1 measurements extrapolated by the app's dense-attention model | ~43 h | ~16 h | ~2.7× |
+| M3 Max, 40-core GPU, 128 GB | hardware-scaled projection | ~14–20 h | ~5.5–7.5 h | ~2.7× |
+| M5, 10-core GPU, 32 GB | hardware- and M5-kernel-scaled projection | ~9–14 h | ~3–5.5 h | ~2.7× |
+| M5 Max, 40-core GPU, 128 GB | hardware- and M5-kernel-scaled projection | ~5.5–7 h | ~2–2.7 h | ~2.7× |
+
+The M1 projection is fitted to H3ddle's recorded 1,625- and 5,095-row runs and
+then evaluated at 73,402 rows; real thermals, SSD contention, prompt length,
+and references can move it substantially. The newer-Mac ranges scale that
+model conservatively using Apple's published GPU and memory characteristics:
+[M1 Pro has 200 GB/s](https://www.apple.com/newsroom/2021/10/introducing-m1-pro-and-m1-max-the-most-powerful-chips-apple-has-ever-built/),
+[M3 Max has up to a 40-core GPU and 400 GB/s](https://support.apple.com/en-us/117736),
+[M5 has a 10-core GPU with a Neural Accelerator per core and 153 GB/s](https://www.apple.com/newsroom/2025/10/apple-unveils-new-14-inch-macbook-pro-powered-by-the-m5-chip/),
+and [M5 Max reaches 40 GPU cores, 128 GB, and 614 GB/s](https://www.apple.com/newsroom/2026/03/apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows/).
+Those peak comparisons are bounds, not H3 benchmarks. The exact sparse Sol
+research path remains disabled by default because current quality testing did
+not justify enabling approximate attention.
 
 ## Requirements
 
