@@ -72,10 +72,12 @@ jobs:
           "corrupted" warning is not expected—please report it instead of
           disabling Gatekeeper.
 
-          This update corrects native H3 audio timing and stereo layout, adds
-          automatic GPU-generation-specific H3 performance paths, keeps the
-          quality-changing Sol attention experiment disabled by default, adds
-          an opt-in masked-source workflow, and improves managed-model upgrades.
+          This update adds a persistent generation queue for every media type,
+          including editing, ordering, sequential execution, progress, retries,
+          and bulk cancellation. Compatible H3 jobs now checkpoint after each
+          completed denoising pass, can be paused and resumed, and recover after
+          an app or helper interruption. Model switching and normal job
+          completion no longer terminate the shared helper between queued jobs.
 
           **Requirements:** Apple silicon and macOS 15 or later. FFmpeg is an
           optional fallback for containers the system frameworks cannot read.

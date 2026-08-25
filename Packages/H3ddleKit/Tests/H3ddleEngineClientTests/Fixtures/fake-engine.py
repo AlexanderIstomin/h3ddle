@@ -4,10 +4,16 @@ import sys
 
 HOLD_GENERATE = "--hold-generate" in sys.argv
 IGNORE_CANCEL = "--ignore-cancel" in sys.argv
+EXIT_ON_IDLE_CANCEL = "--exit-on-idle-cancel" in sys.argv
 SPAM_STDERR = "--spam-stderr" in sys.argv
 # Reports the generation block exactly as it arrived, so a test can assert
 # what crossed the protocol rather than what the caller meant to send.
 ECHO_GENERATE = "--echo-generate" in sys.argv
+CRASH_ONCE_FILE = None
+if "--crash-once-file" in sys.argv:
+    marker = sys.argv.index("--crash-once-file")
+    if marker + 1 < len(sys.argv):
+        CRASH_ONCE_FILE = sys.argv[marker + 1]
 active_generate = None
 
 CAPABILITIES = {
@@ -76,6 +82,13 @@ for raw in sys.stdin:
         accepted = base(command, "accepted")
         accepted["capabilities"] = CAPABILITIES
         emit(accepted)
+        if CRASH_ONCE_FILE:
+            try:
+                with open(CRASH_ONCE_FILE, "x", encoding="utf-8") as marker_file:
+                    marker_file.write("crashed")
+                sys.exit(73)
+            except FileExistsError:
+                pass
         if HOLD_GENERATE:
             # One progress event before holding, so tests can synchronize on
             # the job being in flight instead of sleeping and hoping.
@@ -96,6 +109,8 @@ for raw in sys.stdin:
         emit(completed)
         active_generate = None
     elif kind == "cancel":
+        if EXIT_ON_IDLE_CANCEL and active_generate is None:
+            sys.exit(74)
         if IGNORE_CANCEL:
             continue
         target = active_generate or command

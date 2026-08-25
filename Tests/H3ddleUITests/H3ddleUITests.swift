@@ -65,6 +65,60 @@ final class H3ddleUITests: XCTestCase {
   }
 
   @MainActor
+  func testGenerationQueueOpensFromTheHeader() {
+    let app = XCUIApplication()
+    app.launchArguments += [
+      "-ApplePersistenceIgnoreState", "YES", "-H3ddleFastFakeGeneration",
+    ]
+    app.launch()
+    XCTAssertTrue(
+      app.staticTexts["editor-root"].waitForExistence(timeout: 30),
+      "the editor never became accessible"
+    )
+
+    let toggle = app.buttons["generation-queue-toggle"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 8))
+    toggle.click()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 8)
+    )
+    XCTAssertTrue(app.buttons["generation-queue-run-all"].exists)
+    XCTAssertTrue(app.buttons["generation-queue-cancel-all"].exists)
+
+    app.buttons["generation-queue-close"].click()
+    XCTAssertFalse(
+      app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 1)
+    )
+  }
+
+  @MainActor
+  func testCancellingGenerationRefreshesAnOpenQueue() {
+    let app = XCUIApplication()
+    app.launchArguments += [
+      "-ApplePersistenceIgnoreState", "YES", "-H3ddleUITestActiveQueueJob",
+    ]
+    app.launch()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["generation-queue"]
+        .waitForExistence(timeout: 30),
+      "the pre-opened generation queue never appeared"
+    )
+
+    let cancel = app.buttons["Cancel"]
+    XCTAssertTrue(cancel.waitForExistence(timeout: 8))
+    cancel.click()
+
+    XCTAssertTrue(
+      cancel.waitForNonExistence(timeout: 8),
+      "the open queue still showed the cancelled job as running"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Nothing waiting"].waitForExistence(timeout: 8),
+      "the open queue did not move the cancelled job out of its active section"
+    )
+  }
+
+  @MainActor
   func testCommandTOpensTextPanel() {
     let app = XCUIApplication()
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

@@ -6,7 +6,7 @@ import Foundation
 /// moved on, and rendered as prose rather than a settings dump: the point is
 /// a sentence someone can paste into a post and have others understand what
 /// the machine actually did.
-public struct GenerationStatistics: Equatable, Sendable {
+public struct GenerationStatistics: Hashable, Codable, Sendable {
   public var kind: GenerationKind
   public var seconds: TimeInterval
   public var canvasWidth: Int?

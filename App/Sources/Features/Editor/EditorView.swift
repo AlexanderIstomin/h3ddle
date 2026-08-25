@@ -37,6 +37,11 @@ struct EditorView: View {
               )
             }
           }
+          if model.showsGenerationQueue {
+            Divider().overlay(H3Color.line)
+            GenerationQueueView(model: model, queue: model.generationQueue)
+              .id(model.generationQueueRevision)
+          }
         }
       }
       .background(H3Color.canvas)
@@ -61,6 +66,7 @@ struct EditorView: View {
     .animation(.easeOut(duration: 0.16), value: model.showsProjectSettings)
     .animation(.easeOut(duration: 0.16), value: model.showsExport)
     .animation(.easeOut(duration: 0.16), value: model.showsTextPanel)
+    .animation(.easeOut(duration: 0.16), value: model.showsGenerationQueue)
     .sheet(isPresented: $model.showsModelSettings) {
       ModelSettingsView(model: model)
     }
@@ -407,6 +413,30 @@ struct EditorView: View {
       }
 
       Spacer(minLength: 0)
+
+      Button {
+        model.showsGenerationQueue.toggle()
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: "list.bullet.rectangle.portrait")
+          Text("Queue")
+          if model.queuedGenerationCount > 0 {
+            Text("\(model.queuedGenerationCount)")
+              .font(.system(size: 9, weight: .bold, design: .monospaced))
+              .foregroundStyle(Color.white)
+              .padding(.horizontal, 6)
+              .frame(height: 18)
+              .background(H3Color.accent)
+              .clipShape(Capsule())
+          }
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(model.showsGenerationQueue
+          ? H3Color.accent : H3Color.textSecondary)
+      }
+      .buttonStyle(H3QuietButtonStyle())
+      .help(model.showsGenerationQueue ? "Close generation queue" : "Open generation queue")
+      .accessibilityIdentifier("generation-queue-toggle")
 
       Button {
         model.showsModelSettings = true

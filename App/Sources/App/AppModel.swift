@@ -151,6 +151,13 @@ final class AppModel {
   /// bar hit 100% on each pass and drop to 0 at the next one.
   var generationProgressTracker = GenerationProgressTracker()
   var generationOverallProgress: Double { generationProgressTracker.overall }
+  var activeQueueJob: GenerationQueueJob? { generationQueue.activeJob }
+  var activeQueueJobID: UUID? { activeQueueJob?.id }
+  var queuedGenerationCount: Int { generationQueue.pendingCount }
+  var generationQueueProgress: Double? { generationQueue.activeRunProgress }
+  var generationQueuePosition: (completed: Int, total: Int)? {
+    generationQueue.activeRunPosition
+  }
   var generationElapsed: TimeInterval = 0
   /// The selected model's settings-based end-to-end estimate. It gives the
   /// countdown an immediate useful value, then yields to timing from the run.
@@ -165,6 +172,7 @@ final class AppModel {
   var importErrorMessage: String?
   var showsExport = false
   var showsModelSettings = false
+  var showsGenerationQueue = false
   var showsProjectSettings = false
   var modelDirectory: URL?
   var modelValidationState: ModelValidationState = .notSelected
@@ -225,6 +233,12 @@ final class AppModel {
   var canvasGesture: CanvasGestureSession?
   private var snapshots = ProjectSnapshotStack()
   var studioResults: [GenerationResult] = []
+  var generationQueue = GenerationJobQueue()
+  /// Structural and lifecycle transitions replace the visible queue subtree.
+  /// Progress-only updates deliberately leave its identity alone so a long
+  /// generation cannot disturb the panel's scroll position.
+  private(set) var generationQueueRevision = 0
+  var editingGenerationJobID: UUID?
   var studioAspect = ProgramAspectRatio.sixteenNine
   var studioSettings = GenerationStudioSettings.makeDefault() {
     didSet {
@@ -323,13 +337,21 @@ final class AppModel {
   private let engineSession: EngineSession
   private let engineInspector: any EngineInspecting
   private let modelDownloader: ModelPackageDownloader
+  private let generationRecoveryStore: EngineGenerationRecoveryStore
+  private let generationQueueStore: GenerationQueueStore
   private let userDefaults: UserDefaults
   private var isAccessingModelDirectory = false
   private var generationTask: Task<Void, Never>?
   private var generationTimerTask: Task<Void, Never>?
   private var activeGenerationID: UUID?
+  private var activeGenerationRecovery: GenerationRecoveryContext?
+  private var activeGenerationScopedModelURL: URL?
   private var generationStartedAt: ContinuousClock.Instant?
   private var modelValidationTask: Task<Void, Never>?
+  /// Model pickers remain usable while the queue worker is busy. Switching an
+  /// H3 directory must wait until the worker drains: shutting down the shared
+  /// helper here would terminate the generation that currently owns it.
+  private var deferredModelDirectory: URL?
   /// Re-reads what is installed and what is part-downloaded. Distinct from
   /// the download tasks, which it must not cancel.
   private var statusRefreshTask: Task<Void, Never>?
@@ -341,6 +363,9 @@ final class AppModel {
   private var phaseTimeline = GenerationPhaseTimeline()
   private var activeGenerationSettings = ""
   private var pendingStatistics: GenerationStatistics?
+  private var lastPersistedQueueProgress = -1.0
+  private var resumesQueueWhenModelsRefresh = false
+  private var managedModelStatusRefreshCompleted = false
   private static let generationLog = Logger(
     subsystem: "com.h3ddle.app",
     category: "generation"
@@ -388,6 +413,9 @@ final class AppModel {
     engineSession: EngineSession? = nil,
     engineInspector: (any EngineInspecting)? = nil,
     modelDownloader: ModelPackageDownloader = ModelPackageDownloader(),
+    generationRecoveryStore: EngineGenerationRecoveryStore =
+      EngineGenerationRecoveryStore(),
+    generationQueueStore: GenerationQueueStore = GenerationQueueStore(),
     userDefaults: UserDefaults = .standard
   ) {
     let session = engineSession ?? EngineSession(executableURL: engineExecutableURL)
@@ -395,7 +423,11 @@ final class AppModel {
     self.engineSession = session
     self.engineInspector = engineInspector ?? session
     self.modelDownloader = modelDownloader
+    self.generationRecoveryStore = generationRecoveryStore
+    self.generationQueueStore = generationQueueStore
     self.userDefaults = userDefaults
+    generationQueue = generationQueueStore.load()
+    generationQueue.prepareForRelaunch()
     generationPrompt = userDefaults.string(forKey: Self.generationPromptKey) ?? ""
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
@@ -410,6 +442,7 @@ final class AppModel {
     restoreModelLibrary()
     restoreVoices()
     refreshManagedModelStatus()
+    try? generationQueueStore.save(generationQueue)
   }
 
   var modelStatusTitle: String {
@@ -499,12 +532,17 @@ final class AppModel {
 
   func presentGeneration(_ kind: GenerationKind) {
     errorMessage = nil
-    generationPhase = ""
-    generationProgress = 0
-    generationProgressTracker = GenerationProgressTracker()
-    generationElapsed = 0
-    generationProjectedDuration = nil
-    generationPreviewImage = nil
+    // Opening a composer while another job runs must not reset that job's
+    // progress/ETA. The queue deliberately makes composition available while
+    // its single worker is busy.
+    if !isGenerating {
+      generationPhase = ""
+      generationProgress = 0
+      generationProgressTracker = GenerationProgressTracker()
+      generationElapsed = 0
+      generationProjectedDuration = nil
+      generationPreviewImage = nil
+    }
     activeGenerationKind = kind
     // Each audio mode is a separate package, so the one the tab happens to
     // remember may have nothing behind it — which reads as "no models
@@ -652,26 +690,12 @@ final class AppModel {
     allowsLTXMemoryOvercommit: Bool = false,
     seed: UInt64? = nil,
     canvasWidth: Int? = nil,
-    canvasHeight: Int? = nil
-  ) {
-    guard let kind = activeGenerationKind else { return }
+    canvasHeight: Int? = nil,
+    queueOnly: Bool = false
+  ) -> UUID? {
+    guard let kind = activeGenerationKind else { return nil }
     GenerationNotifier.requestAuthorizationIfNeeded()
-    // Show activity before the first engine event; model loading can take a
-    // while and some short runs complete before reporting progress.
-    DockAttention.showProgress(0)
-    generationTask?.cancel()
-    isGenerating = true
     errorMessage = nil
-    generationElapsed = 0
-    generationProjectedDuration = nil
-    generationPreviewImage = nil
-    // A second run from an already-open studio never passed through
-    // `presentGeneration`, so without these it would start against the last
-    // run's numbers: a full bar, and no preparation band because the
-    // denoising fraction was still set from before.
-    generationProgress = 0
-    generationPhase = ""
-    phaseTimeline = GenerationPhaseTimeline()
     let audioEngine = kind == .audio ? audioMode.engine : .h3
     let imageEngine: ImageGenerationEngine = kind == .image ? self.imageEngine : .h3
     let videoEngine: VideoGenerationEngine = kind == .video ? self.videoEngine : .h3
@@ -682,7 +706,11 @@ final class AppModel {
     let ownPackage =
       audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
       || videoEngine.usesOwnPackage
-    let useBetaSchedule = !ownPackage && selectedGenerationProfile.usesBetaSchedule
+    let selectedChoice = selectedModelID(for: kind).flatMap { id in
+      modelChoices.first { $0.id == id }
+    }
+    let useBetaSchedule = !ownPackage
+      && (selectedChoice?.generationProfile ?? .standard).usesBetaSchedule
     /// Frames and references are H3's conditioning. The engine *refuses* a
     /// request carrying them rather than dropping them, so this has to be
     /// right on the way out.
@@ -692,23 +720,6 @@ final class AppModel {
     /// neither an end frame nor references, so it is its own question rather
     /// than a widening of the one above.
     let acceptsSourcePicture = kind == .image && imageEngine == .zImage
-    // Speech and sound effects run in one phase and report no pass counter,
-    // so their phase fraction is the run's rather than a band within it.
-    // Rebuilt per run: a second generation from an already-open studio never
-    // passes through `presentGeneration`, and would otherwise start against
-    // the last run's numbers — a full bar and no preparation band.
-    generationProgressTracker = GenerationProgressTracker(
-      profile: videoEngine == .ltx
-        ? .ltx
-        : (audioEngine == .h3 ? .standard : .singlePhase))
-    // Speech reports frames against a deliberately generous ceiling, so
-    // scale that fraction using the expected spoken duration before showing
-    // it as whole-run Dock progress.
-    let progressScale: Double = {
-      guard audioEngine == .speech else { return 1 }
-      let expected = max(1.0, Double(prompt.count) / 14)
-      return max(1, min(4, duration / expected))
-    }()
     let runningModelName =
       kind == .image
       ? (selectedImageModelChoice?.displayName ?? "an image model")
@@ -720,7 +731,7 @@ final class AppModel {
     // open. It only describes an own-package run when this is actually audio;
     // using it unconditionally mislabeled Z-Image and LTX log summaries.
     let settingsLabel = kind == .audio ? audioMode.label : kind.rawValue
-    activeGenerationSettings = Self.settingsDescription(
+    let settingsDescription = Self.settingsDescription(
       kind: kind,
       ownPackage: ownPackage,
       label: settingsLabel,
@@ -758,7 +769,7 @@ final class AppModel {
       default: denoisingSteps ?? quality.denoisingSteps
       }
     }()
-    generationProjectedDuration = {
+    let projectedDuration: TimeInterval? = {
       switch (kind, audioEngine, imageEngine, videoEngine) {
       case (.video, _, _, .ltx):
         guard let width = canvasWidth, let height = canvasHeight,
@@ -837,7 +848,7 @@ final class AppModel {
       return "none"
     }()
 
-    pendingStatistics = GenerationStatistics(
+    let statistics = GenerationStatistics(
       kind: kind,
       seconds: 0,
       canvasWidth: kind == .audio ? nil : canvasWidth ?? quality.canvasSize,
@@ -864,24 +875,6 @@ final class AppModel {
       deviceMemoryBytes: modelReport?.device.physicalMemory
     )
 
-    let generationID = UUID()
-    let clock = ContinuousClock()
-    let startedAt = clock.now
-    activeGenerationID = generationID
-    generationStartedAt = startedAt
-    generationTimerTask?.cancel()
-    generationTimerTask = Task { [weak self] in
-      while !Task.isCancelled {
-        guard let self, activeGenerationID == generationID else { return }
-        generationElapsed = Self.seconds(in: startedAt.duration(to: clock.now))
-        do {
-          try await Task.sleep(for: .seconds(1))
-        } catch {
-          return
-        }
-      }
-    }
-
     let composedPrompt =
       ownPackage
       ? resolveStudioPromptMentions(prompt)
@@ -894,7 +887,7 @@ final class AppModel {
           && studioStartFrame == nil ? duration : nil
       )
 
-    let request = GenerationRequest(
+    var request = GenerationRequest(
       kind: kind,
       audioEngine: audioEngine,
       imageEngine: imageEngine,
@@ -949,30 +942,213 @@ final class AppModel {
         ? videoPackageDirectory
         : (audioEngine.usesOwnPackage
           ? audioPackageDirectory
-          : (usesNativeEngine(for: kind) ? modelDirectory : nil)))
+          : selectedChoice?.directory))
+    let canRecoverH3 = usesH3Settings
+      && (effectiveCoreReuse ?? 1) == 1
+      && !effectiveBlockCache
+      && request.videoInpainting == nil
+    let editedJob = editingGenerationJobID.flatMap { id in
+      generationQueue.jobs.first { $0.id == id }
+    }
+    let replacesEditedJob = editedJob.map { $0.state != .completed } ?? false
+    let jobID = replacesEditedJob ? editedJob!.id : UUID()
+    if let oldRecovery = editedJob?.request.recovery {
+      generationRecoveryStore.discard(oldRecovery)
+    }
+    if canRecoverH3, nativeModelDirectory != nil {
+      let recovery = generationRecoveryStore.makeContext(for: kind, jobID: jobID)
+      request.recovery = recovery
+    }
+
+    var settingsSnapshot = studioSettings
+    settingsSnapshot.duration = duration
+    if let seed { settingsSnapshot.seed = seed }
+    let scheduled = queueOnly ? (editedJob?.isScheduled ?? false) : true
+    let job = GenerationQueueJob(
+      id: jobID,
+      request: request,
+      modelID: selectedModelID(for: kind),
+      modelDirectory: nativeModelDirectory,
+      displayPrompt: prompt,
+      settingsDescription: settingsDescription,
+      studioSettings: settingsSnapshot,
+      aspectRatio: studioAspect.rawValue,
+      soundscape: studioSoundscape,
+      music: studioMusic,
+      createdAt: replacesEditedJob ? editedJob!.createdAt : Date(),
+      state: .queued,
+      isScheduled: scheduled,
+      phase: scheduled ? "Waiting to start" : "Queued",
+      projectedDuration: projectedDuration,
+      statistics: statistics
+    )
+
+    if replacesEditedJob {
+      mutateGenerationQueue { queue in
+        queue.replace(job)
+        if scheduled { queue.schedule(jobID, next: true) }
+      }
+    } else {
+      mutateGenerationQueue { $0.append(job, scheduled: scheduled) }
+    }
+    editingGenerationJobID = nil
+    persistGenerationQueue()
+    if scheduled { advanceGenerationQueue() }
+    return jobID
+  }
+
+  private func advanceGenerationQueue() {
+    guard !isGenerating else { return }
+    guard let jobID = generationQueue.nextScheduledJobID else {
+      mutateGenerationQueue { $0.finishRunIfNeeded() }
+      persistGenerationQueue()
+      applyDeferredModelDirectoryIfIdle()
+      return
+    }
+    startQueuedGeneration(jobID)
+  }
+
+  private func startQueuedGeneration(_ jobID: UUID) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID }),
+      generationQueue.jobs[index].state == .queued,
+      generationQueue.jobs[index].isScheduled
+    else { return }
+
+    var job = generationQueue.jobs[index]
+    let resolvedModelDirectory: URL? = {
+      if let modelID = job.modelID {
+        return modelChoices.first(where: { $0.id == modelID && $0.isInstalled })?.directory
+      }
+      return job.modelDirectory
+    }()
+    if job.modelID != nil, resolvedModelDirectory == nil {
+      blockQueuedGeneration(jobID, message: "The selected model is not installed.")
+      return
+    }
+    if let resolvedModelDirectory,
+      !FileManager.default.fileExists(atPath: resolvedModelDirectory.path)
+    {
+      blockQueuedGeneration(jobID, message: "The selected model folder is unavailable.")
+      return
+    }
+    if let missing = missingInputURL(for: job.request) {
+      blockQueuedGeneration(
+        jobID,
+        message: "A generation input is unavailable: \(missing.lastPathComponent)"
+      )
+      return
+    }
+
+    job.modelDirectory = resolvedModelDirectory
+    if let recovery = job.request.recovery, let resolvedModelDirectory {
+      do {
+        try generationRecoveryStore.save(
+          EngineGenerationRecoveryRecord(
+            request: job.request,
+            modelDirectory: resolvedModelDirectory,
+            displayPrompt: job.displayPrompt,
+            settingsDescription: job.settingsDescription
+          )
+        )
+        activeGenerationRecovery = recovery
+      } catch {
+        // Generation can still run, but the row must advertise Cancel rather
+        // than a Pause action whose checkpoint directory is unusable.
+        job.request.recovery = nil
+        activeGenerationRecovery = nil
+        Self.generationLog.error(
+          "Generation recovery unavailable: \(error.localizedDescription, privacy: .public)"
+        )
+      }
+    } else {
+      activeGenerationRecovery = nil
+    }
+
+    job.state = .preparing
+    job.phase = job.request.recovery == nil
+      ? "Preparing generation" : "Preparing recoverable generation"
+    job.overallProgress = 0
+    job.elapsed = 0
+    job.errorMessage = nil
+    job.startedAt = Date()
+    job.finishedAt = nil
+    mutateGenerationQueue { $0.jobs[index] = job }
+    persistGenerationQueue()
+
+    GenerationNotifier.requestAuthorizationIfNeeded()
+    DockAttention.showProgress(0)
+    isGenerating = true
+    errorMessage = nil
+    generationElapsed = 0
+    generationProjectedDuration = job.projectedDuration
+    generationPreviewImage = nil
+    generationProgress = 0
+    generationPhase = job.phase
+    phaseTimeline = GenerationPhaseTimeline()
+    generationProgressTracker = GenerationProgressTracker(
+      profile: progressProfile(for: job.request))
+    lastPersistedQueueProgress = -1
+    pendingStatistics = job.statistics
+    activeGenerationSettings = job.settingsDescription
+    activeGenerationID = job.id
+    beginGenerationModelAccess(resolvedModelDirectory)
+
+    let clock = ContinuousClock()
+    let startedAt = clock.now
+    generationStartedAt = startedAt
+    generationTimerTask?.cancel()
+    generationTimerTask = Task { [weak self] in
+      while !Task.isCancelled {
+        guard let self, activeGenerationID == jobID else { return }
+        let elapsed = Self.seconds(in: startedAt.duration(to: clock.now))
+        generationElapsed = elapsed
+        updateQueueElapsed(jobID: jobID, elapsed: elapsed)
+        do {
+          try await Task.sleep(for: .seconds(1))
+        } catch {
+          return
+        }
+      }
+    }
+
+    launchGeneration(
+      request: job.request,
+      modelDirectory: resolvedModelDirectory,
+      displayPrompt: job.displayPrompt,
+      progressScale: progressScale(for: job.request, displayPrompt: job.displayPrompt),
+      generationID: job.id,
+      startedAt: startedAt
+    )
+  }
+
+  private func launchGeneration(
+    request: GenerationRequest,
+    modelDirectory: URL?,
+    displayPrompt: String,
+    progressScale: Double,
+    generationID: UUID,
+    startedAt: ContinuousClock.Instant
+  ) {
+    let kind = request.kind
+    let clock = ContinuousClock()
     let provider: any GenerationProvider =
-      if let nativeModelDirectory {
+      if let modelDirectory {
         EngineGenerationProvider(
           session: engineSession,
-          modelDirectory: nativeModelDirectory
+          modelDirectory: modelDirectory
         )
       } else {
         generationProvider
       }
     generationTask = Task { [weak self] in
       guard let self else { return }
-      var completedAssetID: AssetID?
-      defer {
-        finishGenerationTiming(
-          generationID: generationID,
-          startedAt: startedAt,
-          completedAssetID: completedAssetID
-        )
-      }
+      var completedAsset: AssetReference?
+      var failureMessage: String?
       do {
         for try await event in provider.events(for: request) {
           switch event {
           case .progress(let phase, let fractionComplete):
+            guard activeGenerationID == generationID else { return }
             generationPhase = phase
             generationProgress = fractionComplete
             // The reported fraction is phase-local; the run's own position
@@ -988,6 +1164,11 @@ final class AppModel {
             // look finished.
             DockAttention.showProgress(
               min(0.99, generationOverallProgress * progressScale))
+            updateQueueProgress(
+              jobID: generationID,
+              phase: phase,
+              overallProgress: generationOverallProgress
+            )
             phaseTimeline.record(
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
@@ -1002,24 +1183,276 @@ final class AppModel {
             }
           case .completed(let asset):
             generationProgressTracker.finish()
-            pendingStatistics?.clipSeconds = asset.duration
+            let stableAsset = persistGeneratedAsset(asset, for: generationID)
+            pendingStatistics?.clipSeconds = stableAsset.duration
             studioResults.insert(
               GenerationResult(
                 id: UUID(),
-                asset: asset,
+                asset: stableAsset,
                 kind: kind,
-                prompt: prompt,
+                prompt: displayPrompt,
                 createdAt: Date()
               ),
               at: 0
             )
-            completedAssetID = asset.id
+            completedAsset = stableAsset
           }
         }
+        if completedAsset == nil { failureMessage = "Generation stopped before producing output." }
+      } catch is CancellationError {
+        return
       } catch {
-        errorMessage = error.localizedDescription
-        GenerationNotifier.generationFailed(message: error.localizedDescription)
+        failureMessage = error.localizedDescription
       }
+
+      guard activeGenerationID == generationID else { return }
+      if let completedAsset {
+        completeQueuedGeneration(
+          generationID,
+          asset: completedAsset,
+          startedAt: startedAt
+        )
+      } else {
+        failQueuedGeneration(
+          generationID,
+          message: failureMessage ?? "Generation failed.",
+          startedAt: startedAt
+        )
+      }
+    }
+  }
+
+  private func progressProfile(
+    for request: GenerationRequest
+  ) -> GenerationProgressProfile {
+    if request.kind == .video, request.videoEngine == .ltx { return .ltx }
+    if request.kind == .audio, request.audioEngine != .h3 { return .singlePhase }
+    return .standard
+  }
+
+  private func progressScale(
+    for request: GenerationRequest,
+    displayPrompt: String
+  ) -> Double {
+    guard request.kind == .audio, request.audioEngine == .speech else { return 1 }
+    let expected = max(1.0, Double(displayPrompt.count) / 14)
+    return max(1, min(4, request.duration / expected))
+  }
+
+  private func missingInputURL(for request: GenerationRequest) -> URL? {
+    var inputs = request.referenceImageURLs
+    if let first = request.firstFrameURL { inputs.append(first) }
+    if let last = request.lastFrameURL { inputs.append(last) }
+    if let voice = request.speech?.referenceAudioURL { inputs.append(voice) }
+    if let inpainting = request.videoInpainting {
+      inputs.append(inpainting.sourceVideoURL)
+      inputs.append(inpainting.maskURL)
+    }
+    return inputs.first { !FileManager.default.fileExists(atPath: $0.path) }
+  }
+
+  private func blockQueuedGeneration(_ jobID: UUID, message: String) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    mutateGenerationQueue { queue in
+      queue.jobs[index].state = .blocked
+      queue.jobs[index].isScheduled = false
+      queue.jobs[index].phase = "Needs attention"
+      queue.jobs[index].errorMessage = message
+      queue.jobs[index].finishedAt = Date()
+      queue.finishRunIfNeeded()
+    }
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  private func updateQueueElapsed(jobID: UUID, elapsed: TimeInterval) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    mutateGenerationQueue(notifiesPanel: false) { $0.jobs[index].elapsed = elapsed }
+  }
+
+  private func updateQueueProgress(
+    jobID: UUID,
+    phase: String,
+    overallProgress: Double
+  ) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    let phaseChanged = generationQueue.jobs[index].phase != phase
+    mutateGenerationQueue(notifiesPanel: false) { queue in
+      queue.jobs[index].state = .running
+      queue.jobs[index].phase = phase
+      queue.jobs[index].overallProgress = overallProgress
+    }
+    if phaseChanged || overallProgress - lastPersistedQueueProgress >= 0.01
+    {
+      lastPersistedQueueProgress = overallProgress
+      persistGenerationQueue()
+    }
+  }
+
+  private func persistGeneratedAsset(
+    _ asset: AssetReference,
+    for jobID: UUID
+  ) -> AssetReference {
+    do {
+      let destination = try generationQueueStore.stableOutputURL(
+        for: jobID, sourceURL: asset.url)
+      guard destination.standardizedFileURL != asset.url.standardizedFileURL else {
+        return asset
+      }
+      if FileManager.default.fileExists(atPath: destination.path) {
+        try FileManager.default.removeItem(at: destination)
+      }
+      try FileManager.default.moveItem(at: asset.url, to: destination)
+      var stable = asset
+      stable.url = destination
+      return stable
+    } catch {
+      Self.generationLog.error(
+        "Could not retain generated output: \(error.localizedDescription, privacy: .public)"
+      )
+      return asset
+    }
+  }
+
+  private func completeQueuedGeneration(
+    _ jobID: UUID,
+    asset: AssetReference,
+    startedAt: ContinuousClock.Instant
+  ) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    let elapsed = Self.seconds(in: startedAt.duration(to: ContinuousClock().now))
+    mutateGenerationQueue { queue in
+      queue.jobs[index].state = .completed
+      queue.jobs[index].isScheduled = false
+      queue.jobs[index].phase = "Completed"
+      queue.jobs[index].overallProgress = 1
+      queue.jobs[index].elapsed = elapsed
+      queue.jobs[index].finishedAt = Date()
+      queue.jobs[index].result = asset
+      queue.jobs[index].errorMessage = nil
+      if var statistics = queue.jobs[index].statistics {
+        statistics.seconds = elapsed
+        statistics.clipSeconds = asset.duration
+        queue.jobs[index].statistics = statistics
+      }
+      queue.finishRunIfNeeded()
+    }
+    finishGenerationTiming(
+      generationID: jobID,
+      startedAt: startedAt,
+      completedAssetID: asset.id
+    )
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  private func failQueuedGeneration(
+    _ jobID: UUID,
+    message: String,
+    startedAt: ContinuousClock.Instant
+  ) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    mutateGenerationQueue { queue in
+      queue.jobs[index].state = .failed
+      queue.jobs[index].isScheduled = false
+      queue.jobs[index].phase = "Failed"
+      queue.jobs[index].elapsed = Self.seconds(
+        in: startedAt.duration(to: ContinuousClock().now))
+      queue.jobs[index].finishedAt = Date()
+      queue.jobs[index].errorMessage = message
+      queue.finishRunIfNeeded()
+    }
+    errorMessage = message
+    GenerationNotifier.generationFailed(message: message)
+    finishGenerationTiming(
+      generationID: jobID,
+      startedAt: startedAt,
+      completedAssetID: nil
+    )
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  private func persistGenerationQueue() {
+    do {
+      try generationQueueStore.save(generationQueue)
+    } catch {
+      Self.generationLog.error(
+        "Could not persist generation queue: \(error.localizedDescription, privacy: .public)"
+      )
+    }
+  }
+
+  /// Observation tracks the queue property, not mutations buried inside its
+  /// value-type jobs array. Replace the top-level snapshot for every state
+  /// transition so an already-visible queue panel redraws immediately.
+  private func mutateGenerationQueue(
+    notifiesPanel: Bool = true,
+    _ mutation: (inout GenerationJobQueue) -> Void
+  ) {
+    var updated = generationQueue
+    mutation(&updated)
+    generationQueue = updated
+    if notifiesPanel { generationQueueRevision &+= 1 }
+  }
+
+  /// Restores the durable queue. Builds released before the queue kept one H3
+  /// recovery manifest; migrate it once so an in-flight generation is not
+  /// lost during the upgrade.
+  func resumeInterruptedGenerationIfAvailable() {
+    guard !ProcessInfo.processInfo.arguments.contains("-H3ddleFastFakeGeneration")
+    else { return }
+    if let record = generationRecoveryStore.latest(),
+      let recovery = record.request.recovery,
+      !generationQueue.jobs.contains(where: { $0.id == recovery.jobID })
+    {
+      if FileManager.default.fileExists(atPath: record.modelDirectory.path) {
+        var settings = GenerationStudioSettings.makeDefault(
+          seed: record.request.seed ?? UInt64.random(in: 1..<100_000_000))
+        settings.duration = record.request.duration
+        let modelID = modelChoices.first {
+          $0.directory?.standardizedFileURL == record.modelDirectory.standardizedFileURL
+        }?.id
+        let restoredJob = GenerationQueueJob(
+          id: recovery.jobID,
+          request: record.request,
+          modelID: modelID,
+          modelDirectory: record.modelDirectory,
+          displayPrompt: record.displayPrompt,
+          settingsDescription: record.settingsDescription + " · resumed",
+          studioSettings: settings,
+          aspectRatio: aspectRatioLabel(for: record.request),
+          createdAt: record.createdAt,
+          state: .queued,
+          isScheduled: true,
+          phase: "Restoring interrupted generation"
+        )
+        mutateGenerationQueue { $0.append(restoredJob, scheduled: true) }
+      } else {
+        // A stale legacy manifest must not prevent unrelated jobs in the new
+        // durable queue from resuming.
+        generationRecoveryStore.discard(recovery)
+      }
+    }
+    persistGenerationQueue()
+    let nextJob = generationQueue.nextScheduledJobID.flatMap { id in
+      generationQueue.jobs.first { $0.id == id }
+    }
+    let waitsForManagedStatus = nextJob?.modelID.map { modelID in
+      managedManifests.contains { $0.id == modelID }
+        && !managedModelStatusRefreshCompleted
+    } ?? false
+    resumesQueueWhenModelsRefresh = waitsForManagedStatus
+    // Local folders are restored synchronously. A managed package needs the
+    // asynchronous disk/status scan, unless that scan won the startup race
+    // and has already completed.
+    if !waitsForManagedStatus {
+      advanceGenerationQueue()
     }
   }
 
@@ -1288,28 +1721,273 @@ final class AppModel {
   }
 
   func cancelGeneration() {
-    let generationID = activeGenerationID
-    let startedAt = generationStartedAt
-    generationTask?.cancel()
-    generationTask = nil
-    if let generationID, let startedAt {
+    guard let jobID = activeGenerationID else { return }
+    cancelGenerationJob(jobID)
+  }
+
+  func runAllGenerationJobs() {
+    mutateGenerationQueue { $0.scheduleAll() }
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  func cancelAllGenerationJobs() {
+    let activeJobID = activeGenerationID
+    var cancelledJobs: [GenerationQueueJob] = []
+    mutateGenerationQueue { queue in
+      if let activeJobID,
+        let index = queue.jobs.firstIndex(where: { $0.id == activeJobID })
+      {
+        queue.jobs[index].elapsed = generationElapsed
+      }
+      cancelledJobs = queue.cancelAll()
+    }
+    guard !cancelledJobs.isEmpty else { return }
+
+    for job in cancelledJobs {
+      if let recovery = job.request.recovery {
+        generationRecoveryStore.discard(recovery)
+      }
+    }
+
+    if let activeJobID,
+      cancelledJobs.contains(where: { $0.id == activeJobID }),
+      let startedAt = generationStartedAt
+    {
+      generationTask?.cancel()
+      generationTask = nil
       finishGenerationTiming(
-        generationID: generationID,
+        generationID: activeJobID,
         startedAt: startedAt,
         completedAssetID: nil
       )
-    } else {
-      isGenerating = false
+    }
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  func runGenerationJobNext(_ jobID: UUID) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    mutateGenerationQueue { queue in
+      if queue.jobs[index].state == .paused {
+        queue.jobs[index].state = .queued
+        queue.jobs[index].phase = "Waiting to resume"
+        queue.jobs[index].finishedAt = nil
+      }
+      queue.schedule(jobID, next: true)
+    }
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  func retryGenerationJob(_ jobID: UUID) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    switch generationQueue.jobs[index].state {
+    case .blocked, .failed, .cancelled:
+      mutateGenerationQueue { queue in
+        queue.jobs[index].state = .queued
+        queue.jobs[index].phase = "Waiting to retry"
+        queue.jobs[index].overallProgress = 0
+        queue.jobs[index].elapsed = 0
+        queue.jobs[index].errorMessage = nil
+        queue.jobs[index].finishedAt = nil
+        queue.schedule(jobID, next: true)
+      }
+      persistGenerationQueue()
+      advanceGenerationQueue()
+    case .queued, .preparing, .running, .paused, .completed:
+      break
+    }
+  }
+
+  func pauseGenerationJob(_ jobID: UUID) {
+    guard activeGenerationID == jobID,
+      let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID }),
+      generationQueue.jobs[index].supportsPause,
+      let startedAt = generationStartedAt
+    else { return }
+    mutateGenerationQueue { queue in
+      queue.jobs[index].state = .paused
+      queue.jobs[index].isScheduled = false
+      queue.jobs[index].phase = "Paused"
+      queue.jobs[index].elapsed = generationElapsed
+      queue.jobs[index].finishedAt = nil
+      queue.finishRunIfNeeded()
+    }
+    generationTask?.cancel()
+    generationTask = nil
+    finishGenerationTiming(
+      generationID: jobID,
+      startedAt: startedAt,
+      completedAssetID: nil
+    )
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  func cancelGenerationJob(_ jobID: UUID) {
+    guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
+    else { return }
+    if let recovery = generationQueue.jobs[index].request.recovery {
+      generationRecoveryStore.discard(recovery)
+    }
+    mutateGenerationQueue { queue in
+      queue.jobs[index].state = .cancelled
+      queue.jobs[index].isScheduled = false
+      queue.jobs[index].phase = "Cancelled"
+      queue.jobs[index].elapsed = activeGenerationID == jobID
+        ? generationElapsed : queue.jobs[index].elapsed
+      queue.jobs[index].finishedAt = Date()
+      queue.finishRunIfNeeded()
+    }
+
+    if activeGenerationID == jobID, let startedAt = generationStartedAt {
+      generationTask?.cancel()
+      generationTask = nil
+      finishGenerationTiming(
+        generationID: jobID,
+        startedAt: startedAt,
+        completedAssetID: nil
+      )
+    }
+    persistGenerationQueue()
+    advanceGenerationQueue()
+  }
+
+  func removeGenerationJob(_ jobID: UUID) {
+    var removed: GenerationQueueJob?
+    mutateGenerationQueue { removed = $0.remove(jobID) }
+    guard let job = removed else { return }
+    if let recovery = job.request.recovery {
+      generationRecoveryStore.discard(recovery)
+    }
+    if job.state != .completed { generationQueueStore.discardFiles(for: jobID) }
+    persistGenerationQueue()
+  }
+
+  func clearCompletedGenerationJobs() {
+    let ids = generationQueue.jobs.compactMap { job in
+      job.state == .completed || job.state == .cancelled ? job.id : nil
+    }
+    mutateGenerationQueue { queue in
+      for id in ids { _ = queue.remove(id) }
+    }
+    persistGenerationQueue()
+  }
+
+  func moveGenerationJob(_ jobID: UUID, by offset: Int) {
+    mutateGenerationQueue { $0.moveQueuedJob(jobID, by: offset) }
+    persistGenerationQueue()
+  }
+
+  func editGenerationJob(_ jobID: UUID) {
+    guard var job = generationQueue.jobs.first(where: { $0.id == jobID }),
+      !job.state.isActive
+    else { return }
+    if job.state == .paused, let recovery = job.request.recovery {
+      generationRecoveryStore.discard(recovery)
+      job.state = .queued
+      job.isScheduled = false
+      job.phase = "Queued after editing"
+      job.overallProgress = 0
+      job.elapsed = 0
+      mutateGenerationQueue { $0.replace(job) }
+      persistGenerationQueue()
+    }
+
+    let request = job.request
+    activeGenerationKind = request.kind
+    editingGenerationJobID = jobID
+    generationPrompt = job.displayPrompt
+    studioSettings = job.studioSettings
+    studioSettings.duration = request.duration
+    if let seed = request.seed { studioSettings.seed = seed }
+    if let ratio = ProgramAspectRatio(rawValue: job.aspectRatio) {
+      studioAspect = ratio
+    }
+    studioSoundscape = job.soundscape
+    studioMusic = job.music
+    studioSourceStrength = request.sourceStrength ?? 0.85
+    previewDenoise = request.previewDenoise
+    studioStartFrame = request.firstFrameURL.map { StudioImageAttachment(url: $0) }
+    studioEndFrame = request.lastFrameURL.map { StudioImageAttachment(url: $0) }
+    studioReferenceImages = request.referenceImageURLs.map {
+      StudioImageAttachment(url: $0)
+    }
+    studioInpaintSourceURL = request.videoInpainting?.sourceVideoURL
+    studioInpaintMaskURL = request.videoInpainting?.maskURL
+    studioInpaintMaskKind = request.videoInpainting?.maskKind ?? .still
+    studioPreservesInpaintAudio = request.videoInpainting?.preserveSourceAudio ?? true
+    studioSpeechLanguage = request.speech?.language ?? .english
+    studioSpeechTemperature = request.speech?.temperature
+      ?? EngineSpeechOptions.defaultTemperature
+    selectedVoiceID = request.speech?.referenceAudioURL.flatMap { url in
+      savedVoices.first { VoiceLibrary.url(for: $0).standardizedFileURL
+        == url.standardizedFileURL }?.id
+    }
+    selectQueuedJobModel(job)
+    showsGenerationQueue = false
+  }
+
+  func dismissGenerationStudio() {
+    editingGenerationJobID = nil
+    activeGenerationKind = nil
+  }
+
+  private func selectQueuedJobModel(_ job: GenerationQueueJob) {
+    guard let modelID = job.modelID,
+      let choice = modelChoices.first(where: { $0.id == modelID && $0.isInstalled })
+    else { return }
+    switch choice.capability {
+    case .audio:
+      selectedAudioModelID = modelID
+      audioMode = switch choice.audioRole {
+      case .music: .music
+      case .soundEffects: .soundEffects
+      case .speech, nil: .speech
+      }
+    case .image:
+      selectedImageModelID = modelID
+    case .video:
+      selectedModelID = modelID
+      if job.request.kind == .image { selectedImageModelID = modelID }
+      if choice.videoEngine == .h3, !isGenerating, let directory = choice.directory {
+        selectModelDirectory(directory)
+      }
     }
   }
 
   func selectModelDirectory(_ url: URL) {
+    if isGenerating {
+      if modelDirectory != url || modelValidationState != .ready {
+        deferredModelDirectory = url
+      }
+      return
+    }
+    deferredModelDirectory = nil
+    applyModelDirectory(url)
+  }
+
+  private func applyModelDirectory(_ url: URL) {
     if modelDirectory != url {
-      engineSession.shutdown()
       endModelAccess()
     }
     modelDirectory = url
     validateSelectedModel()
+  }
+
+  private func applyDeferredModelDirectoryIfIdle() {
+    guard !isGenerating, let directory = deferredModelDirectory else { return }
+    deferredModelDirectory = nil
+    // The user may have selected LTX again while the H3 choice was waiting.
+    // Never apply an obsolete deferred directory after the queue drains.
+    guard selectedModelChoice?.videoEngine == .h3,
+      selectedModelChoice?.directory?.standardizedFileURL
+        == directory.standardizedFileURL
+    else { return }
+    applyModelDirectory(directory)
   }
 
   func validateSelectedModel() {
@@ -1371,10 +2049,15 @@ final class AppModel {
   }
 
   func shutdownEngine() {
+    if let jobID = activeGenerationID {
+      updateQueueElapsed(jobID: jobID, elapsed: generationElapsed)
+      persistGenerationQueue()
+    }
     generationTask?.cancel()
     modelValidationTask?.cancel()
     playback.shutdown()
     engineSession.shutdown()
+    endGenerationModelAccess()
     endModelAccess()
   }
 
@@ -1443,6 +2126,29 @@ final class AppModel {
   }
 
   #if DEBUG
+    /// Reproduces cancellation while the queue is already visible, without
+    /// model weights or an engine helper. Its long fake phase leaves enough
+    /// time for XCUITest to observe and cancel the active row.
+    func prepareActiveGenerationQueueFixture() {
+      let request = GenerationRequest(
+        kind: .video,
+        prompt: "Queue cancellation observation fixture",
+        duration: 5
+      )
+      let job = GenerationQueueJob(
+        request: request,
+        displayPrompt: request.prompt,
+        settingsDescription: "video · UI-test fixture",
+        studioSettings: .makeDefault(seed: 7),
+        aspectRatio: ProgramAspectRatio.oneOne.rawValue,
+        state: .queued,
+        isScheduled: true,
+        phase: "Waiting to start"
+      )
+      mutateGenerationQueue { $0.append(job, scheduled: true) }
+      showsGenerationQueue = true
+    }
+
     /// Gives the UI test a deterministic active package without opening a
     /// network connection or writing a partial model. Production launches
     /// never call this; the argument gate lives in `H3ddleApp`.
@@ -1525,6 +2231,7 @@ final class AppModel {
 
   func refreshManagedModelStatus() {
     statusRefreshTask?.cancel()
+    managedModelStatusRefreshCompleted = false
     let manifests = managedManifests
     let downloader = modelDownloader
     for manifest in manifests where managedStatuses[manifest.id] == nil {
@@ -1571,6 +2278,11 @@ final class AppModel {
       }
       self?.refreshModelChoices()
       self?.restoreSelectedModelIfNeeded()
+      self?.managedModelStatusRefreshCompleted = true
+      if self?.resumesQueueWhenModelsRefresh == true {
+        self?.resumesQueueWhenModelsRefresh = false
+        self?.advanceGenerationQueue()
+      }
     }
   }
 
@@ -1758,7 +2470,13 @@ final class AppModel {
     case .video:
       if kind == .image { selectedImageModelID = id }
       selectedModelID = id
-      selectModelDirectory(directory)
+      if choice.videoEngine == .h3 {
+        selectModelDirectory(directory)
+      } else {
+        // A previously selected H3 directory may be waiting for the current
+        // worker. LTX supersedes that selection and owns its package directly.
+        deferredModelDirectory = nil
+      }
     }
   }
 
@@ -1947,12 +2665,15 @@ final class AppModel {
       userDefaults.removeObject(forKey: Self.modelBookmarkKey)
     }
     refreshModelChoices()
-    if let selected = selectedModelChoice, selected.isLocalFolder,
+    if let selected = selectedModelChoice, selected.videoEngine == .h3,
+      selected.isLocalFolder,
       let directory = selected.directory
     {
       selectModelDirectory(directory)
     } else if selectedModelID == nil,
-      let onlyLocal = modelChoices.first(where: \.isLocalFolder),
+      let onlyLocal = modelChoices.first(where: {
+        $0.isLocalFolder && $0.videoEngine == .h3
+      }),
       let directory = onlyLocal.directory
     {
       selectedModelID = onlyLocal.id
@@ -1964,6 +2685,7 @@ final class AppModel {
   /// selection once its installed directory is known.
   private func restoreSelectedModelIfNeeded() {
     guard modelDirectory == nil, let selected = selectedModelChoice,
+      selected.videoEngine == .h3,
       let directory = selected.directory
     else { return }
     selectModelDirectory(directory)
@@ -2550,6 +3272,8 @@ final class AppModel {
     }
     pendingStatistics = nil
     activeGenerationID = nil
+    activeGenerationRecovery = nil
+    endGenerationModelAccess()
     generationStartedAt = nil
     generationProjectedDuration = nil
     generationTask = nil
@@ -2655,6 +3379,25 @@ final class AppModel {
     isAccessingModelDirectory = modelDirectory.startAccessingSecurityScopedResource()
   }
 
+  /// A queued job can target a local folder selected while another model owns
+  /// `modelDirectory`. Hold that bookmark independently for the job rather
+  /// than switching (and releasing) the active model's security scope.
+  private func beginGenerationModelAccess(_ url: URL?) {
+    endGenerationModelAccess()
+    guard let url else { return }
+    let selectedScopeAlreadyCoversIt = isAccessingModelDirectory
+      && modelDirectory?.standardizedFileURL == url.standardizedFileURL
+    guard !selectedScopeAlreadyCoversIt,
+      url.startAccessingSecurityScopedResource()
+    else { return }
+    activeGenerationScopedModelURL = url
+  }
+
+  private func endGenerationModelAccess() {
+    activeGenerationScopedModelURL?.stopAccessingSecurityScopedResource()
+    activeGenerationScopedModelURL = nil
+  }
+
   private func endModelAccess() {
     guard isAccessingModelDirectory else { return }
     modelDirectory?.stopAccessingSecurityScopedResource()
@@ -2678,6 +3421,16 @@ final class AppModel {
   private static func seconds(in duration: Duration) -> TimeInterval {
     let components = duration.components
     return Double(components.seconds) + Double(components.attoseconds) / 1e18
+  }
+
+  private func aspectRatioLabel(for request: GenerationRequest) -> String {
+    guard let width = request.canvasWidth, let height = request.canvasHeight,
+      width > 0, height > 0
+    else { return ProgramAspectRatio.oneOne.rawValue }
+    let ratio = Double(width) / Double(height)
+    return ProgramAspectRatio.allCases.min {
+      abs(Double($0.fraction) - ratio) < abs(Double($1.fraction) - ratio)
+    }?.rawValue ?? ProgramAspectRatio.oneOne.rawValue
   }
 
   /// Whole seconds: tenths imply a precision that varies more than that
