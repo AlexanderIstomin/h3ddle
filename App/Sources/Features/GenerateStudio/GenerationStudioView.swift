@@ -12,6 +12,7 @@ private struct PendingMemoryIntensiveGeneration: Identifiable {
   let coreReuse: Int
   let blockCache: Bool
   let fastStill: Bool
+  let queueOnly: Bool
   let warning: String
 }
 
@@ -30,7 +31,7 @@ struct GenerationStudioView: View {
   private static let h3FrameChunk = H3Duration.chunk
 
   @State private var stage = StudioStage.compose
-  @State private var resultIDAtStart: UUID?
+  @State private var submittedJobID: UUID?
   @State private var modelMenuOpen = false
   @State private var modelPickerFrame: CGRect = .zero
   @State private var studioBodyFrame: CGRect = .zero
@@ -42,9 +43,7 @@ struct GenerationStudioView: View {
       Color.black.opacity(0.62)
         .ignoresSafeArea()
         .onTapGesture {
-          if !model.isGenerating {
-            model.activeGenerationKind = nil
-          }
+          model.dismissGenerationStudio()
         }
 
       VStack(spacing: 0) {
@@ -63,12 +62,25 @@ struct GenerationStudioView: View {
       .padding(24)
     }
     .foregroundStyle(H3Color.textPrimary)
+    .onChange(of: submittedJobState) { _, state in
+      switch state {
+      case .preparing, .running:
+        stage = .run
+      case .completed:
+        if submittedResult != nil {
+          summaryCopied = false
+          stage = .result
+        }
+      case .paused, .blocked, .failed, .cancelled:
+        stage = .compose
+        model.showsGenerationQueue = true
+      case .queued, nil:
+        break
+      }
+    }
     .onChange(of: model.isGenerating) { _, generating in
       guard !generating, stage == .run else { return }
-      if model.errorMessage == nil,
-        let latest = model.latestStudioResult,
-        latest.id != resultIDAtStart
-      {
+      if submittedJobState == .completed, submittedResult != nil {
         summaryCopied = false
         stage = .result
       } else {
@@ -85,7 +97,8 @@ struct GenerationStudioView: View {
             coreReuse: pending.coreReuse,
             blockCache: pending.blockCache,
             fastStill: pending.fastStill,
-            allowsLTXMemoryOvercommit: true
+            allowsLTXMemoryOvercommit: true,
+            queueOnly: pending.queueOnly
           )
         },
         secondaryButton: .cancel()
@@ -166,13 +179,13 @@ struct GenerationStudioView: View {
             .init(value: .music, title: "MUSIC", systemImage: "music.note"),
             .init(value: .soundEffects, title: "SFX", systemImage: "waveform"),
           ],
-          isEnabled: !model.isGenerating
+          isEnabled: true
         )
         .padding(.leading, 4)
       }
       Spacer()
       Button {
-        model.activeGenerationKind = nil
+        model.dismissGenerationStudio()
       } label: {
         Image(systemName: "xmark")
           .font(.system(size: 13, weight: .semibold))
@@ -186,7 +199,6 @@ struct GenerationStudioView: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .disabled(model.isGenerating)
       .help("Close Generation Studio")
       .accessibilityIdentifier("generation-close")
     }
@@ -221,7 +233,7 @@ struct GenerationStudioView: View {
   }
 
   private var kindNoun: String {
-    switch kind {
+    return switch kind {
     case .video: "video"
     case .image: "images"
     case .audio: "audio"
@@ -941,6 +953,34 @@ struct GenerationStudioView: View {
               denoisingSteps: knobs.denoisingSteps,
               coreReuse: knobs.coreReuse,
               blockCache: knobs.blockCache,
+              fastStill: knobs.fastStill,
+              queueOnly: true
+            )
+          } label: {
+            VStack(spacing: 1) {
+              Text(model.editingGenerationJobID == nil ? "Add to Queue" : "Save")
+                .font(.system(size: 12, weight: .semibold))
+              Text("Run later")
+                .font(.system(size: 9))
+                .foregroundStyle(H3Color.textSecondary)
+            }
+            .frame(width: 100)
+            .frame(height: 50)
+            .overlay {
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(H3Color.line, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .disabled(!canGenerate)
+          .accessibilityIdentifier("add-to-generation-queue")
+
+          Button {
+            startGeneration(
+              denoisingSteps: knobs.denoisingSteps,
+              coreReuse: knobs.coreReuse,
+              blockCache: knobs.blockCache,
               fastStill: knobs.fastStill
             )
           } label: {
@@ -1011,7 +1051,7 @@ struct GenerationStudioView: View {
         )
         .tint(H3Color.accent)
       }
-      if kind == .video, model.nativeVideoGenerationIsReady, alignedSeconds > 3 {
+      if kind == .video, model.videoEngine == .h3, alignedSeconds > 3 {
         Text("Long H3 clips increase transformer work sharply. Start short on M1-class Macs.")
           .font(.system(size: 10))
           .foregroundStyle(H3Color.textSecondary)
@@ -1567,7 +1607,7 @@ struct GenerationStudioView: View {
             remaining: model.generationRemainingDescription,
             preview: model.generationPreviewImage
           )
-        } else if let result = model.latestStudioResult {
+        } else if let result = submittedResult ?? model.latestStudioResult {
           GenerationResultMedia(asset: result.asset)
         }
       }
@@ -1575,12 +1615,17 @@ struct GenerationStudioView: View {
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
       if stage == .run {
-        Button("Cancel") {
-          model.cancelGeneration()
+        Button(activeSubmittedJob?.supportsPause == true ? "Pause" : "Cancel") {
+          guard let job = activeSubmittedJob else { return }
+          if job.supportsPause {
+            model.pauseGenerationJob(job.id)
+          } else {
+            model.cancelGenerationJob(job.id)
+          }
           stage = .compose
         }
         .buttonStyle(H3QuietButtonStyle())
-      } else if let result = model.latestStudioResult {
+      } else if let result = submittedResult ?? model.latestStudioResult {
         if let generatedIn = model.generationDurationDescription(for: result.asset) {
           Text("Generated in \(generatedIn)")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -1665,7 +1710,8 @@ struct GenerationStudioView: View {
   private func startGeneration(
     denoisingSteps: Int, coreReuse: Int, blockCache: Bool = false,
     fastStill: Bool = false,
-    allowsLTXMemoryOvercommit: Bool = false
+    allowsLTXMemoryOvercommit: Bool = false,
+    queueOnly: Bool = false
   ) {
     modelMenuOpen = false
     let effectiveActiveDiTLayers = featureFlags.effectiveActiveDiTLayers(
@@ -1693,13 +1739,12 @@ struct GenerationStudioView: View {
         coreReuse: effectiveCoreReuse,
         blockCache: blockCache,
         fastStill: fastStill,
+        queueOnly: queueOnly,
         warning: warning
       )
       return
     }
-    resultIDAtStart = model.latestStudioResult?.id
-    stage = .run
-    model.generate(
+    let jobID = model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
       quality: knobs.canvas.engineQuality,
@@ -1712,8 +1757,17 @@ struct GenerationStudioView: View {
       allowsLTXMemoryOvercommit: allowsLTXMemoryOvercommit,
       seed: hasModelSettings ? model.studioSettings.seed : nil,
       canvasWidth: kind == .audio ? nil : size.width,
-      canvasHeight: kind == .audio ? nil : size.height
+      canvasHeight: kind == .audio ? nil : size.height,
+      queueOnly: queueOnly
     )
+    guard let jobID else { return }
+    submittedJobID = jobID
+    if !queueOnly, model.activeQueueJobID == jobID {
+      stage = .run
+    } else {
+      model.dismissGenerationStudio()
+      model.showsGenerationQueue = true
+    }
   }
 
   private func ltxMemoryWarning(width: Int, height: Int) -> String? {
@@ -1816,7 +1870,9 @@ struct GenerationStudioView: View {
   }
 
   private var generateLabel: String {
-    switch kind {
+    if model.editingGenerationJobID != nil { return "Save & run" }
+    if model.isGenerating { return "Queue generation" }
+    return switch kind {
     case .video: "Generate video"
     case .image: "Generate image"
     case .audio: "Generate audio"
@@ -1827,7 +1883,33 @@ struct GenerationStudioView: View {
     let inpaintingIsReady = !supportsVideoInpainting || !model.studioHasInpaintingInput
       || (model.studioVideoInpainting != nil && !model.studioReferenceImages.isEmpty)
     return !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && !model.isGenerating && inpaintingIsReady
+      && inpaintingIsReady
+  }
+
+  private var submittedJobState: GenerationJobState? {
+    guard let submittedJobID else { return nil }
+    return model.generationQueue.jobs.first { $0.id == submittedJobID }?.state
+  }
+
+  private var activeSubmittedJob: GenerationQueueJob? {
+    guard let submittedJobID else { return nil }
+    return model.generationQueue.jobs.first {
+      $0.id == submittedJobID && $0.state.isActive
+    }
+  }
+
+  private var submittedResult: GenerationResult? {
+    guard let submittedJobID,
+      let job = model.generationQueue.jobs.first(where: { $0.id == submittedJobID }),
+      let asset = job.result
+    else { return nil }
+    return GenerationResult(
+      id: submittedJobID,
+      asset: asset,
+      kind: job.request.kind,
+      prompt: job.displayPrompt,
+      createdAt: job.finishedAt ?? job.createdAt
+    )
   }
 
   private var knobs: GenerationKnobSnapshot {
@@ -1884,7 +1966,7 @@ struct GenerationStudioView: View {
   }
 
   private var usesAlignedH3Duration: Bool {
-    kind == .video && model.videoEngine == .h3 && model.nativeVideoGenerationIsReady
+    kind == .video && model.videoEngine == .h3
   }
 
   private var requestedDuration: Double {

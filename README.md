@@ -27,8 +27,13 @@ Generation, on the local Metal engine:
 - model-specific aspect ratios, resolutions, durations, and sampling controls;
 - managed model packages pinned by revision and SHA-256, downloaded only when
   chosen and kept outside the application bundle;
+- a persistent generation queue that accepts video, image, music, effects, and
+  speech jobs while another generation is running, then executes them one at a
+  time in the chosen order;
 - live progress, denoising previews where supported, and remaining-time
-  estimates projected from each run's measured pace; and
+  estimates projected from each run's measured pace;
+- automatic H3 denoiser checkpoints, including pause/resume and recovery after
+  an app or helper interruption; and
 - reproducible generation statistics containing the settings another user
   needs to repeat a result.
 
@@ -46,6 +51,28 @@ prompt, quality ladder, and block-cache path; LTX and Z-Image use their native
 distilled sampling controls; Stable Audio and Qwen3-TTS provide dedicated
 audio workflows. Generation and export use system media frameworks and do not
 require a cloud service.
+
+## Generation queue and recovery
+
+Every generation is a durable job. **Generate** runs it as soon as the single
+local worker is free; **Add to Queue** saves it for later. The Queue panel can
+edit and reorder waiting jobs, move one to the front, schedule all saved jobs,
+retry failures, cancel individual work, or **Cancel All** running, waiting, and
+paused jobs. It shows the active phase, remaining-time estimate, whole-run
+position, and completed or cancelled history. Model and input choices are
+captured per job, so preparing a job for another model does not interrupt the
+model currently generating.
+
+Compatible H3 jobs write an atomic sampler checkpoint after each completed
+denoising pass. **Pause** releases the engine while preserving that checkpoint;
+**Resume** continues from the next pass. If the app or helper exits during a
+long H3 generation, H3ddle restores the durable queue and resumes a matching
+checkpoint on the next launch. Checkpoints are fingerprinted against the exact
+request and model inputs, so stale or corrupt state is ignored instead of
+being applied to another job. Completing, cancelling, or editing the job
+removes its checkpoint. Block cache, core reuse above one, and masked-source
+inpainting deliberately remain non-resumable; LTX, Z-Image, and standalone
+audio jobs currently expose **Cancel** and restart from the beginning.
 
 Transformer-block thinning and core reuse remain available for engine research,
 but are hidden from the normal studio because both can move a result away from
@@ -100,6 +127,7 @@ exact-output A/B.
 | M1 Pro, 16-core GPU, 32 GB | M1 measurements extrapolated by the app's dense-attention model | ~43 h | ~16 h | ~2.7× |
 | M3 Max, 40-core GPU, 128 GB | hardware-scaled projection | ~14–20 h | ~5.5–7.5 h | ~2.7× |
 | M5, 10-core GPU, 32 GB | hardware- and M5-kernel-scaled projection | ~9–14 h | ~3–5.5 h | ~2.7× |
+| M6, 12-core GPU, 32 GB | announced-hardware projection from M5; M6 tuning unmeasured | ~7–13 h | ~2.3–5 h | ~2.7× |
 | M5 Max, 40-core GPU, 128 GB | hardware- and M5-kernel-scaled projection | ~5.5–7 h | ~2–2.7 h | ~2.7× |
 
 The M1 projection is fitted to H3ddle's recorded 1,625- and 5,095-row runs and
@@ -109,10 +137,15 @@ model conservatively using Apple's published GPU and memory characteristics:
 [M1 Pro has 200 GB/s](https://www.apple.com/newsroom/2021/10/introducing-m1-pro-and-m1-max-the-most-powerful-chips-apple-has-ever-built/),
 [M3 Max has up to a 40-core GPU and 400 GB/s](https://support.apple.com/en-us/117736),
 [M5 has a 10-core GPU with a Neural Accelerator per core and 153 GB/s](https://www.apple.com/newsroom/2025/10/apple-unveils-new-14-inch-macbook-pro-powered-by-the-m5-chip/),
+[M6 has a 12-core GPU, up to 170 GB/s, and nearly 30% more peak GPU AI
+compute than M5](https://www.apple.com/newsroom/2026/08/apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute/),
 and [M5 Max reaches 40 GPU cores, 128 GB, and 614 GB/s](https://www.apple.com/newsroom/2026/03/apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows/).
-Those peak comparisons are bounds, not H3 benchmarks. The exact sparse Sol
-research path remains disabled by default because current quality testing did
-not justify enabling approximate attention.
+The M6 range bounds the M5 projection between those announced bandwidth and
+peak GPU AI uplifts. It assumes H3ddle's M5-class TensorOps kernels are
+compatibility-validated for M6; until then, the shipped fallback path can
+perform differently. Those peak comparisons are bounds, not H3 benchmarks.
+The exact sparse Sol research path remains disabled by default because current
+quality testing did not justify enabling approximate attention.
 
 ## Requirements
 
@@ -200,9 +233,10 @@ python3 -B Scripts/repack-ltx-input-major.py /path/to/transformer.safetensors
 
 Denoising reports progress for every transformer layer, and the video decoder
 reports its own blocks, so a long decode does not look like a hang. Cancel
-terminates the job-specific helper immediately, releasing mapped weights and
-Metal allocations even during a long GPU operation. Use the CLI in
-`Engine/Vendor/h3.c` for experiments the app does not expose.
+terminates the active job immediately, releasing mapped weights and Metal
+allocations even during a long GPU operation, without scheduling races in the
+next queued job. Use the CLI in `Engine/Vendor/h3.c` for experiments the app
+does not expose.
 
 Run all non-UI checks and build the application with:
 

@@ -30,6 +30,16 @@ xcrun clang -std=c11 -Wall -Wextra -Werror \
     -o "$h3_inpaint_test"
 "$h3_inpaint_test"
 
+# Recovery files are an on-disk compatibility boundary. Exercise atomic
+# round-trip and checksum rejection without model weights or a GPU.
+h3_checkpoint_test="${TMPDIR:-/tmp}/h3ddle-h3-checkpoint-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror -D_DARWIN_C_SOURCE \
+    "$repository_root/Engine/Vendor/h3.c/h3_checkpoint.c" \
+    "$repository_root/Engine/Tests/H3CheckpointTests/h3_checkpoint_test.c" \
+    -I"$repository_root/Engine/Vendor/h3.c" \
+    -o "$h3_checkpoint_test"
+"$h3_checkpoint_test"
+
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
 swift test --package-path "$repository_root/Packages/H3ddleKit"
 swift test --package-path "$repository_root/Engine"
@@ -46,7 +56,7 @@ case "$engine_handshake" in
         ;;
 esac
 case "$engine_handshake" in
-    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"ltxGeneration"'*'"standaloneAudioGeneration"'*'"referenceInputs"'*'"videoInpainting"'*) ;;
+    *'"modelInspection"'*'"videoGeneration"'*'"imageGeneration"'*'"ltxGeneration"'*'"standaloneAudioGeneration"'*'"referenceInputs"'*'"videoInpainting"'*'"generationCheckpointing"'*) ;;
     *)
         echo "Engine generation capabilities are incomplete." >&2
         exit 1

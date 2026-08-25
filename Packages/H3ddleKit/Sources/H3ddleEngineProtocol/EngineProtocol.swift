@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 17
+  public static let currentVersion = 18
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -305,6 +305,9 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case denoisingPreviews
   case referenceInputs
   case videoInpainting
+  /// Atomic denoiser checkpoints whose fingerprint binds them to one exact
+  /// H3 request. The service resumes a matching file and ignores stale data.
+  case generationCheckpointing
 }
 
 public struct EngineCapabilities: Hashable, Codable, Sendable {
@@ -483,6 +486,17 @@ public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   }
 }
 
+public struct EngineCheckpointOptions: Hashable, Codable, Sendable {
+  public var fileURL: URL
+  /// Lowercase SHA-256 over every immutable request and model input.
+  public var fingerprint: String
+
+  public init(fileURL: URL, fingerprint: String) {
+    self.fileURL = fileURL
+    self.fingerprint = fingerprint
+  }
+}
+
 public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// H3 accepts denoising budgets in [2, 1000]; the app UI exposes a much
   /// narrower band, but the protocol clamps to the engine's true range.
@@ -555,6 +569,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public var allowsLTXMemoryOvercommit: Bool
   public var modelDirectory: URL?
   public var outputURL: URL
+  /// H3 only. Other engines have independent samplers and ignore this field.
+  public var checkpoint: EngineCheckpointOptions?
 
   /// Z-Image and LTX own independent multi-gigabyte packages. Keeping any
   /// other model cache beside them can force unified-memory compression or
@@ -589,7 +605,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     video: EngineVideoOptions? = nil,
     allowsLTXMemoryOvercommit: Bool = false,
     modelDirectory: URL? = nil,
-    outputURL: URL
+    outputURL: URL,
+    checkpoint: EngineCheckpointOptions? = nil
   ) {
     self.kind = kind
     self.prompt = prompt
@@ -615,6 +632,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.allowsLTXMemoryOvercommit = allowsLTXMemoryOvercommit
     self.modelDirectory = modelDirectory
     self.outputURL = outputURL
+    self.checkpoint = checkpoint
   }
 
   enum CodingKeys: String, CodingKey {
@@ -642,6 +660,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case allowsLTXMemoryOvercommit
     case modelDirectory
     case outputURL
+    case checkpoint
   }
 
   public init(from decoder: Decoder) throws {
@@ -678,6 +697,8 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
       try container.decodeIfPresent(Bool.self, forKey: .allowsLTXMemoryOvercommit) ?? false
     modelDirectory = try container.decodeIfPresent(URL.self, forKey: .modelDirectory)
     outputURL = try container.decode(URL.self, forKey: .outputURL)
+    checkpoint = try container.decodeIfPresent(
+      EngineCheckpointOptions.self, forKey: .checkpoint)
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -710,6 +731,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     }
     try container.encodeIfPresent(modelDirectory, forKey: .modelDirectory)
     try container.encode(outputURL, forKey: .outputURL)
+    try container.encodeIfPresent(checkpoint, forKey: .checkpoint)
   }
 }
 

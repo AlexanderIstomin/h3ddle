@@ -18,6 +18,7 @@ let package = Package(
       sources: [
         "Sources/H3Native/H3NativeBridge.c",
         "Vendor/h3.c/h3.c",
+        "Vendor/h3.c/h3_checkpoint.c",
         "Vendor/h3.c/h3_host.c",
         "Vendor/h3.c/h3_safetensors.c",
         "Vendor/h3.c/h3_weights.c",

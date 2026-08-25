@@ -7,12 +7,29 @@ import SwiftUI
 struct H3ddleApp: App {
   @State private var model: AppModel = {
     let arguments = ProcessInfo.processInfo.arguments
+    let activeQueueFixture = arguments.contains("-H3ddleUITestActiveQueueJob")
     let generationProvider: any GenerationProvider =
-      arguments.contains("-H3ddleFastFakeGeneration")
-      ? FakeGenerationProvider(stepDelay: .milliseconds(20))
-      : FakeGenerationProvider()
+      activeQueueFixture
+      ? FakeGenerationProvider(stepDelay: .seconds(30))
+      : (arguments.contains("-H3ddleFastFakeGeneration")
+        ? FakeGenerationProvider(stepDelay: .milliseconds(20))
+        : FakeGenerationProvider())
+    let testQueueStore = GenerationQueueStore(
+      rootURL: FileManager.default.temporaryDirectory.appendingPathComponent(
+        "H3ddleUITestQueue-\(ProcessInfo.processInfo.processIdentifier)",
+        isDirectory: true
+      )
+    )
 
     #if DEBUG
+      if activeQueueFixture {
+        let model = AppModel(
+          generationProvider: generationProvider,
+          generationQueueStore: testQueueStore
+        )
+        model.prepareActiveGenerationQueueFixture()
+        return model
+      }
       if let marker = arguments.firstIndex(of: "-H3ddleUITestActiveManagedDownload"),
         arguments.indices.contains(marker + 1)
       {
@@ -22,14 +39,19 @@ struct H3ddleApp: App {
           .appendingPathComponent("H3ddleUITestModels-\(ProcessInfo.processInfo.processIdentifier)")
         let model = AppModel(
           generationProvider: generationProvider,
-          modelDownloader: ModelPackageDownloader(store: ModelPackageStore(rootURL: root))
+          modelDownloader: ModelPackageDownloader(store: ModelPackageStore(rootURL: root)),
+          generationQueueStore: testQueueStore
         )
         model.prepareManagedDownloadFixture(packageID: arguments[marker + 1])
         return model
       }
     #endif
 
-    return AppModel(generationProvider: generationProvider)
+    return AppModel(
+      generationProvider: generationProvider,
+      generationQueueStore: arguments.contains("-H3ddleFastFakeGeneration")
+        ? testQueueStore : GenerationQueueStore()
+    )
   }()
 
   var body: some Scene {
@@ -38,6 +60,9 @@ struct H3ddleApp: App {
         .frame(minWidth: 1_080, minHeight: 700)
         .preferredColorScheme(.dark)
         .background(WindowChromeInstaller())
+        .task {
+          model.resumeInterruptedGenerationIfAvailable()
+        }
         .onReceive(
           NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
         ) { _ in

@@ -114,6 +114,7 @@ private let engineCapabilities = EngineCapabilities(
       .modelInspection, .videoGeneration, .imageGeneration, .embeddedAudio,
       .cancellation, .denoisingPreviews, .referenceInputs,
       .videoInpainting,
+      .generationCheckpointing,
       .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
       .zImageGeneration, .ltxGeneration,
     ]
@@ -1508,6 +1509,8 @@ private final class EngineRuntime: @unchecked Sendable {
       let referencePaths = references.map(\.path)
       let sourceVideoPath = request.video?.inpainting?.sourceVideoURL.path
       let maskPath = request.video?.inpainting?.maskURL.path
+      let checkpointPath = request.checkpoint?.fileURL.path
+      let checkpointFingerprint = request.checkpoint?.fingerprint
 
       let opaque = Unmanaged.passRetained(callbackContext).toOpaque()
       parameters.callback_opaque = opaque
@@ -1520,86 +1523,93 @@ private final class EngineRuntime: @unchecked Sendable {
               withOptionalCString(maskPath) { maskC in
                 withCStringList(referencePaths) { referenceCs in
                   parameters.lora_path = loraC
-                parameters.first_frame = firstC
-                parameters.last_frame = lastC
-                parameters.source_video = sourceVideoC
-                parameters.inpaint_mask = maskC
-                parameters.inpaint_mask_is_video =
-                  request.video?.inpainting?.maskKind == .video ? 1 : 0
-                parameters.preserve_source_audio =
-                  request.video?.inpainting?.preserveSourceAudio == true ? 1 : 0
-                let referenceRecords = referenceCs.map { path in
-                  h3_reference(
-                    kind: H3_REFERENCE_IMAGE,
-                    path: path,
-                    audio_path: nil,
-                    include_embedded_audio: 0
-                  )
-                }
-                referenceRecords.withUnsafeBufferPointer { buffer in
-                  if !buffer.isEmpty {
-                    parameters.references = buffer.baseAddress
-                    parameters.reference_count = buffer.count
+                  parameters.first_frame = firstC
+                  parameters.last_frame = lastC
+                  parameters.source_video = sourceVideoC
+                  parameters.inpaint_mask = maskC
+                  parameters.inpaint_mask_is_video =
+                    request.video?.inpainting?.maskKind == .video ? 1 : 0
+                  parameters.preserve_source_audio =
+                    request.video?.inpainting?.preserveSourceAudio == true ? 1 : 0
+                  let referenceRecords = referenceCs.map { path in
+                    h3_reference(
+                      kind: H3_REFERENCE_IMAGE,
+                      path: path,
+                      audio_path: nil,
+                      include_embedded_audio: 0
+                    )
                   }
-                  request.prompt.withCString { prompt in
-                    request.outputURL.path.withCString { outputPath in
-                      // Stills skip the container and keep a PNG. Audio writes a WAV.
-                      parameters.output_path = stillRequested ? nil : outputPath
-                      guard let result = h3_generate(context, prompt, &parameters) else {
-                        if callbackContext.isCancelled {
-                          EngineOutput.emit(
-                            EngineEvent(
-                              requestID: command.requestID,
-                              jobID: command.jobID,
-                              kind: .cancelled
+                  referenceRecords.withUnsafeBufferPointer { buffer in
+                    if !buffer.isEmpty {
+                      parameters.references = buffer.baseAddress
+                      parameters.reference_count = buffer.count
+                    }
+                    withOptionalCString(checkpointPath) { checkpointC in
+                      withOptionalCString(checkpointFingerprint) { fingerprintC in
+                        parameters.checkpoint_path = checkpointC
+                        parameters.checkpoint_fingerprint = fingerprintC
+                        request.prompt.withCString { prompt in
+                          request.outputURL.path.withCString { outputPath in
+                            // Stills skip the container and keep a PNG. Audio writes a WAV.
+                            parameters.output_path = stillRequested ? nil : outputPath
+                            guard let result = h3_generate(context, prompt, &parameters) else {
+                              if callbackContext.isCancelled {
+                                EngineOutput.emit(
+                                  EngineEvent(
+                                    requestID: command.requestID,
+                                    jobID: command.jobID,
+                                    kind: .cancelled
+                                  )
+                                )
+                              } else {
+                                EngineOutput.fail(command, message: lastH3Error(context))
+                              }
+                              return
+                            }
+                            let muxedDuration =
+                              result.pointee.fps > 0
+                              ? Double(result.pointee.frames) / Double(result.pointee.fps)
+                              : request.duration
+                            h3_result_free(result)
+
+                            if callbackContext.isCancelled {
+                              EngineOutput.emit(
+                                EngineEvent(
+                                  requestID: command.requestID,
+                                  jobID: command.jobID,
+                                  kind: .cancelled
+                                )
+                              )
+                              return
+                            }
+
+                            if stillRequested {
+                              do {
+                                try callbackContext.writeStill(to: request.outputURL)
+                              } catch {
+                                EngineOutput.fail(
+                                  command,
+                                  message: "H3 finished without a decodable still frame"
+                                )
+                                return
+                              }
+                            }
+
+                            EngineOutput.emit(
+                              EngineEvent(
+                                requestID: command.requestID,
+                                jobID: command.jobID,
+                                kind: .completed,
+                                outputURL: request.outputURL,
+                                outputDuration: stillRequested
+                                  ? request.duration : muxedDuration
+                              )
                             )
-                          )
-                        } else {
-                          EngineOutput.fail(command, message: lastH3Error(context))
-                        }
-                        return
-                      }
-                      let muxedDuration =
-                        result.pointee.fps > 0
-                        ? Double(result.pointee.frames) / Double(result.pointee.fps)
-                        : request.duration
-                      h3_result_free(result)
-
-                      if callbackContext.isCancelled {
-                        EngineOutput.emit(
-                          EngineEvent(
-                            requestID: command.requestID,
-                            jobID: command.jobID,
-                            kind: .cancelled
-                          )
-                        )
-                        return
-                      }
-
-                      if stillRequested {
-                        do {
-                          try callbackContext.writeStill(to: request.outputURL)
-                        } catch {
-                          EngineOutput.fail(
-                            command,
-                            message: "H3 finished without a decodable still frame"
-                          )
-                          return
+                          }
                         }
                       }
-
-                      EngineOutput.emit(
-                        EngineEvent(
-                          requestID: command.requestID,
-                          jobID: command.jobID,
-                          kind: .completed,
-                          outputURL: request.outputURL,
-                          outputDuration: stillRequested ? request.duration : muxedDuration
-                        )
-                      )
                     }
                   }
-                }
                 }
               }
             }

@@ -22,7 +22,11 @@ struct EngineProtocolTests {
       canvasHeight: 1024,
       speech: EngineSpeechOptions(temperature: 0.9),
       image: EngineImageOptions(model: .zImage, steps: 8),
-      outputURL: URL(fileURLWithPath: "/tmp/apple.png")
+      outputURL: URL(fileURLWithPath: "/tmp/apple.png"),
+      checkpoint: EngineCheckpointOptions(
+        fileURL: URL(fileURLWithPath: "/tmp/apple.h3ckpt"),
+        fingerprint: String(repeating: "a", count: 64)
+      )
     )
 
     let decoded = try EngineLineCodec.decode(
@@ -31,6 +35,8 @@ struct EngineProtocolTests {
     #expect(decoded.image?.model == .zImage)
     #expect(decoded.image?.steps == 8)
     #expect(decoded.speech?.temperature == 0.9)
+    #expect(decoded.checkpoint?.fileURL.path == "/tmp/apple.h3ckpt")
+    #expect(decoded.checkpoint?.fingerprint == String(repeating: "a", count: 64))
     #expect(decoded == request)
   }
 

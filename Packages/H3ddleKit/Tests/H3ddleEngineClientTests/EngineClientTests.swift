@@ -7,6 +7,146 @@ import Testing
 
 @Suite("Engine process client")
 struct EngineClientTests {
+  @Test("Recovery manifests survive a fresh store and explicit discard removes them")
+  func recoveryManifestRoundTrip() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+    let output = root.appendingPathComponent("outputs", isDirectory: true)
+    let store = EngineGenerationRecoveryStore(rootURL: root, outputDirectory: output)
+    let recovery = store.makeContext(for: .video)
+    let request = GenerationRequest(
+      kind: .video,
+      prompt: "A lighthouse in rain",
+      duration: 5,
+      seed: 7,
+      recovery: recovery
+    )
+    try store.save(
+      EngineGenerationRecoveryRecord(
+        request: request,
+        modelDirectory: URL(fileURLWithPath: "/tmp/h3-model", isDirectory: true),
+        displayPrompt: "A lighthouse in rain",
+        settingsDescription: "video · 5s"
+      )
+    )
+
+    let restored = try #require(store.latest())
+    #expect(restored.request == request)
+    #expect(restored.displayPrompt == "A lighthouse in rain")
+    let manifest = recovery.directoryURL.appendingPathComponent(
+      EngineGenerationRecoveryStore.manifestName)
+    let attributes = try FileManager.default.attributesOfItem(atPath: manifest.path)
+    #expect(attributes[.posixPermissions] as? Int == 0o600)
+
+    store.discard(recovery)
+    #expect(store.latest() == nil)
+  }
+
+  @Test("A checkpoint fingerprint is stable and changes with generation inputs")
+  func checkpointFingerprintBindsInputs() throws {
+    let model = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleFingerprintModel-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: model) }
+    let marker = model.appendingPathComponent("model.json")
+    try Data("one".utf8).write(to: marker)
+    let output = URL(fileURLWithPath: "/tmp/output.mp4")
+    let first = EngineGenerationRequest(
+      kind: .video,
+      prompt: "one prompt",
+      duration: 5,
+      seed: 42,
+      modelDirectory: model,
+      outputURL: output
+    )
+    var changed = first
+    changed.prompt = "another prompt"
+
+    let fingerprint = try EngineGenerationProvider.checkpointFingerprint(
+      for: first, environment: [:])
+    let repeated = try EngineGenerationProvider.checkpointFingerprint(
+      for: first, environment: [:])
+    let changedPrompt = try EngineGenerationProvider.checkpointFingerprint(
+      for: changed, environment: [:])
+    let changedEnvironment = try EngineGenerationProvider.checkpointFingerprint(
+      for: first, environment: ["H3_SOL_ATTN": "1"])
+    #expect(fingerprint.count == 64)
+    #expect(fingerprint == repeated)
+    #expect(fingerprint != changedPrompt)
+    #expect(fingerprint != changedEnvironment)
+  }
+
+  @Test("A recoverable H3 request carries its checkpoint across the helper protocol")
+  func checkpointCrossesTheProtocol() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleCheckpointWire-\(UUID().uuidString)", isDirectory: true)
+    let recovery = GenerationRecoveryContext(
+      jobID: UUID(),
+      directoryURL: root,
+      outputURL: root.appendingPathComponent("output.mp4")
+    )
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/h3-package", isDirectory: true),
+      outputDirectory: root
+    )
+    var sent: [String: Any]?
+    for try await event in provider.events(
+      for: GenerationRequest(
+        kind: .video,
+        prompt: "A recoverable clip",
+        duration: 5,
+        recovery: recovery
+      )
+    ) {
+      if case .progress(let phase, _) = event,
+        let data = phase.data(using: .utf8),
+        let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        sent = decoded
+      }
+    }
+    let generation = try #require(sent)
+    let checkpoint = try #require(generation["checkpoint"] as? [String: Any])
+    #expect((checkpoint["fileURL"] as? String)?.hasSuffix("/denoiser.h3ckpt") == true)
+    #expect((checkpoint["fingerprint"] as? String)?.count == 64)
+  }
+
+  @Test("A recoverable job relaunches the helper once after an unexpected exit")
+  func recoverableJobRestartsTheHelper() async throws {
+    let marker = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleCrashOnce-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: marker) }
+    let session = fakeEngineSession(arguments: ["--crash-once-file", marker.path])
+    defer { session.shutdown() }
+    let recoveryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleRestartRecovery-\(UUID().uuidString)", isDirectory: true)
+    let recovery = GenerationRecoveryContext(
+      jobID: UUID(),
+      directoryURL: recoveryRoot,
+      outputURL: recoveryRoot.appendingPathComponent("output.mp4")
+    )
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/h3-package", isDirectory: true)
+    )
+    var completed = false
+    for try await event in provider.events(
+      for: GenerationRequest(
+        kind: .video,
+        prompt: "Restart fixture",
+        duration: 1,
+        recovery: recovery
+      )
+    ) {
+      if case .completed = event { completed = true }
+    }
+    #expect(completed)
+    #expect(session.helperLaunchCount == 2)
+  }
+
   @Test("A missing helper produces a useful error")
   func missingExecutable() async {
     let client = EngineProcessClient(
@@ -61,6 +201,28 @@ struct EngineClientTests {
     )
     #expect(report.supportsGeneration)
     #expect(session.processIdentifier == first)
+  }
+
+  @Test("Completing a generation does not cancel the shared session")
+  func completedGenerationLeavesSessionReadyForTheNextJob() async throws {
+    let session = fakeEngineSession(arguments: ["--exit-on-idle-cancel"])
+    defer { session.shutdown() }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/model", isDirectory: true)
+    )
+
+    for prompt in ["First queued job", "Second queued job"] {
+      var completed = false
+      for try await event in provider.events(
+        for: GenerationRequest(kind: .video, prompt: prompt, duration: 1)
+      ) {
+        if case .completed = event { completed = true }
+      }
+      #expect(completed)
+    }
+
+    #expect(session.helperLaunchCount == 1)
   }
 
   @Test("Cancelling generation keeps the helper process alive")

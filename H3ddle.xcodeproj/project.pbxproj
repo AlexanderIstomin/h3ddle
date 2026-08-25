@@ -55,6 +55,7 @@
 		E16BDDB3D50E74C60BC7381B /* H3ddleEngineProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 8916055035142DBA446A0BE3 /* H3ddleEngineProtocol */; };
 		E88235986A061E97604DC337 /* H3ddleCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F420D87DF957DDFAD4E5936 /* H3ddleCore */; };
 		EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */; };
+		F33C09321CB649B9DEDA7292 /* GenerationQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B7E503DAA338E52D9D4560 /* GenerationQueueView.swift */; };
 		F4EB56F215F9718964DBB153 /* TimelineAppendMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DA773D7D30C51874013C19 /* TimelineAppendMenu.swift */; };
 /* End PBXBuildFile section */
 
@@ -82,6 +83,7 @@
 		3F2B986171DE15927AA8BA6A /* FontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontCatalog.swift; sourceTree = "<group>"; };
 		3FCA3D3C6ED1AA4E588C7A38 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		43B65284F9D9F37F44F8B0EC /* ProjectSettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSettingsPanel.swift; sourceTree = "<group>"; };
+		45B7E503DAA338E52D9D4560 /* GenerationQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationQueueView.swift; sourceTree = "<group>"; };
 		4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewport.swift; sourceTree = "<group>"; };
 		478777F017228F58ABA67D3B /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		4A2455B594CABE3E74A707D0 /* LocalImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImagePreview.swift; sourceTree = "<group>"; };
@@ -147,6 +149,7 @@
 		221BB1230E5FE4AE9565DD11 /* GenerateStudio */ = {
 			isa = PBXGroup;
 			children = (
+				45B7E503DAA338E52D9D4560 /* GenerationQueueView.swift */,
 				CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */,
 			);
 			path = GenerateStudio;
@@ -492,6 +495,7 @@
 				514D86AC0E8FBB4ECB5669E0 /* FontCatalog.swift in Sources */,
 				4143C0887613C548157CE456 /* GeneratedAssetPreview.swift in Sources */,
 				EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */,
+				F33C09321CB649B9DEDA7292 /* GenerationQueueView.swift in Sources */,
 				3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */,
 				C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */,
 				A87CED10762409A020D57F8C /* LocalImagePreview.swift in Sources */,
@@ -547,7 +551,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.7;
+				MARKETING_VERSION = 0.7.8;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;
@@ -572,7 +576,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.7.7;
+				MARKETING_VERSION = 0.7.8;
 				PRODUCT_BUNDLE_IDENTIFIER = app.h3ddle.desktop;
 				PRODUCT_NAME = H3ddle;
 				SDKROOT = macosx;

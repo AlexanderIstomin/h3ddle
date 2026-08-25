@@ -162,6 +162,10 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// True only after the user accepts the high unified-memory warning for an
   /// LTX request. The engine independently enforces the same estimate.
   public var allowsLTXMemoryOvercommit: Bool?
+  /// Present only while an H3 job is recoverable. The checkpoint payload is
+  /// engine-owned; this context gives the app a stable job and output across
+  /// helper or application restarts.
+  public var recovery: GenerationRecoveryContext?
 
   public init(
     kind: GenerationKind,
@@ -187,7 +191,8 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     firstFrameURL: URL? = nil,
     lastFrameURL: URL? = nil,
     referenceImageURLs: [URL] = [],
-    allowsLTXMemoryOvercommit: Bool = false
+    allowsLTXMemoryOvercommit: Bool = false,
+    recovery: GenerationRecoveryContext? = nil
   ) {
     self.kind = kind
     self.audioEngine = audioEngine
@@ -214,6 +219,19 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.referenceImageURLs = Array(
       referenceImageURLs.prefix(EngineGenerationRequest.referenceImageLimit))
     self.allowsLTXMemoryOvercommit = allowsLTXMemoryOvercommit
+    self.recovery = recovery
+  }
+}
+
+public struct GenerationRecoveryContext: Hashable, Codable, Sendable {
+  public var jobID: UUID
+  public var directoryURL: URL
+  public var outputURL: URL
+
+  public init(jobID: UUID, directoryURL: URL, outputURL: URL) {
+    self.jobID = jobID
+    self.directoryURL = directoryURL
+    self.outputURL = outputURL
   }
 }
 
