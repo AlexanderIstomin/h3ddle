@@ -82,10 +82,21 @@ final class H3ddleUITests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 8)
     )
-    XCTAssertTrue(app.buttons["generation-queue-run-all"].exists)
-    XCTAssertTrue(app.buttons["generation-queue-cancel-all"].exists)
+    XCTAssertTrue(
+      app.buttons["generation-queue-run-all"].waitForExistence(timeout: 8),
+      "the queue run-all control never became accessible"
+    )
+    XCTAssertTrue(
+      app.buttons["generation-queue-cancel-all"].waitForExistence(timeout: 8),
+      "the queue cancel-all control never became accessible"
+    )
 
-    app.buttons["generation-queue-close"].click()
+    let close = app.buttons["generation-queue-close"]
+    XCTAssertTrue(
+      close.waitForExistence(timeout: 8),
+      "the queue close control never became accessible"
+    )
+    close.click()
     XCTAssertFalse(
       app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 1)
     )
