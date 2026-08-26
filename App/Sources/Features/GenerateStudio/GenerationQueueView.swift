@@ -145,8 +145,15 @@ struct GenerationQueueView: View {
         model.showsGenerationQueue = false
       } label: {
         Image(systemName: "xmark")
+          .font(.system(size: 10, weight: .semibold))
+          .frame(width: 26, height: 26)
+          .background(H3Color.controlFill)
+          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .frame(width: H3Hit.minimumTarget, height: H3Hit.minimumTarget)
+          .contentShape(Rectangle())
       }
-      .buttonStyle(H3IconButtonStyle(size: 30))
+      .buttonStyle(.plain)
+      .foregroundStyle(H3Color.textSecondary)
       .help("Close Queue")
       .accessibilityIdentifier("generation-queue-close")
     }

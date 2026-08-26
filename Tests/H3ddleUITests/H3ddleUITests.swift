@@ -96,10 +96,7 @@ final class H3ddleUITests: XCTestCase {
       close.waitForExistence(timeout: 8),
       "the queue close control never became accessible"
     )
-    // macOS 15 XCTest can report a visible SwiftUI button at the trailing
-    // window edge as non-hittable. Clicking its resolved frame still exercises
-    // the real control, and the assertion below verifies that the action ran.
-    close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    close.click()
     XCTAssertFalse(
       app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 1)
     )
