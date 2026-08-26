@@ -98,6 +98,7 @@ struct GenerationQueueView: View {
     .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
     .background(H3Color.surface)
     .foregroundStyle(H3Color.textPrimary)
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("generation-queue")
     .alert(item: $pausedJobPendingEdit) { job in
       Alert(
