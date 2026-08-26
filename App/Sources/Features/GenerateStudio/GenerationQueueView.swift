@@ -98,8 +98,6 @@ struct GenerationQueueView: View {
     .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
     .background(H3Color.surface)
     .foregroundStyle(H3Color.textPrimary)
-    .accessibilityElement(children: .contain)
-    .accessibilityIdentifier("generation-queue")
     .alert(item: $pausedJobPendingEdit) { job in
       Alert(
         title: Text("Edit paused generation?"),
@@ -122,6 +120,7 @@ struct GenerationQueueView: View {
       Text("GENERATION QUEUE")
         .font(.system(size: 10, weight: .bold, design: .monospaced))
         .tracking(1.2)
+        .accessibilityIdentifier("generation-queue")
       Spacer()
       Button {
         model.runAllGenerationJobs()
