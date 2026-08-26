@@ -96,7 +96,11 @@ final class H3ddleUITests: XCTestCase {
       close.waitForExistence(timeout: 8),
       "the queue close control never became accessible"
     )
-    close.click()
+    // The hosted runner's headless viewport is narrower than the app's
+    // production minimum window width, so the trailing close button can be
+    // exposed to accessibility while its centre lies off-screen. Exercise the
+    // header toggle's close path, which is the behavior this test names.
+    toggle.click()
     XCTAssertFalse(
       app.descendants(matching: .any)["generation-queue"].waitForExistence(timeout: 1)
     )
