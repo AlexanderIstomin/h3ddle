@@ -454,15 +454,44 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
 
   @discardableResult
   public mutating func appendAudio(_ asset: AssetReference) throws -> AudioItem {
+    try placeAudio(asset, at: audioTrackEnd)
+  }
+
+  @discardableResult
+  public mutating func insertVisual(
+    _ asset: AssetReference,
+    at index: Int,
+    includesNativeAudio: Bool? = nil
+  ) throws -> VisualItem {
+    guard asset.kind.isVisual else {
+      throw TimelineError.expectedVisualAsset
+    }
+    let item = VisualItem(
+      assetID: asset.id,
+      duration: asset.duration,
+      includesNativeAudio: includesNativeAudio ?? (asset.kind == .video)
+    )
+    let dest = min(max(0, index), visualItems.count)
+    visualItems.insert(item, at: dest)
+    sanitizeVisualTransitions()
+    return item
+  }
+
+  @discardableResult
+  public mutating func placeAudio(
+    _ asset: AssetReference,
+    at startTime: TimeInterval
+  ) throws -> AudioItem {
     guard asset.kind == .audio else {
       throw TimelineError.expectedAudioAsset
     }
     let item = AudioItem(
       assetID: asset.id,
-      startTime: audioTrackEnd,
+      startTime: max(0, startTime),
       duration: asset.duration
     )
     audioItems.append(item)
+    setAudioStart(item.id, startTime: startTime)
     return item
   }
 
@@ -978,9 +1007,39 @@ public enum TimelineReorderMath: Sendable {
     return dest
   }
 
+  /// Time of the insertion caret among remaining clips. Destination `0` is the
+  /// 0s mark, not the first remaining clip's start — that clip may sit later.
+  public static func insertionTime(
+    dest: Int,
+    others: [(start: TimeInterval, duration: TimeInterval)]
+  ) -> TimeInterval {
+    if dest <= 0 { return 0 }
+    if dest >= others.count {
+      return others.last.map { $0.start + $0.duration } ?? 0
+    }
+    return others[dest].start
+  }
+
   public static func audioOrder(_ lhs: AudioItem, _ rhs: AudioItem) -> Bool {
     if lhs.startTime != rhs.startTime { return lhs.startTime < rhs.startTime }
     return lhs.id.uuidString < rhs.id.uuidString
+  }
+}
+
+/// Playhead behavior when a timeline clip is selected.
+public enum TimelineSelection: Sendable {
+  /// Time to seek to after selecting a clip. `nil` when the playhead already
+  /// sits inside `[start, start + duration)`.
+  public static func seekTime(
+    playhead: TimeInterval,
+    start: TimeInterval,
+    duration: TimeInterval
+  ) -> TimeInterval? {
+    let end = start + max(0, duration)
+    if playhead >= start && playhead < end {
+      return nil
+    }
+    return start
   }
 }
 

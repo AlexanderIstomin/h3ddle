@@ -14,6 +14,11 @@ import Foundation
 /// its name. Only the header is read — a few kilobytes off the front of a
 /// twenty-gigabyte file.
 public enum ModelFolderInspection {
+  public enum FastH3Attention: String, Hashable, Codable, Sendable {
+    case dense
+    case vsa
+  }
+
   /// Names the engine looks for, most specific first.
   static let transformerNames = [
     "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -24,9 +29,33 @@ public enum ModelFolderInspection {
     for name in transformerNames {
       let url = directory.appendingPathComponent(name, isDirectory: false)
       guard let metadata = safetensorsMetadata(at: url) else { continue }
+      if metadata["h3.generation_profile"] == "fasth3" { return .fastH3 }
       if isDistilled(metadata) { return .turbo }
     }
     return .standard
+  }
+
+  /// Which FastH3 attention checkpoint a converted folder contains. The
+  /// converter records both a readable name and a format version; accepting
+  /// the version makes early converted packages just as discoverable.
+  public static func fastH3Attention(at directory: URL) -> FastH3Attention? {
+    for name in transformerNames {
+      let url = directory.appendingPathComponent(name, isDirectory: false)
+      guard let metadata = safetensorsMetadata(at: url),
+        metadata["h3.generation_profile"] == "fasth3"
+      else { continue }
+      if let raw = metadata["h3.fasth3.attention"],
+        let attention = FastH3Attention(rawValue: raw)
+      {
+        return attention
+      }
+      switch metadata["h3.fasth3.version"] {
+      case "1": return .dense
+      case "2": return .vsa
+      default: continue
+      }
+    }
+    return nil
   }
 
   /// A merge records the adapter it folded in; strength 0 means the file was
@@ -61,6 +90,33 @@ public enum ModelFolderInspection {
       let metadata = object["__metadata__"] as? [String: String]
     else { return nil }
     return metadata
+  }
+}
+
+public struct FastH3ModelOption: Hashable, Sendable {
+  public var id: String
+  public var attention: ModelFolderInspection.FastH3Attention
+
+  public init(id: String, attention: ModelFolderInspection.FastH3Attention) {
+    self.id = id
+    self.attention = attention
+  }
+}
+
+/// Chooses VSA within the FastH3 family without replacing an explicit choice
+/// of a different model family. Dense remains the fallback when VSA is not
+/// present and remains manually selectable after the one-time default.
+public enum FastH3ModelSelection {
+  public static func preferredID(
+    among options: [FastH3ModelOption],
+    selectedID: String?
+  ) -> String? {
+    guard selectedID == nil || options.contains(where: { $0.id == selectedID }) else {
+      return selectedID
+    }
+    return options.first(where: { $0.attention == .vsa })?.id
+      ?? selectedID
+      ?? options.first?.id
   }
 }
 

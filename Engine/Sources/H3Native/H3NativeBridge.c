@@ -64,6 +64,10 @@ int h3ddle_h3_model_supports_generation(const h3_model_info *model) {
     return model ? model->generation_supported : 0;
 }
 
+int h3ddle_h3_model_is_fasth3(const h3_model_info *model) {
+    return model && model->generation_profile == H3_MODEL_PROFILE_FASTH3;
+}
+
 /* Writes 16-bit stereo PCM. The samples arrive channel-major and unclamped;
  * clipping rather than normalising matches the reference, which would
  * otherwise quietly change the level of every generation. */

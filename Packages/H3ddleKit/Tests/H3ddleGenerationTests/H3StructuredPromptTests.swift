@@ -4,16 +4,29 @@ import Testing
 
 @Suite("Structured prompts")
 struct H3StructuredPromptTests {
-  @Test("A bare prompt gains the schema and the no-music marker")
+  @Test("A bare prompt gains the complete schema and no-audio markers")
   func wrapsBareProse() {
     let composed = H3StructuredPrompt.compose(body: "A cat sits on a windowsill.")
     #expect(
       composed == """
         integrated_multimodal_description: [Shot 1] A cat sits on a windowsill.
 
+        overall_soundscape: N/A
+
         non_diegetic_music: N/A
         """
     )
+  }
+
+  @Test("Whitespace-only audio fields use the guide's N/A markers")
+  func emptyAudioFieldsUseNAMarkers() {
+    let composed = H3StructuredPrompt.compose(
+      body: "A quiet portrait.",
+      soundscape: "  \n ",
+      music: "\t"
+    )
+    #expect(composed.contains("overall_soundscape: N/A"))
+    #expect(composed.hasSuffix("non_diegetic_music: N/A"))
   }
 
   @Test("A provided soundscape becomes its own field")

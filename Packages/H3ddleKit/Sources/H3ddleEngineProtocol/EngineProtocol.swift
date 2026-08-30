@@ -486,6 +486,31 @@ public enum EngineGenerationQuality: String, CaseIterable, Codable, Sendable {
   }
 }
 
+/// Runtime contract declared by the selected H3 weights. This is separate
+/// from a quality preset: changing resolution does not turn a four-call
+/// distilled checkpoint into the older Beta-scheduled Turbo model.
+public enum EngineH3ModelProfile: String, Codable, Sendable {
+  case standard
+  case turbo
+  case fastH3
+}
+
+/// The public shape boundary of FastH3 Preview v1. The checkpoint was released
+/// for 5--15 second clips and FastVideo's smallest documented Apple-Silicon
+/// example uses a 480-pixel short edge. Smaller plumbing previews can complete
+/// successfully while producing noise, so both the app and worker treat this
+/// as a model contract rather than a quality recommendation.
+public enum EngineFastH3PreviewContract {
+  public static let minimumShortEdge = 480
+  public static let minimumFrames = 124
+  public static let maximumFrames = 362
+
+  public static func supports(width: Int, height: Int, frames: Int) -> Bool {
+    min(width, height) >= minimumShortEdge
+      && (minimumFrames...maximumFrames).contains(frames)
+  }
+}
+
 public struct EngineCheckpointOptions: Hashable, Codable, Sendable {
   public var fileURL: URL
   /// Lowercase SHA-256 over every immutable request and model input.
@@ -533,6 +558,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// Space sigmas at Beta(0.6, 0.6) quantiles instead of the released linear
   /// grid. Step-distilled turbo checkpoints are trained against this spacing.
   public var useBetaSchedule: Bool
+  /// The schedule and conditioning contract of the selected H3 checkpoint.
+  /// Older protocol clients decode as `.standard`.
+  public var h3ModelProfile: EngineH3ModelProfile
   /// Random-stream seed for the native generators; nil keeps the engine
   /// default (42). Identical seed + settings reproduce a generation.
   public var seed: UInt64?
@@ -593,6 +621,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     blockCache: Bool = false,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
+    h3ModelProfile: EngineH3ModelProfile = .standard,
     seed: UInt64? = nil,
     sourceStrength: Double? = nil,
     canvasWidth: Int? = nil,
@@ -619,6 +648,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.blockCache = blockCache
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
+    self.h3ModelProfile = h3ModelProfile
     self.seed = seed
     self.sourceStrength = sourceStrength
     self.canvasWidth = canvasWidth
@@ -647,6 +677,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case blockCache
     case previewDenoise
     case useBetaSchedule
+    case h3ModelProfile
     case seed
     case sourceStrength
     case canvasWidth
@@ -681,6 +712,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     previewDenoise = try container.decodeIfPresent(Bool.self, forKey: .previewDenoise) ?? false
     useBetaSchedule =
       try container.decodeIfPresent(Bool.self, forKey: .useBetaSchedule) ?? false
+    h3ModelProfile =
+      try container.decodeIfPresent(EngineH3ModelProfile.self, forKey: .h3ModelProfile)
+      ?? .standard
     seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
     sourceStrength = try container.decodeIfPresent(
       Double.self, forKey: .sourceStrength)
@@ -714,6 +748,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     try container.encode(blockCache, forKey: .blockCache)
     try container.encode(previewDenoise, forKey: .previewDenoise)
     try container.encode(useBetaSchedule, forKey: .useBetaSchedule)
+    if h3ModelProfile != .standard {
+      try container.encode(h3ModelProfile, forKey: .h3ModelProfile)
+    }
     try container.encodeIfPresent(seed, forKey: .seed)
     try container.encodeIfPresent(sourceStrength, forKey: .sourceStrength)
     try container.encodeIfPresent(canvasWidth, forKey: .canvasWidth)
@@ -796,6 +833,17 @@ public struct EngineResidency: Hashable, Codable, Sendable {
   }
 }
 
+/// One inexpensive resource sample from the helper process. The app retains
+/// the maximum across a run; keeping the wire value instantaneous also makes
+/// it useful for diagnosing phase-specific pressure later.
+public struct EnginePerformanceSample: Hashable, Codable, Sendable {
+  public var physicalFootprintBytes: UInt64?
+
+  public init(physicalFootprintBytes: UInt64? = nil) {
+    self.physicalFootprintBytes = physicalFootprintBytes
+  }
+}
+
 public struct EngineEvent: Hashable, Codable, Sendable {
   public var protocolVersion: Int
   public var requestID: UUID
@@ -804,6 +852,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
   public var capabilities: EngineCapabilities?
   public var model: EngineModelReport?
   public var residency: EngineResidency?
+  public var performance: EnginePerformanceSample?
   public var phase: String?
   public var fractionComplete: Double?
   public var outputURL: URL?
@@ -818,6 +867,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
     capabilities: EngineCapabilities? = nil,
     model: EngineModelReport? = nil,
     residency: EngineResidency? = nil,
+    performance: EnginePerformanceSample? = nil,
     phase: String? = nil,
     fractionComplete: Double? = nil,
     outputURL: URL? = nil,
@@ -831,6 +881,7 @@ public struct EngineEvent: Hashable, Codable, Sendable {
     self.capabilities = capabilities
     self.model = model
     self.residency = residency
+    self.performance = performance
     self.phase = phase
     self.fractionComplete = fractionComplete.map { min(max($0, 0), 1) }
     self.outputURL = outputURL

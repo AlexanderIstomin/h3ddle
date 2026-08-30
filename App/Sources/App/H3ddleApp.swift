@@ -77,7 +77,12 @@ struct H3ddleApp: App {
     }
     .defaultSize(width: 1_280, height: 820)
     .commands {
-      CommandGroup(replacing: .newItem) {}
+      CommandGroup(replacing: .newItem) {
+        Button("New Project") {
+          model.createNewProject()
+        }
+        .keyboardShortcut("n")
+      }
     }
   }
 }

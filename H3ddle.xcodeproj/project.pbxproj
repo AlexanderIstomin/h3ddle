@@ -7,13 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0CE9B3892FCC7CD2B183D9AF /* LeftRailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B96495653300CEA2E79C758C /* LeftRailView.swift */; };
 		0D81F2CA59DE2D3AA339DDF8 /* H3ddleEngineClient in Frameworks */ = {isa = PBXBuildFile; productRef = 5B5B1FCE86203351735AC704 /* H3ddleEngineClient */; };
+		0DDA0B5E392A8FB264453E9B /* H3ddleUpscaling in Frameworks */ = {isa = PBXBuildFile; productRef = E7A1A98302B19E1BB01B884D /* H3ddleUpscaling */; };
 		11C62E1DE57A2B37750329AA /* H3ddleDesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = 53643B1E43A41BCDA80826AC /* H3ddleDesignSystem */; };
 		1A11C0FCE6740ACFF083AB72 /* CanvasGizmoGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */; };
 		1FD10BD8234B5B28446C7C97 /* CanvasViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4746C6AEC64D77D4B9D464CF /* CanvasViewport.swift */; };
 		2340DB253E47E718A1EAE4C8 /* CanvasInteractionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */; };
 		2F326CFAF21C4DD0992E083F /* TimeRulerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */; };
 		32E499B7269BB7EBFDE89192 /* CanvasGizmoOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */; };
+		35564165B46047480D13411F /* LibraryPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E86523D40E3BF492E1D6E0 /* LibraryPanelView.swift */; };
 		388EF6D763445F890EE23922 /* ExportModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDE22F1F6245036A1DE4230C /* ExportModalView.swift */; };
 		38E4D5B4048DAA49D577FA4D /* CanvasGizmoCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30B22A3AFAAEC2DCE86EFEE /* CanvasGizmoCursor.swift */; };
 		3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */; };
@@ -31,12 +34,17 @@
 		6CF1280CDCAFBA1285052629 /* ProgramPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B591ADCAAB888D3B65A8C2B /* ProgramPlaybackController.swift */; };
 		7157283517D7926DAFFA6D6E /* ExportControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A243FE7139311CDC8EA5CE1C /* ExportControlsView.swift */; };
 		73C88559CDE06B206D8097EC /* TransportBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667AFE15DAB75F795768ED4F /* TransportBarView.swift */; };
+		7873E2D34ECA756A3D48FF9A /* UpscalePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAAAE723E5E7041CC31C77A3 /* UpscalePanelView.swift */; };
 		8703DF36598D5F6DDC69697A /* H3ddleGeneration in Frameworks */ = {isa = PBXBuildFile; productRef = 536EF32BBB28C07D9EABEE98 /* H3ddleGeneration */; };
 		8F8AD1AF67979F6F90EA4B85 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A6AF6F040C7256464607C94 /* AppModel.swift */; };
 		9098009C6BDCA4F8A02BFE44 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AAFB2977E8BADEB471E371 /* ModelSettingsView.swift */; };
 		9A494F4E5CF63338D4A4CE53 /* CanvasMediaSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DFFC4BC7C71D5D3E9C35E2 /* CanvasMediaSize.swift */; };
+		9D5F93B8B3220E1A48337145 /* AssetFileExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 025008484A5328205BAADE14 /* AssetFileExporter.swift */; };
 		9E78D049843D79C6B77799A5 /* DockAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135192F096FB7C2428444B61 /* DockAttention.swift */; };
 		9F2F6176508A41C319B8787B /* EffectsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95DFE38643B882953196C533 /* EffectsPanelView.swift */; };
+		A0411074EE0EF9E63A9FEF4E /* LibraryInlinePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00E2A64C389EB7DF335B7AC /* LibraryInlinePreview.swift */; };
+		A5EC4F392C3883B7CFD01E6D /* AssetUpscalingJob.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D533B29A74DE8F334C4621F /* AssetUpscalingJob.swift */; };
+		A6DD7D001FEA72C730959484 /* EmptyPanelPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20C7C28D5962E703F04793E3 /* EmptyPanelPlaceholder.swift */; };
 		A72D97AED6C7E11D25D87D04 /* TimelineTransitionHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7041DEC2A89781B53AB90DC7 /* TimelineTransitionHandle.swift */; };
 		A87CED10762409A020D57F8C /* LocalImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A2455B594CABE3E74A707D0 /* LocalImagePreview.swift */; };
 		AC44AEDF7277AC76B56F2D03 /* TrackHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2648406FAFCA8AB60A97EEE9 /* TrackHeaderView.swift */; };
@@ -56,7 +64,9 @@
 		E88235986A061E97604DC337 /* H3ddleCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F420D87DF957DDFAD4E5936 /* H3ddleCore */; };
 		EBBEE876E6A0B8AAB63AE897 /* GenerationNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */; };
 		F33C09321CB649B9DEDA7292 /* GenerationQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B7E503DAA338E52D9D4560 /* GenerationQueueView.swift */; };
+		F4E72ED2132D853005B41196 /* AdjustPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 237FEE9B2869E2804713AA2F /* AdjustPanelView.swift */; };
 		F4EB56F215F9718964DBB153 /* TimelineAppendMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DA773D7D30C51874013C19 /* TimelineAppendMenu.swift */; };
+		FD8C5DCEA327A493BE66DA48 /* AssetUpscaleControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEEF6D49725FBE3EBAA0ED8C /* AssetUpscaleControls.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,12 +80,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		025008484A5328205BAADE14 /* AssetFileExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetFileExporter.swift; sourceTree = "<group>"; };
 		0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H3ddleApp.swift; sourceTree = "<group>"; };
 		08AAFB2977E8BADEB471E371 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		09DA51F853EE12317EE645B8 /* TimelineMediaDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineMediaDrop.swift; sourceTree = "<group>"; };
 		0B591ADCAAB888D3B65A8C2B /* ProgramPlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramPlaybackController.swift; sourceTree = "<group>"; };
 		135192F096FB7C2428444B61 /* DockAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockAttention.swift; sourceTree = "<group>"; };
 		1B0A479A719F5C5DCED8AB26 /* TransitionsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionsPanelView.swift; sourceTree = "<group>"; };
+		20C7C28D5962E703F04793E3 /* EmptyPanelPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyPanelPlaceholder.swift; sourceTree = "<group>"; };
+		237FEE9B2869E2804713AA2F /* AdjustPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdjustPanelView.swift; sourceTree = "<group>"; };
 		2547ABB5B8079987008EBA8B /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		2648406FAFCA8AB60A97EEE9 /* TrackHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackHeaderView.swift; sourceTree = "<group>"; };
 		2A6AF6F040C7256464607C94 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -92,6 +105,7 @@
 		667AFE15DAB75F795768ED4F /* TransportBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarView.swift; sourceTree = "<group>"; };
 		69CF5EDC9BBD36B9A69334DE /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		69F35D81C9968F32C725B215 /* EditorSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSession.swift; sourceTree = "<group>"; };
+		6D533B29A74DE8F334C4621F /* AssetUpscalingJob.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetUpscalingJob.swift; sourceTree = "<group>"; };
 		7041DEC2A89781B53AB90DC7 /* TimelineTransitionHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineTransitionHandle.swift; sourceTree = "<group>"; };
 		7C752B485E458783681F338F /* SecondaryClickProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryClickProbe.swift; sourceTree = "<group>"; };
 		7D0B6D125B77E05E7085FB2D /* AudioPreviewPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPreviewPlayer.swift; sourceTree = "<group>"; };
@@ -99,18 +113,23 @@
 		84E7E87AF0B2CCE306CCA94F /* GeneratedAssetPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedAssetPreview.swift; sourceTree = "<group>"; };
 		95DFE38643B882953196C533 /* EffectsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectsPanelView.swift; sourceTree = "<group>"; };
 		9B7724423128E4923FB4119B /* ProgramCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramCanvasView.swift; sourceTree = "<group>"; };
+		A00E2A64C389EB7DF335B7AC /* LibraryInlinePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryInlinePreview.swift; sourceTree = "<group>"; };
 		A243FE7139311CDC8EA5CE1C /* ExportControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportControlsView.swift; sourceTree = "<group>"; };
+		A4E86523D40E3BF492E1D6E0 /* LibraryPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryPanelView.swift; sourceTree = "<group>"; };
 		A96AAA897DBD5956E2484CCB /* CanvasGizmoGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoGeometry.swift; sourceTree = "<group>"; };
 		A9DA773D7D30C51874013C19 /* TimelineAppendMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineAppendMenu.swift; sourceTree = "<group>"; };
 		AF565E218B6B2DD1C5907376 /* TimelineEffectPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineEffectPill.swift; sourceTree = "<group>"; };
+		B96495653300CEA2E79C758C /* LeftRailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftRailView.swift; sourceTree = "<group>"; };
 		C785C953052A582EB5B9679C /* CanvasInteractionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasInteractionProbe.swift; sourceTree = "<group>"; };
 		C78ACDBA5C3E48FC3FD91769 /* H3ddleKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = H3ddleKit; path = Packages/H3ddleKit; sourceTree = SOURCE_ROOT; };
+		CAAAE723E5E7041CC31C77A3 /* UpscalePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscalePanelView.swift; sourceTree = "<group>"; };
 		CF7CAFD2349C2AA0D78B3905 /* GenerationStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationStudioView.swift; sourceTree = "<group>"; };
 		CFB197A56139F880CD4A81C7 /* H3ddle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = H3ddle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D29A52016F6B64B97F33127C /* TextInspectorPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInspectorPanel.swift; sourceTree = "<group>"; };
 		D30B22A3AFAAEC2DCE86EFEE /* CanvasGizmoCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoCursor.swift; sourceTree = "<group>"; };
 		D6E0BC57D5BE4A0B21000E94 /* TimeRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeRulerView.swift; sourceTree = "<group>"; };
 		D9672B7D46A634F90D81DD4C /* CanvasGizmoOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasGizmoOverlay.swift; sourceTree = "<group>"; };
+		DEEF6D49725FBE3EBAA0ED8C /* AssetUpscaleControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetUpscaleControls.swift; sourceTree = "<group>"; };
 		DF87CD329EDE32AD0A1ACB8F /* H3ddleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = H3ddleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E9E1D322A9044F5C380D736E /* VoiceLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLibrary.swift; sourceTree = "<group>"; };
 		EDE22F1F6245036A1DE4230C /* ExportModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportModalView.swift; sourceTree = "<group>"; };
@@ -132,6 +151,7 @@
 				8703DF36598D5F6DDC69697A /* H3ddleGeneration in Frameworks */,
 				6B834E46A8D170455DA6CF70 /* H3ddleMedia in Frameworks */,
 				59EFB9D92D27AA1D80968D0B /* H3ddleModels in Frameworks */,
+				0DDA0B5E392A8FB264453E9B /* H3ddleUpscaling in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -168,6 +188,8 @@
 			isa = PBXGroup;
 			children = (
 				2A6AF6F040C7256464607C94 /* AppModel.swift */,
+				025008484A5328205BAADE14 /* AssetFileExporter.swift */,
+				6D533B29A74DE8F334C4621F /* AssetUpscalingJob.swift */,
 				135192F096FB7C2428444B61 /* DockAttention.swift */,
 				31D69FB8AC2D17F344B9B7DC /* GenerationNotifier.swift */,
 				0758D67E6F0F4CB63DBC17C6 /* H3ddleApp.swift */,
@@ -223,6 +245,18 @@
 				EDE22F1F6245036A1DE4230C /* ExportModalView.swift */,
 			);
 			path = Export;
+			sourceTree = "<group>";
+		};
+		817AC94F569FB4D2C28A21DE /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				237FEE9B2869E2804713AA2F /* AdjustPanelView.swift */,
+				DEEF6D49725FBE3EBAA0ED8C /* AssetUpscaleControls.swift */,
+				A00E2A64C389EB7DF335B7AC /* LibraryInlinePreview.swift */,
+				A4E86523D40E3BF492E1D6E0 /* LibraryPanelView.swift */,
+				CAAAE723E5E7041CC31C77A3 /* UpscalePanelView.swift */,
+			);
+			path = Library;
 			sourceTree = "<group>";
 		};
 		885F4E64CC7BE2EC1498D8DF /* Config */ = {
@@ -307,6 +341,7 @@
 				DFE847E92DE78660F6C2484D /* Effects */,
 				6B1ACFFABCD6CFE2245D0F51 /* Export */,
 				221BB1230E5FE4AE9565DD11 /* GenerateStudio */,
+				817AC94F569FB4D2C28A21DE /* Library */,
 				B6A12FF9DA64FC37477DE38A /* ModelSettings */,
 				D6A24200836533225F4B134E /* Project */,
 				3B913D10FA2E7550B189AE4B /* Text */,
@@ -332,7 +367,9 @@
 				470370CCAFF7AA280BB3F416 /* Timeline */,
 				69F35D81C9968F32C725B215 /* EditorSession.swift */,
 				2547ABB5B8079987008EBA8B /* EditorView.swift */,
+				20C7C28D5962E703F04793E3 /* EmptyPanelPlaceholder.swift */,
 				84E7E87AF0B2CCE306CCA94F /* GeneratedAssetPreview.swift */,
+				B96495653300CEA2E79C758C /* LeftRailView.swift */,
 				F7B3ED39A78FF1C070FC68E7 /* WindowChromeInstaller.swift */,
 			);
 			path = Editor;
@@ -390,6 +427,7 @@
 				536EF32BBB28C07D9EABEE98 /* H3ddleGeneration */,
 				D97CC2149317A2A032A5CB30 /* H3ddleMedia */,
 				80AEEEDA403FB26BDE78E158 /* H3ddleModels */,
+				E7A1A98302B19E1BB01B884D /* H3ddleUpscaling */,
 			);
 			productName = H3ddle;
 			productReference = CFB197A56139F880CD4A81C7 /* H3ddle.app */;
@@ -478,7 +516,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F4E72ED2132D853005B41196 /* AdjustPanelView.swift in Sources */,
 				8F8AD1AF67979F6F90EA4B85 /* AppModel.swift in Sources */,
+				9D5F93B8B3220E1A48337145 /* AssetFileExporter.swift in Sources */,
+				FD8C5DCEA327A493BE66DA48 /* AssetUpscaleControls.swift in Sources */,
+				A5EC4F392C3883B7CFD01E6D /* AssetUpscalingJob.swift in Sources */,
 				CC4F9A5AA9DD7E28C23E15FA /* AudioPreviewPlayer.swift in Sources */,
 				38E4D5B4048DAA49D577FA4D /* CanvasGizmoCursor.swift in Sources */,
 				1A11C0FCE6740ACFF083AB72 /* CanvasGizmoGeometry.swift in Sources */,
@@ -490,6 +532,7 @@
 				45129FAA941B44DFCBD13A6B /* EditorSession.swift in Sources */,
 				B47AB95F0B9991CC8D7BE476 /* EditorView.swift in Sources */,
 				9F2F6176508A41C319B8787B /* EffectsPanelView.swift in Sources */,
+				A6DD7D001FEA72C730959484 /* EmptyPanelPlaceholder.swift in Sources */,
 				7157283517D7926DAFFA6D6E /* ExportControlsView.swift in Sources */,
 				388EF6D763445F890EE23922 /* ExportModalView.swift in Sources */,
 				514D86AC0E8FBB4ECB5669E0 /* FontCatalog.swift in Sources */,
@@ -498,6 +541,9 @@
 				F33C09321CB649B9DEDA7292 /* GenerationQueueView.swift in Sources */,
 				3D7E7EFF52A71036A983F905 /* GenerationStudioView.swift in Sources */,
 				C9A28FFC5001B8CE177CCDF5 /* H3ddleApp.swift in Sources */,
+				0CE9B3892FCC7CD2B183D9AF /* LeftRailView.swift in Sources */,
+				A0411074EE0EF9E63A9FEF4E /* LibraryInlinePreview.swift in Sources */,
+				35564165B46047480D13411F /* LibraryPanelView.swift in Sources */,
 				A87CED10762409A020D57F8C /* LocalImagePreview.swift in Sources */,
 				9098009C6BDCA4F8A02BFE44 /* ModelSettingsView.swift in Sources */,
 				6A8CC1CB3478617D14303D05 /* ProgramCanvasView.swift in Sources */,
@@ -517,6 +563,7 @@
 				AC44AEDF7277AC76B56F2D03 /* TrackHeaderView.swift in Sources */,
 				C2B9C48A2BBE05A72B922929 /* TransitionsPanelView.swift in Sources */,
 				73C88559CDE06B206D8097EC /* TransportBarView.swift in Sources */,
+				7873E2D34ECA756A3D48FF9A /* UpscalePanelView.swift in Sources */,
 				DF3BD1D9C2720C3DE35181F5 /* VoiceLibrary.swift in Sources */,
 				5A053AEC1E6AED63420FA167 /* WindowChromeInstaller.swift in Sources */,
 			);
@@ -807,6 +854,10 @@
 		D97CC2149317A2A032A5CB30 /* H3ddleMedia */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = H3ddleMedia;
+		};
+		E7A1A98302B19E1BB01B884D /* H3ddleUpscaling */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = H3ddleUpscaling;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

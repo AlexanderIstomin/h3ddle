@@ -1,4 +1,5 @@
 import AppKit
+import H3ddleCore
 import H3ddleDesignSystem
 import H3ddleMedia
 import SwiftUI
@@ -7,6 +8,7 @@ struct TimelineMediaDrop: ViewModifier {
   var lane: MediaImportLane
   var model: AppModel
   var accessibilityID: String
+  var onLibraryAsset: ((AssetID, CGPoint) -> Bool)?
 
   @State private var isTargeted = false
 
@@ -28,6 +30,17 @@ struct TimelineMediaDrop: ViewModifier {
         model.receiveDroppedFiles(urls, onto: lane)
       } isTargeted: { hovering in
         isTargeted = hovering && MediaImport.containsCompatible(Self.draggingFileURLs, onto: lane)
+      }
+      .dropDestination(for: String.self) { items, location in
+        guard let raw = items.first, let uuid = UUID(uuidString: raw) else { return false }
+        let id = AssetID(rawValue: uuid)
+        guard let asset = model.project.asset(id: id) else { return false }
+        guard lane.accepts(asset.kind) else { return false }
+        if let onLibraryAsset {
+          return onLibraryAsset(id, location)
+        }
+        model.insertLibraryAsset(id)
+        return true
       }
       // The lane is a drop target that also contains controls of its own.
       // Naming the whole region merged it with the append button inside,
@@ -58,8 +71,16 @@ extension View {
   func timelineMediaDrop(
     lane: MediaImportLane,
     model: AppModel,
-    accessibilityID: String
+    accessibilityID: String,
+    onLibraryAsset: ((AssetID, CGPoint) -> Bool)? = nil
   ) -> some View {
-    modifier(TimelineMediaDrop(lane: lane, model: model, accessibilityID: accessibilityID))
+    modifier(
+      TimelineMediaDrop(
+        lane: lane,
+        model: model,
+        accessibilityID: accessibilityID,
+        onLibraryAsset: onLibraryAsset
+      )
+    )
   }
 }

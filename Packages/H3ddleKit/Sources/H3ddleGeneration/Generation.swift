@@ -147,6 +147,10 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   public var previewDenoise: Bool
   /// Beta(0.6, 0.6) sigma spacing; the schedule turbo checkpoints expect.
   public var useBetaSchedule: Bool
+  /// Schedule and conditioning contract of the selected H3 checkpoint.
+  /// Optional on the persisted queue so jobs written before this field was
+  /// introduced continue to decode; nil has the protocol's standard meaning.
+  public var h3ModelProfile: EngineH3ModelProfile?
   /// Random-stream seed; nil keeps the engine default. Same seed and
   /// settings reproduce a generation.
   public var seed: UInt64?
@@ -184,6 +188,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     blockCache: Bool = false,
     previewDenoise: Bool = false,
     useBetaSchedule: Bool = false,
+    h3ModelProfile: EngineH3ModelProfile = .standard,
     seed: UInt64? = nil,
     sourceStrength: Double? = nil,
     canvasWidth: Int? = nil,
@@ -210,6 +215,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.blockCache = blockCache
     self.previewDenoise = previewDenoise
     self.useBetaSchedule = useBetaSchedule
+    self.h3ModelProfile = h3ModelProfile
     self.seed = seed
     self.sourceStrength = sourceStrength
     self.canvasWidth = canvasWidth
@@ -237,8 +243,19 @@ public struct GenerationRecoveryContext: Hashable, Codable, Sendable {
 
 public enum GenerationEvent: Hashable, Sendable {
   case progress(phase: String, fractionComplete: Double)
+  /// A lightweight sample from the out-of-process engine. Samples accompany
+  /// existing engine events rather than running a second polling loop.
+  case resourceUsage(GenerationResourceUsage)
   case preview(URL)
   case completed(AssetReference)
+}
+
+public struct GenerationResourceUsage: Hashable, Sendable {
+  public var physicalFootprintBytes: UInt64?
+
+  public init(physicalFootprintBytes: UInt64? = nil) {
+    self.physicalFootprintBytes = physicalFootprintBytes
+  }
 }
 
 public protocol GenerationProvider: Sendable {

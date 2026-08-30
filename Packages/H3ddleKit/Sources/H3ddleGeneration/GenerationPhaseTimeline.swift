@@ -4,7 +4,7 @@ import Foundation
 /// events. H3 runs phases sequentially, so a phase change closes the
 /// previous phase; a phase name may recur and is recorded as a new entry.
 public struct GenerationPhaseTimeline: Hashable, Sendable {
-  public struct Entry: Hashable, Sendable {
+  public struct Entry: Hashable, Codable, Sendable {
     public var phase: String
     public var duration: TimeInterval
 

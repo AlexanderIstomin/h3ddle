@@ -24,13 +24,26 @@
   left half keeps the original clip, the right half continues the source.
   Delete / Backspace removes the selection. Visual delete closes the gap;
   audio delete leaves later clips where they are.
-- Insert of generated or imported media is append-after-last only: a visual
-  goes on the visual end, audio on the current audio end. There is no
-  insert-at-playhead, replace mode, or media library for media. Imported stills
-  hold for 3 seconds. Text is the exception: T1 `+`, ⌘T, or an empty-canvas /
-  empty-T1 “Add text” context menu inserts a 5-second “Text” title at the
-  playhead and opens the 320 px Text inspector. Selecting a title does not
-  auto-open the panel; double-click on a T1 clip does.
+- Insert of generated or imported media from the timeline `+` menu is
+  append-after-last: a visual goes on the visual end, audio on the current
+  audio end. The left-rail Video / Images / Audio bins keep unused assets in
+  the project as a two-column masonry for video and images, and as full-width
+  rows with playback controls for audio, newest first. Video and audio cards play in place.
+  Transport and the program timeline span the window; the rail does not inset
+  them. Completing a generation registers the asset without placing it.
+  Bin **+** appends; dragging onto a lane is type-gated and positional. Text is
+  the exception: T1 `+`, ⌘T, or an empty-canvas / empty-T1 “Add text” context
+  menu inserts a 5-second “Text” title at the playhead and opens the Text
+  inspector. Selecting a title does not auto-open the Text inspector;
+  double-click on a T1 clip does. Selecting a clip does not open Adjust.
+  Double-click a visual or audio clip toggles Adjust. Deselecting the clip
+  closes Adjust. Video cards play with sound and a progress strip on the
+  thumbnail; the footer shows an aspect glyph then duration. Image cards
+  show the glyph only. Right-click a card to download, rename, or delete.
+  Audio rows use a clickable waveform timeline for preview.
+  Selecting a clip on the timeline seeks the playhead to its start only when
+  the playhead sits outside that clip. Dragging a clip onto the 0s mark shows
+  the same land marker used for other insertion points.
 - Native stills are the last frame of a 22-frame H3 chunk, not a separate
   image model. Display duration on the timeline is independent of that chunk.
 - Native audio is the soundtrack of a 32×32 joint H3 clip, not a separate
@@ -51,7 +64,8 @@
   The cut + opens the Transitions panel (same 320px slot as Effects);
   clicking an existing transition opens its settings. Visual clips can carry
   a filter stack (grade, vignette, grain, sharpen, blur, bloom, chroma key)
-  shown as pills on one FX lane; + opens the Effects panel. The viewer can
+  shown as pills on the FX lane above V1. T1 and A1 show matching FX strips.
+  + on V1 FX opens the Effects panel. The viewer can
   pan and zoom the frame.
 - Project settings cover platform presets, custom aspect/resolution/frame rate,
   background, stored tone mapping and exposure, and master gain. Live AgX/ACES
@@ -79,8 +93,8 @@
   seed. Editing any preset-owned knob selects Custom and keeps that snapshot
   when the studio closes.
 - Generation is cancellable and reports phase, progress, and elapsed wall time.
-- Completing a job does not append. Insert to timeline registers the asset and
-  appends it after the last item on its lane.
+- Completing a job does not append. It registers the asset in the open
+  project’s library. Insert to timeline appends after the last item on its lane.
 - Optimized native video generation uses the 256×256 four-pass preview preset
   by default. Long duration requests are not exposed in this overlay slice.
 - The helper loads the model on first use and keeps it until the app closes,

@@ -82,14 +82,33 @@ public enum ModelGenerationProfile: String, Codable, Equatable, Sendable {
   /// Step-distilled weights: few denoising passes, beta sigma spacing,
   /// high fidelity with loose prompt control.
   case turbo
+  /// FastVideo's four-call FastH3 preview. Unlike the older Turbo weights it
+  /// uses the released serving grid and is trained only for text-to-video
+  /// with jointly generated audio.
+  case fastH3
 
   /// Overrides the quality preset's step default when set.
   public var defaultDenoisingSteps: Int? {
-    self == .turbo ? 8 : nil
+    switch self {
+    case .standard: nil
+    case .turbo: 8
+    case .fastH3: 4
+    }
   }
 
   public var usesBetaSchedule: Bool {
     self == .turbo
+  }
+
+  /// FastH3 Preview v1 is T2VA-only. Keeping this on the profile makes a
+  /// manually added converted package obey the same product boundary as a
+  /// future managed package.
+  public var isVideoOnly: Bool {
+    self == .fastH3
+  }
+
+  public var acceptsReferenceInputs: Bool {
+    self != .fastH3
   }
 }
 

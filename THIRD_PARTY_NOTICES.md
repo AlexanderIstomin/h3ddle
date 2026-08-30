@@ -14,6 +14,24 @@ The optional managed model package downloads selected files from
 subject to the linked MiniMax H3 Community License Agreement and are fetched
 only after the user confirms the download; H3ddle does not redistribute them.
 
+H3ddle can locally convert the Dense FastH3 preview checkpoint from
+`FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree`, pinned by the
+conversion instructions to revision
+`f624f08c6c279ab43534c003e556fc5b295b6558`. Those model weights remain subject
+to the MiniMax H3 Community License Agreement and are not committed or
+redistributed by H3ddle. The public FastVideo implementation used to document
+the checkpoint format and serving schedule is Apache-2.0 licensed; no
+FastVideo source code is vendored in this repository.
+
+H3ddle can also locally convert the learned VSA checkpoint from
+`FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree`, pinned to revision
+`b65818d41939b5085451074fe8ca8b799f8d4921`. The native tile geometry,
+selection, and compression semantics are adapted from FastVideo's
+Apache-2.0-licensed `video_sparse_attn_h3.py` implementation at commit
+`b2db0c0a137e610fa2406d942a3c32c0179f047c`. Model weights remain under the
+MiniMax H3 Community License Agreement and are neither committed nor
+redistributed by H3ddle.
+
 ## TAEF1
 
 The optional managed Z-Image package downloads the TAEF1 preview-decoder

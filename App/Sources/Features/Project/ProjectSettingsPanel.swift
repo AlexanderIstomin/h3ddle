@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ProjectSettingsPanel: View {
   @Bindable var model: AppModel
+  var embedded = false
 
   var body: some View {
     ScrollView {
@@ -50,10 +51,12 @@ struct ProjectSettingsPanel: View {
       }
       .padding(16)
     }
-    .frame(width: 320)
-    .background(H3Color.surface)
+    .frame(width: embedded ? nil : 320)
+    .background(embedded ? Color.clear : H3Color.surface)
     .overlay(alignment: .trailing) {
-      Rectangle().fill(H3Color.line).frame(width: 1)
+      if !embedded {
+        Rectangle().fill(H3Color.line).frame(width: 1)
+      }
     }
     .accessibilityIdentifier("project-settings")
   }

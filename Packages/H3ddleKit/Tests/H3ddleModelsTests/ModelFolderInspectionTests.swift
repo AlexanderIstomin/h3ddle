@@ -54,6 +54,57 @@ struct ModelFolderInspectionTests {
     #expect(ModelFolderInspection.generationProfile(at: directory) == .standard)
   }
 
+  @Test("A converted FastH3 checkpoint declares its four-call profile")
+  func detectsFastH3() throws {
+    let directory = try folder()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try writeSafetensors(
+      metadata: [
+        "h3.generation_profile": "fasth3",
+        "h3.default_steps": "4",
+        "h3.sigma_schedule": "serving",
+        "h3.conditioning": "t2va",
+      ],
+      to: directory.appendingPathComponent(
+        "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"))
+    let profile = ModelFolderInspection.generationProfile(at: directory)
+    #expect(profile == .fastH3)
+    #expect(profile.defaultDenoisingSteps == 4)
+    #expect(!profile.usesBetaSchedule)
+    #expect(profile.isVideoOnly)
+    #expect(!profile.acceptsReferenceInputs)
+  }
+
+  @Test("FastH3 Dense and VSA packages are distinguished from metadata")
+  func detectsFastH3Attention() throws {
+    let dense = try folder()
+    let vsa = try folder()
+    defer {
+      try? FileManager.default.removeItem(at: dense)
+      try? FileManager.default.removeItem(at: vsa)
+    }
+    let transformer =
+      "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+    try writeSafetensors(
+      metadata: [
+        "h3.generation_profile": "fasth3",
+        "h3.fasth3.attention": "dense",
+        "h3.fasth3.version": "1",
+      ],
+      to: dense.appendingPathComponent(transformer)
+    )
+    try writeSafetensors(
+      metadata: [
+        "h3.generation_profile": "fasth3",
+        "h3.fasth3.version": "2",
+      ],
+      to: vsa.appendingPathComponent(transformer)
+    )
+
+    #expect(ModelFolderInspection.fastH3Attention(at: dense) == .dense)
+    #expect(ModelFolderInspection.fastH3Attention(at: vsa) == .vsa)
+  }
+
   @Test("A reference-only folder is inspected too")
   func detectsTurboOnReferenceTransformer() throws {
     let directory = try folder()
@@ -85,6 +136,35 @@ struct ModelFolderInspectionTests {
       at: junk.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("not a model".utf8).write(to: junk)
     #expect(ModelFolderInspection.generationProfile(at: directory) == .standard)
+  }
+}
+
+@Suite("FastH3 model selection")
+struct FastH3ModelSelectionTests {
+  private let options = [
+    FastH3ModelOption(id: "dense", attention: .dense),
+    FastH3ModelOption(id: "vsa", attention: .vsa),
+  ]
+
+  @Test("VSA replaces Dense as the FastH3 default")
+  func prefersVSA() {
+    #expect(FastH3ModelSelection.preferredID(among: options, selectedID: nil) == "vsa")
+    #expect(FastH3ModelSelection.preferredID(among: options, selectedID: "dense") == "vsa")
+    #expect(FastH3ModelSelection.preferredID(among: options, selectedID: "vsa") == "vsa")
+  }
+
+  @Test("A different model family and a Dense-only install remain untouched")
+  func keepsFallbacks() {
+    #expect(
+      FastH3ModelSelection.preferredID(among: options, selectedID: "standard")
+        == "standard"
+    )
+    #expect(
+      FastH3ModelSelection.preferredID(
+        among: [FastH3ModelOption(id: "dense", attention: .dense)],
+        selectedID: "dense"
+      ) == "dense"
+    )
   }
 }
 

@@ -30,8 +30,10 @@ enum TimelineChrome {
 
   static func effectLanesHeight(showsEffectLanes: Bool, expandedEffectCount: Int) -> CGFloat {
     guard showsEffectLanes else { return 0 }
+    // One FX strip above T1, V1, and A1. Expanded visual effects add a row
+    // per instance above V1, matching the combined strip they replace.
     let extra = expandedEffectCount > 0 ? expandedEffectCount : 0
-    return effectLaneHeight * CGFloat(1 + extra)
+    return effectLaneHeight * CGFloat(3 + extra)
   }
 }
 
@@ -55,12 +57,7 @@ struct TrackHeaderColumn: View {
       }
 
       if model.showsEffectLanes {
-        effectHeader
-        if model.fxLanesExpanded {
-          ForEach(model.effectLaneItems) { item in
-            effectInstanceHeader(item)
-          }
-        }
+        fxHeader(canAdd: false, muted: model.textTrackMuted, addIdentifier: "append-effect-text")
       }
       TrackHeaderView(
         code: "T1",
@@ -70,6 +67,19 @@ struct TrackHeaderColumn: View {
         isDisabled: model.textTrackMuted,
         onToggleEnabled: { model.textTrackMuted.toggle() }
       )
+      if model.showsEffectLanes {
+        fxHeader(
+          canAdd: true,
+          muted: model.visualTrackMuted,
+          addIdentifier: "append-effect",
+          showsExpand: true
+        )
+        if model.fxLanesExpanded {
+          ForEach(model.effectLaneItems) { item in
+            effectInstanceHeader(item)
+          }
+        }
+      }
       TrackHeaderView(
         code: "V1",
         title: "Visual",
@@ -79,6 +89,9 @@ struct TrackHeaderColumn: View {
         onToggleEnabled: { model.visualTrackMuted.toggle() }
       )
       .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-header-drop")
+      if model.showsEffectLanes {
+        fxHeader(canAdd: false, muted: model.audioTrackMuted, addIdentifier: "append-effect-audio")
+      }
       TrackHeaderView(
         code: "A1",
         title: "Audio",
@@ -96,8 +109,16 @@ struct TrackHeaderColumn: View {
     }
   }
 
-  private var effectHeader: some View {
-    HStack(spacing: 5) {
+  private func fxHeader(
+    canAdd: Bool,
+    muted: Bool,
+    addIdentifier: String?,
+    showsExpand: Bool = false
+  ) -> some View {
+    let addDisabled = !canAdd
+      || muted
+      || (canAdd && model.project.timeline.visualItems.isEmpty)
+    return HStack(spacing: 5) {
       Image(systemName: "sparkle")
         .font(.system(size: 9, weight: .semibold))
         .foregroundStyle(Color(red: 47 / 255, green: 179 / 255, blue: 191 / 255))
@@ -106,7 +127,7 @@ struct TrackHeaderColumn: View {
         .tracking(1.4)
         .foregroundStyle(H3Color.textSecondary.opacity(0.7))
       Spacer(minLength: 2)
-      if !model.effectLaneItems.isEmpty {
+      if showsExpand, !model.effectLaneItems.isEmpty {
         Button {
           model.fxLanesExpanded.toggle()
         } label: {
@@ -133,14 +154,10 @@ struct TrackHeaderColumn: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(H3Color.textSecondary)
-      .disabled(model.visualTrackMuted || model.project.timeline.visualItems.isEmpty)
-      .opacity(model.visualTrackMuted || model.project.timeline.visualItems.isEmpty ? 0.34 : 1)
-      .help(
-        model.project.timeline.visualItems.isEmpty
-          ? "Add a visual clip to apply effects"
-          : "Add effect"
-      )
-      .accessibilityIdentifier("append-effect")
+      .disabled(addDisabled)
+      .opacity(addDisabled ? 0.34 : 1)
+      .help(fxAddHelp(canAdd: canAdd, muted: muted))
+      .accessibilityIdentifier(addIdentifier ?? "append-effect-disabled")
     }
     .padding(.horizontal, 8)
     .frame(width: TimelineChrome.headerWidth, height: TimelineChrome.effectLaneHeight)
@@ -148,7 +165,16 @@ struct TrackHeaderColumn: View {
     .overlay(alignment: .bottom) {
       Rectangle().fill(H3Color.hairSoft).frame(height: 1)
     }
-    .opacity(model.visualTrackMuted ? 0.55 : 1)
+    .opacity(muted ? 0.55 : 1)
+  }
+
+  private func fxAddHelp(canAdd: Bool, muted: Bool) -> String {
+    if !canAdd { return "Effects on this track are not available" }
+    if muted { return "Enable the track to add effects" }
+    if model.project.timeline.visualItems.isEmpty {
+      return "Add a visual clip to apply effects"
+    }
+    return "Add effect"
   }
 
   private func effectInstanceHeader(_ item: EffectLaneItem) -> some View {

@@ -16,6 +16,19 @@ private struct PendingMemoryIntensiveGeneration: Identifiable {
   let warning: String
 }
 
+private enum GenerationStudioLayout {
+  static let maximumWidth: CGFloat = 1_080
+  static let maximumHeight: CGFloat = 720
+  static let viewportInset: CGFloat = 24
+
+  static func cardSize(in viewport: CGSize) -> CGSize {
+    CGSize(
+      width: min(maximumWidth, max(0, viewport.width - viewportInset * 2)),
+      height: min(maximumHeight, max(0, viewport.height - viewportInset * 2))
+    )
+  }
+}
+
 struct GenerationStudioView: View {
   @Bindable var model: AppModel
   let kind: GenerationKind
@@ -39,29 +52,36 @@ struct GenerationStudioView: View {
   @State private var pendingMemoryIntensiveGeneration: PendingMemoryIntensiveGeneration?
 
   var body: some View {
-    ZStack {
-      Color.black.opacity(0.62)
-        .ignoresSafeArea()
-        .onTapGesture {
-          model.dismissGenerationStudio()
-        }
+    GeometryReader { proxy in
+      let cardSize = GenerationStudioLayout.cardSize(in: proxy.size)
+      ZStack {
+        Color.black.opacity(0.62)
+          .ignoresSafeArea()
+          .onTapGesture {
+            hideOrDismissStudio()
+          }
 
-      VStack(spacing: 0) {
-        header
-        Divider().overlay(H3Color.line.opacity(0.75))
-        studioBody
+        VStack(spacing: 0) {
+          header
+          Divider().overlay(H3Color.line.opacity(0.75))
+          studioBody
+        }
+        // A maximum alone does not constrain a child's intrinsic minimum.
+        // Prompt additions could therefore make the centred card taller than
+        // a restored short window and push both chrome bars off-screen.
+        .frame(width: cardSize.width, height: cardSize.height)
+        .background(H3Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous)
+            .stroke(H3Color.line, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.55), radius: 40, y: 18)
+        .accessibilityIdentifier("generation-studio-card")
       }
-      .frame(maxWidth: 1_080, maxHeight: 720)
-      .background(H3Color.surface)
-      .clipShape(RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: H3Radius.large, style: .continuous)
-          .stroke(H3Color.line, lineWidth: 1)
-      }
-      .shadow(color: .black.opacity(0.55), radius: 40, y: 18)
-      .padding(24)
     }
     .foregroundStyle(H3Color.textPrimary)
+    .onAppear { restorePresentedGeneration() }
     .onChange(of: submittedJobState) { _, state in
       switch state {
       case .preparing, .running:
@@ -184,23 +204,34 @@ struct GenerationStudioView: View {
         .padding(.leading, 4)
       }
       Spacer()
-      Button {
-        model.dismissGenerationStudio()
-      } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(H3Color.textSecondary)
-          .frame(width: 34, height: 34)
-          .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-              .stroke(H3Color.line, lineWidth: 1)
-          }
-          .frame(width: 44, height: 44)
-          .contentShape(Rectangle())
+      if stage == .run, activeSubmittedJob != nil {
+        Button {
+          hideOrDismissStudio()
+        } label: {
+          Label("Hide", systemImage: "chevron.down")
+        }
+        .buttonStyle(H3QuietButtonStyle())
+        .help("Keep generating in the background")
+        .accessibilityIdentifier("generation-hide")
+      } else {
+        Button {
+          model.dismissGenerationStudio()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(H3Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .overlay {
+              RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(H3Color.line, lineWidth: 1)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Close Generation Studio")
+        .accessibilityIdentifier("generation-close")
       }
-      .buttonStyle(.plain)
-      .help("Close Generation Studio")
-      .accessibilityIdentifier("generation-close")
     }
     .padding(.horizontal, 18)
     .frame(height: 58)
@@ -261,56 +292,62 @@ struct GenerationStudioView: View {
           .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
           .accessibilityIdentifier("generation-prompt")
 
-        if kind != .audio, let query = mentionQuery {
+        if acceptsOrderedReferences, let query = mentionQuery {
           mentionPicker(query: query)
             .padding(10)
         }
       }
-      .frame(minHeight: 220)
+      .frame(minHeight: 180, idealHeight: 240, maxHeight: 300)
       .layoutPriority(1)
 
-      // H3's trained prompt schema, composed into labelled sections it was
-      // taught to read. LTX takes one prose prompt and denoises its soundtrack
-      // from that — `H3StructuredPrompt.compose` is skipped for any engine
-      // with its own package, so these two fields were being collected and
-      // dropped on the floor.
-      if kind == .video, !isLTX {
-        audioDesignSection
-      }
-      if isLTX {
-        Text("The soundtrack comes from the prompt above — this model "
-          + "denoises picture and sound together, so describe what should be "
-          + "heard in the same sentence as what should be seen.")
-          .font(.system(size: 10))
-          .foregroundStyle(H3Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          // H3's trained prompt schema, composed into labelled sections it was
+          // taught to read. LTX takes one prose prompt and denoises its soundtrack
+          // from that — `H3StructuredPrompt.compose` is skipped for any engine
+          // with its own package, so these two fields were being collected and
+          // dropped on the floor.
+          if kind == .video, !isLTX {
+            audioDesignSection
+          }
+          if isLTX {
+            Text("The soundtrack comes from the prompt above — this model "
+              + "denoises picture and sound together, so describe what should be "
+              + "heard in the same sentence as what should be seen.")
+              .font(.system(size: 10))
+              .foregroundStyle(H3Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
 
-      if kind == .audio, model.audioMode == .speech {
-        voiceReferenceSection
-      }
+          if kind == .audio, model.audioMode == .speech {
+            voiceReferenceSection
+          }
 
-      // H3 keeps a frame out of a very short clip, so anchors and references
-      // apply to its stills as much as to its video. Z-Image and LTX take a
-      // prompt and nothing else — and the engine *refuses* a request carrying
-      // pictures rather than dropping them, so offering these would collect
-      // conditioning that turns the generation into an error.
-      if acceptsConditioning {
-        if !supportsVideoInpainting || !model.studioHasInpaintingInput {
-          frameAnchorSection
+          // H3 keeps a frame out of a very short clip, so anchors and references
+          // apply to its stills as much as to its video. Z-Image and LTX take a
+          // prompt and nothing else — and the engine *refuses* a request carrying
+          // pictures rather than dropping them, so offering these would collect
+          // conditioning that turns the generation into an error.
+          if acceptsConditioning {
+            if !supportsVideoInpainting || !model.studioHasInpaintingInput {
+              frameAnchorSection
+            }
+            if worksFromAPicture {
+              sourceStrengthControls
+            } else {
+              referenceSection
+            }
+            if let note = conditioningNote {
+              Text(note)
+                .font(.system(size: 10))
+                .foregroundStyle(H3Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
         }
-        if worksFromAPicture {
-          sourceStrengthControls
-        } else {
-          referenceSection
-        }
-        if let note = conditioningNote {
-          Text(note)
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -364,6 +401,13 @@ struct GenerationStudioView: View {
       }
       .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
       .accessibilityIdentifier("generation-music")
+      Text("For speech, put the exact words in the scene prompt as "
+        + "<d>[English] words to speak</d>. A soundscape such as “conversation” "
+        + "asks H3 to improvise words and often produces gibberish. For none, "
+        + "leave Soundscape empty or say “No speech or human vocalization.”")
+        .font(.system(size: 10))
+        .foregroundStyle(H3Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
@@ -422,6 +466,7 @@ struct GenerationStudioView: View {
     }
     .opacity(disabled ? 0.38 : 1)
     .allowsHitTesting(!disabled)
+    .accessibilityIdentifier("generation-frame-anchors")
   }
 
   /// Which voice speaks. Neutral is the model unconditioned — no clip, no
@@ -783,6 +828,7 @@ struct GenerationStudioView: View {
 
   private var supportsVideoInpainting: Bool {
     featureFlags.h3MaskedSource && kind == .video && model.videoEngine == .h3
+      && model.selectedGenerationProfile.acceptsReferenceInputs
   }
 
   private var promptOnlyModel: Bool {
@@ -798,6 +844,11 @@ struct GenerationStudioView: View {
     if kind == .audio { return false }
     if kind == .image { return model.imageEngine == .h3 || worksFromAPicture }
     return model.videoEngine.acceptsReferenceInputs
+      && model.selectedGenerationProfile.acceptsReferenceInputs
+  }
+
+  private var acceptsOrderedReferences: Bool {
+    acceptsConditioning && !worksFromAPicture
   }
 
   /// Z-Image takes one picture and repaints it. That is a different offer
@@ -1002,6 +1053,7 @@ struct GenerationStudioView: View {
         }
       }
       .padding(20)
+      .accessibilityIdentifier("generation-actions")
     }
     .background(H3Color.surface)
   }
@@ -1155,7 +1207,7 @@ struct GenerationStudioView: View {
   private var h3ResolutionControls: some View {
     labeled("RESOLUTION") {
       Menu {
-        ForEach(GenerationCanvas.allCases) { canvas in
+        ForEach(availableH3Canvases) { canvas in
           let frame = canvas.frame(aspect: studioAspect)
           Button("\(canvas.label)  ·  \(frame.width)×\(frame.height)") {
             model.updateStudioKnobs { $0.canvas = canvas }
@@ -1163,7 +1215,7 @@ struct GenerationStudioView: View {
         }
       } label: {
         HStack {
-          Text(knobs.canvas.label)
+          Text(effectiveH3Canvas.label)
             .font(.system(size: 12, weight: .medium, design: .monospaced))
           Spacer()
           Image(systemName: "chevron.up.chevron.down")
@@ -1181,14 +1233,39 @@ struct GenerationStudioView: View {
       }
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
-      let frame = knobs.canvas.frame(aspect: studioAspect)
+      let frame = effectiveH3Canvas.frame(aspect: studioAspect)
       Text("\(frame.width) × \(frame.height) at this aspect ratio. "
-        + "H3 supports 256p preview, 512p development, and its native 768p tier.")
+        + (usesFastH3
+          ? "FastH3 Preview starts at the validated 512p tier."
+          : "H3 supports 256p preview, 512p development, and its native 768p tier."))
         .font(.system(size: 10))
         .foregroundStyle(H3Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityIdentifier("generation-resolution")
+  }
+
+  /// A persisted 256p selection predates FastH3 and is outside that
+  /// checkpoint's release envelope. Resolve it to 512p immediately so the
+  /// label, estimate, and submitted request always describe the same run.
+  private var effectiveH3Canvas: GenerationCanvas {
+    if usesFastH3,
+      knobs.canvas.shortEdge < EngineFastH3PreviewContract.minimumShortEdge
+    {
+      return .p512
+    }
+    return knobs.canvas
+  }
+
+  private var availableH3Canvases: [GenerationCanvas] {
+    GenerationCanvas.allCases.filter {
+      !usesFastH3
+        || $0.shortEdge >= EngineFastH3PreviewContract.minimumShortEdge
+    }
+  }
+
+  private var usesFastH3: Bool {
+    kind == .video && model.selectedGenerationProfile == .fastH3
   }
 
   /// The image and LTX ladders name a short edge and take their shape from the
@@ -1410,7 +1487,7 @@ struct GenerationStudioView: View {
         HStack {
           Slider(
             value: Binding(
-              get: { Double(knobs.denoisingSteps) },
+              get: { Double(usesFastH3 ? 4 : knobs.denoisingSteps) },
               set: { steps in
                 model.updateStudioKnobs { $0.denoisingSteps = Int(steps) }
               }
@@ -1419,18 +1496,21 @@ struct GenerationStudioView: View {
             step: 1
           )
           .tint(H3Color.accent)
+          .disabled(usesFastH3)
           .accessibilityIdentifier("generation-denoising-passes")
-          Text("\(knobs.denoisingSteps)")
+          Text("\(usesFastH3 ? 4 : knobs.denoisingSteps)")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundStyle(H3Color.textSecondary)
             .frame(width: 28, alignment: .trailing)
         }
-        Text("Each pass runs the full transformer once. 4–7 is the validated preview band.")
+        Text(usesFastH3
+          ? "Fixed: this checkpoint is distilled for exactly four complete transformer calls."
+          : "Each pass runs the full transformer once. 4–7 is the validated preview band.")
           .font(.system(size: 10))
           .foregroundStyle(H3Color.textSecondary)
       }
 
-      if featureFlags.advancedH3Controls {
+      if featureFlags.advancedH3Controls && !usesFastH3 {
         labeled("TRANSFORMER BLOCKS") {
           settingChips(
             selection: knobs.activeDiTLayers,
@@ -1454,7 +1534,7 @@ struct GenerationStudioView: View {
         }
       }
 
-      if featureFlags.advancedH3Controls {
+      if featureFlags.advancedH3Controls && !usesFastH3 {
         labeled("CORE REUSE") {
           settingChips(
             selection: knobs.coreReuse,
@@ -1468,26 +1548,28 @@ struct GenerationStudioView: View {
         .allowsHitTesting(!knobs.blockCache)
       }
 
-      Toggle(isOn: Binding(
-        get: { knobs.blockCache },
-        set: { enabled in model.updateStudioKnobs { $0.blockCache = enabled } }
-      )) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Block cache")
-            .font(.system(size: 12, weight: .semibold))
-          Text(
-            "Replay cached transformer work on stable passes — about 40% "
-              + "faster at 20 passes. The result is a different take of the "
-              + "same quality, and it replaces core reuse.")
-            .font(.system(size: 10))
-            .foregroundStyle(H3Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
+      if !usesFastH3 {
+        Toggle(isOn: Binding(
+          get: { knobs.blockCache },
+          set: { enabled in model.updateStudioKnobs { $0.blockCache = enabled } }
+        )) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Block cache")
+              .font(.system(size: 12, weight: .semibold))
+            Text(
+              "Replay cached transformer work on stable passes — about 40% "
+                + "faster at 20 passes. The result is a different take of the "
+                + "same quality, and it replaces core reuse.")
+              .font(.system(size: 10))
+              .foregroundStyle(H3Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .tint(H3Color.accent)
+        .accessibilityIdentifier("generation-block-cache")
       }
-      .toggleStyle(.switch)
-      .controlSize(.small)
-      .tint(H3Color.accent)
-      .accessibilityIdentifier("generation-block-cache")
 
       denoisingPreviewControl
 
@@ -1615,16 +1697,13 @@ struct GenerationStudioView: View {
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
       if stage == .run {
-        Button(activeSubmittedJob?.supportsPause == true ? "Pause" : "Cancel") {
+        Button("Cancel") {
           guard let job = activeSubmittedJob else { return }
-          if job.supportsPause {
-            model.pauseGenerationJob(job.id)
-          } else {
-            model.cancelGenerationJob(job.id)
-          }
+          model.cancelGenerationJob(job.id)
           stage = .compose
         }
         .buttonStyle(H3QuietButtonStyle())
+        .accessibilityIdentifier("generation-studio-cancel")
       } else if let result = submittedResult ?? model.latestStudioResult {
         if let generatedIn = model.generationDurationDescription(for: result.asset) {
           Text("Generated in \(generatedIn)")
@@ -1730,7 +1809,7 @@ struct GenerationStudioView: View {
       ? knobs.ltxResolution.frame(aspect: studioAspect)
       : (promptOnlyModel
         ? knobs.imageCanvas.frame(aspect: studioAspect)
-        : knobs.canvas.frame(aspect: studioAspect))
+        : effectiveH3Canvas.frame(aspect: studioAspect))
     if isLTX, !allowsLTXMemoryOvercommit,
       let warning = ltxMemoryWarning(width: size.width, height: size.height)
     {
@@ -1747,7 +1826,7 @@ struct GenerationStudioView: View {
     let jobID = model.generate(
       prompt: model.generationPrompt,
       duration: requestedDuration,
-      quality: knobs.canvas.engineQuality,
+      quality: effectiveH3Canvas.engineQuality,
       denoisingSteps: denoisingSteps,
       activeDiTLayers: effectiveActiveDiTLayers,
       coreReuse: effectiveCoreReuse,
@@ -1763,6 +1842,7 @@ struct GenerationStudioView: View {
     guard let jobID else { return }
     submittedJobID = jobID
     if !queueOnly, model.activeQueueJobID == jobID {
+      model.showGenerationProgress(jobID)
       stage = .run
     } else {
       model.dismissGenerationStudio()
@@ -1889,6 +1969,30 @@ struct GenerationStudioView: View {
   private var submittedJobState: GenerationJobState? {
     guard let submittedJobID else { return nil }
     return model.generationQueue.jobs.first { $0.id == submittedJobID }?.state
+  }
+
+  private func restorePresentedGeneration() {
+    guard let jobID = model.generationStudioJobID,
+      let job = model.generationQueue.jobs.first(where: { $0.id == jobID }),
+      job.request.kind == kind
+    else { return }
+    submittedJobID = jobID
+    switch job.state {
+    case .preparing, .running:
+      stage = .run
+    case .completed where job.result != nil:
+      stage = .result
+    case .queued, .paused, .blocked, .failed, .completed, .cancelled:
+      stage = .compose
+    }
+  }
+
+  private func hideOrDismissStudio() {
+    if let job = activeSubmittedJob {
+      model.hideGenerationProgress(job.id)
+    } else {
+      model.dismissGenerationStudio()
+    }
   }
 
   private var activeSubmittedJob: GenerationQueueJob? {

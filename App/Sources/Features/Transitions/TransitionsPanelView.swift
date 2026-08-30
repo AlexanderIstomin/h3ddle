@@ -4,36 +4,54 @@ import SwiftUI
 
 struct TransitionsPanelView: View {
   @Bindable var model: AppModel
+  var embedded = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      header
-      Divider().overlay(H3Color.line)
+      if !embedded {
+        header
+        Divider().overlay(H3Color.line)
+      } else if let name = hostName {
+        Text(name)
+          .font(.system(size: 11))
+          .foregroundStyle(H3Color.textSecondary)
+          .lineLimit(1)
+          .padding(.horizontal, 14)
+          .padding(.top, 12)
+          .padding(.bottom, 4)
+      }
       if let host, host.transition != nil, !model.browsesTransitionCatalog {
         TransitionSettingsView(model: model, host: host)
       } else {
         catalog
       }
     }
-    .frame(width: 320)
-    .background(H3Color.surface)
+    .frame(width: embedded ? nil : 320)
+    .background(embedded ? Color.clear : H3Color.surface)
     .overlay(alignment: .trailing) {
-      Rectangle().fill(H3Color.line).frame(width: 1)
+      if !embedded {
+        Rectangle().fill(H3Color.line).frame(width: 1)
+      }
     }
     .accessibilityIdentifier("transitions-panel")
   }
 
   private var host: VisualItem? { model.transitionHostClip }
 
+  private var hostName: String? {
+    host.flatMap { model.project.asset(id: $0.assetID)?.displayName }
+  }
+
   private var header: some View {
     HStack(spacing: 8) {
       Text("Transitions")
         .font(.system(size: 13, weight: .semibold))
       Spacer()
-      Text(host.flatMap { model.project.asset(id: $0.assetID)?.displayName } ?? "No cut")
+      Text(hostName ?? "No cut")
         .font(.system(size: 10, design: .monospaced))
         .foregroundStyle(H3Color.textSecondary)
         .lineLimit(1)
+      if !embedded {
       Button {
         model.closeTransitionsPanel()
       } label: {
@@ -49,6 +67,7 @@ struct TransitionsPanelView: View {
       .foregroundStyle(H3Color.textSecondary)
       .help("Close Transitions")
       .accessibilityIdentifier("transitions-close")
+      }
     }
     .padding(.horizontal, 12)
     .frame(height: 44)
@@ -57,17 +76,12 @@ struct TransitionsPanelView: View {
   @ViewBuilder
   private var catalog: some View {
     if host == nil {
-      VStack(spacing: 10) {
-        Image(systemName: "plus")
-          .font(.system(size: 20, weight: .medium))
-          .foregroundStyle(H3Color.accent)
-        Text("Select a cut between two clips to add a transition")
-          .font(.system(size: 12.5))
-          .foregroundStyle(H3Color.textSecondary)
-          .multilineTextAlignment(.center)
+      EmptyPanelPlaceholder(
+        title: "No cut selected",
+        detail: "Click the + between two clips on V1 to add a transition."
+      ) {
+        TransitionEmptyGraphic()
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(24)
     } else {
       ScrollView {
         VStack(alignment: .leading, spacing: 13) {

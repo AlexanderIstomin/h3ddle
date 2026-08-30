@@ -18,6 +18,7 @@ struct EngineProtocolTests {
       kind: .image,
       prompt: "A red apple on a wooden table",
       duration: 0,
+      h3ModelProfile: .fastH3,
       canvasWidth: 1024,
       canvasHeight: 1024,
       speech: EngineSpeechOptions(temperature: 0.9),
@@ -33,11 +34,38 @@ struct EngineProtocolTests {
       EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
 
     #expect(decoded.image?.model == .zImage)
+    #expect(decoded.h3ModelProfile == .fastH3)
     #expect(decoded.image?.steps == 8)
     #expect(decoded.speech?.temperature == 0.9)
     #expect(decoded.checkpoint?.fileURL.path == "/tmp/apple.h3ckpt")
     #expect(decoded.checkpoint?.fingerprint == String(repeating: "a", count: 64))
     #expect(decoded == request)
+  }
+
+  @Test("FastH3 model profile defaults safely and survives the wire")
+  func fastH3ProfileRoundTrip() throws {
+    let legacy = Data(
+      #"{"kind":"video","prompt":"x","duration":1,"quality":"preview","fastStill":false,"blockCache":false,"previewDenoise":false,"useBetaSchedule":false,"outputURL":"file:///tmp/x.mp4"}"#.utf8)
+    #expect(try JSONDecoder().decode(
+      EngineGenerationRequest.self, from: legacy).h3ModelProfile == .standard)
+
+    let request = EngineGenerationRequest(
+      kind: .video, prompt: "x", duration: 5, denoisingSteps: 4,
+      h3ModelProfile: .fastH3,
+      outputURL: URL(fileURLWithPath: "/tmp/fasth3.mp4"))
+    let decoded = try EngineLineCodec.decode(
+      EngineGenerationRequest.self, from: try EngineLineCodec.encode(request))
+    #expect(decoded.h3ModelProfile == .fastH3)
+    #expect(decoded == request)
+  }
+
+  @Test("FastH3 rejects plumbing previews outside its released shape")
+  func fastH3PreviewContract() {
+    #expect(!EngineFastH3PreviewContract.supports(width: 256, height: 256, frames: 124))
+    #expect(!EngineFastH3PreviewContract.supports(width: 512, height: 512, frames: 22))
+    #expect(EngineFastH3PreviewContract.supports(width: 832, height: 480, frames: 124))
+    #expect(EngineFastH3PreviewContract.supports(width: 512, height: 512, frames: 362))
+    #expect(!EngineFastH3PreviewContract.supports(width: 512, height: 512, frames: 379))
   }
 
   @Test("Video settings survive a round trip")
@@ -542,6 +570,23 @@ struct EngineProtocolTests {
     )
 
     #expect(event.fractionComplete == 1)
+  }
+
+  @Test("Engine performance samples survive the wire")
+  func performanceSampleRoundTrip() throws {
+    let event = EngineEvent(
+      requestID: UUID(),
+      kind: .progress,
+      performance: EnginePerformanceSample(physicalFootprintBytes: 12_345),
+      phase: "denoise",
+      fractionComplete: 0.5
+    )
+
+    let decoded = try EngineLineCodec.decode(
+      EngineEvent.self,
+      from: EngineLineCodec.encode(event)
+    )
+    #expect(decoded.performance?.physicalFootprintBytes == 12_345)
   }
 
   @Test("Capabilities distinguish embedded audio from audio-only output")

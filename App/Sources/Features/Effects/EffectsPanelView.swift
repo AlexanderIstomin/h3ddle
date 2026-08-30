@@ -4,25 +4,42 @@ import SwiftUI
 
 struct EffectsPanelView: View {
   @Bindable var model: AppModel
+  var embedded = false
   @State private var query = ""
   @State private var category: VisualEffectCategory?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      header
-      Divider().overlay(H3Color.line)
+      if !embedded {
+        header
+        Divider().overlay(H3Color.line)
+      } else if let name = hostName {
+        Text(name)
+          .font(.system(size: 11))
+          .foregroundStyle(H3Color.textSecondary)
+          .lineLimit(1)
+          .padding(.horizontal, 14)
+          .padding(.top, 12)
+          .padding(.bottom, 4)
+      }
       if let effect = selectedEffect {
         EffectSettingsView(model: model, effect: effect)
       } else {
         catalog
       }
     }
-    .frame(width: 320)
-    .background(H3Color.surface)
+    .frame(width: embedded ? nil : 320)
+    .background(embedded ? Color.clear : H3Color.surface)
     .overlay(alignment: .trailing) {
-      Rectangle().fill(H3Color.line).frame(width: 1)
+      if !embedded {
+        Rectangle().fill(H3Color.line).frame(width: 1)
+      }
     }
     .accessibilityIdentifier("effects-panel")
+  }
+
+  private var hostName: String? {
+    model.effectsHostClip.flatMap { model.project.asset(id: $0.assetID)?.displayName }
   }
 
   private var selectedEffect: VisualEffectInstance? {
@@ -35,10 +52,11 @@ struct EffectsPanelView: View {
       Text("Effects")
         .font(.system(size: 13, weight: .semibold))
       Spacer()
-      Text(model.effectsHostClip.flatMap { model.project.asset(id: $0.assetID)?.displayName } ?? "No clip")
+      Text(hostName ?? "No clip")
         .font(.system(size: 10, design: .monospaced))
         .foregroundStyle(H3Color.textSecondary)
         .lineLimit(1)
+      if !embedded {
       Button {
         model.showsEffectsPanel = false
         model.selectedEffectID = nil
@@ -55,6 +73,7 @@ struct EffectsPanelView: View {
       .foregroundStyle(H3Color.textSecondary)
       .help("Close Effects")
       .accessibilityIdentifier("effects-close")
+      }
     }
     .padding(.horizontal, 12)
     .frame(height: 44)
@@ -63,17 +82,12 @@ struct EffectsPanelView: View {
   @ViewBuilder
   private var catalog: some View {
     if model.effectsHostClip == nil {
-      VStack(spacing: 10) {
-        Image(systemName: "sparkle")
-          .font(.system(size: 20, weight: .medium))
-          .foregroundStyle(H3Color.accent)
-        Text("Select a visual clip to add effects")
-          .font(.system(size: 12.5))
-          .foregroundStyle(H3Color.textSecondary)
-          .multilineTextAlignment(.center)
+      EmptyPanelPlaceholder(
+        title: "No clip selected",
+        detail: "Select a visual clip on the timeline to add effects."
+      ) {
+        EmptyPanelGlyph(systemName: "sparkles")
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(24)
     } else {
       ScrollView {
         VStack(alignment: .leading, spacing: 13) {

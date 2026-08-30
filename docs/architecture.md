@@ -44,8 +44,17 @@ as a video-frame source.
 ## State and persistence
 
 Domain models are Codable and carry an explicit schema version. They do not
-depend on UI or media frameworks. Project persistence will use versioned JSON
-and app-managed media directories rather than SwiftData.
+depend on UI or media frameworks. The editor mutates `H3ddleProject`. Disk and
+a later studio API use the editorial interchange document in `docs/interchange.md`
+(ADR 0007): versioned JSON plus an app-managed media directory per project,
+not SwiftData. Projection between the 3-lane program and that document is
+lossless for H3ddle-authored fields. Unknown JSON keys round-trip. Completing a
+generation registers the file in the open project’s asset pool without placing
+it on the timeline. The left rail overlays the monitor and hosts media bins,
+inspectors, the generation queue, and model settings. Video, image, and audio
+bins are a two-column masonry; video and audio cards play in place. Transport
+and the program timeline span the full window under the monitor row, so the
+rail does not inset the dock.
 
 ## Generation
 

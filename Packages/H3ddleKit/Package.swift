@@ -13,6 +13,8 @@ let package = Package(
     .library(name: "H3ddleGeneration", targets: ["H3ddleGeneration"]),
     .library(name: "H3ddleMedia", targets: ["H3ddleMedia"]),
     .library(name: "H3ddleModels", targets: ["H3ddleModels"]),
+    .library(name: "H3ddleUpscaling", targets: ["H3ddleUpscaling"]),
+    .executable(name: "h3ddle-upscale-probe", targets: ["H3ddleUpscalingProbe"]),
   ],
   targets: [
     .target(name: "H3ddleCore"),
@@ -31,6 +33,14 @@ let package = Package(
       dependencies: ["H3ddleCore"]
     ),
     .target(name: "H3ddleModels"),
+    .target(
+      name: "H3ddleUpscaling",
+      dependencies: ["H3ddleCore"]
+    ),
+    .executableTarget(
+      name: "H3ddleUpscalingProbe",
+      dependencies: ["H3ddleCore", "H3ddleUpscaling"]
+    ),
     .testTarget(
       name: "H3ddleCoreTests",
       dependencies: ["H3ddleCore"]
@@ -55,6 +65,10 @@ let package = Package(
     .testTarget(
       name: "H3ddleModelsTests",
       dependencies: ["H3ddleModels"]
+    ),
+    .testTarget(
+      name: "H3ddleUpscalingTests",
+      dependencies: ["H3ddleCore", "H3ddleUpscaling"]
     ),
   ],
   swiftLanguageModes: [.v6]
