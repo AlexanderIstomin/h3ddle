@@ -8,6 +8,7 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python3 -B "$repository_root/Scripts/test-repack-ltx-input-major.py"
 python3 -B "$repository_root/Scripts/test-convert-turbo-package.py"
 python3 -B "$repository_root/Scripts/test-convert-fasth3-package.py"
+python3 -B "$repository_root/Scripts/test-run-with-timeout.py"
 
 # The LTX VAE decoder is native C and its tile planner deliberately has no
 # model-weight dependency. Exercise the real planner here: a Swift duplicate
@@ -50,6 +51,7 @@ xcodegen generate --spec "$repository_root/project.yml" --project "$repository_r
 # be omitted, then give each target a fresh, serial runner process.
 run_swift_test_targets() {
     package_path=$1
+    swift_test_timeout_seconds=${H3DDLE_SWIFT_TEST_TIMEOUT_SECONDS:-120}
     test_targets=$(
         swift test list --package-path "$package_path" |
             sed -n 's/^\([[:alnum:]_]*Tests\)\..*/\1/p' |
@@ -60,7 +62,25 @@ run_swift_test_targets() {
         exit 1
     fi
     for test_target in $test_targets; do
-        swift test --no-parallel --package-path "$package_path" --filter "$test_target"
+        attempt=1
+        while [ "$attempt" -le 2 ]; do
+            set +e
+            python3 -B "$repository_root/Scripts/run-with-timeout.py" \
+                "$swift_test_timeout_seconds" \
+                swift test --no-parallel --package-path "$package_path" \
+                --filter "$test_target"
+            test_status=$?
+            set -e
+            if [ "$test_status" -eq 0 ]; then
+                break
+            fi
+            if [ "$test_status" -ne 124 ] || [ "$attempt" -eq 2 ]; then
+                echo "Swift test target $test_target failed with status $test_status." >&2
+                return "$test_status"
+            fi
+            echo "Swift test target $test_target timed out; retrying once in a fresh process." >&2
+            attempt=$((attempt + 1))
+        done
     done
 }
 
@@ -106,9 +126,9 @@ codesign --verify --deep --strict \
     "$repository_root/DerivedData/Build/Products/Debug/H3ddle.app"
 
 # The UI tests drive the real application, which means launching a window that
-# takes keyboard focus. On a developer's machine that interrupts whatever they
-# were doing, and a dismissed window fails the run — so locally they are
-# opt-in, and CI, where nothing is competing for the screen, sets the variable.
+# takes keyboard focus. Hosted runners can also lose the application process or
+# accessibility tree after a successful launch. Keep execution opt-in while
+# still compiling the UI test bundle above.
 #
 # Run them here with:  H3DDLE_UI_TESTS=1 Scripts/ci.sh
 if [ "${H3DDLE_UI_TESTS:-0}" != "1" ]; then

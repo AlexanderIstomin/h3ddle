@@ -46,6 +46,7 @@ struct LibraryLoopingPlayer: NSViewRepresentable {
     Coordinator()
   }
 
+  @MainActor
   final class Coordinator {
     let callbacks = Callbacks()
     private var loopObserver: NSObjectProtocol?
