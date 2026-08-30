@@ -368,7 +368,13 @@ struct UpscalingTests {
     #expect(output.duration > 0)
   }
 
-  @Test("Temporal video finalization restores the source audio")
+  @Test(
+    "Temporal video finalization restores the source audio",
+    .disabled(
+      if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+      "GitHub's macOS VM lacks AppleM2ScalerParavirtDriver and AVFoundation crashes"
+    )
+  )
   func temporalVideoFinalizerPreservesAudio() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("h3ddle-temporal-mux-test-\(UUID().uuidString)")
