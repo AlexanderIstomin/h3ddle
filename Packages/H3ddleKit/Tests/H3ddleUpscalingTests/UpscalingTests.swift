@@ -321,7 +321,13 @@ struct UpscalingTests {
     }
   }
 
-  @Test("Video provider writes an exact-size local movie")
+  @Test(
+    "Video provider writes an exact-size local movie",
+    .disabled(
+      if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+      "GitHub's macOS VM lacks AppleM2ScalerParavirtDriver and AVFoundation crashes"
+    )
+  )
   func videoProviderWritesOutput() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("h3ddle-video-upscale-test-\(UUID().uuidString)")
