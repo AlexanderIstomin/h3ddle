@@ -123,8 +123,13 @@ struct UpscalingTests {
       mode: .fast
     )
     let provider = AppleImageUpscalingProvider(
-      capabilityProbe: { kind, size in
-        self.snapshot(kind: kind, size: size, modelStatus: .downloadRequired)
+      capabilityProbe: { _, _ in
+        Issue.record("Fast image upscaling should not probe the optional model backend")
+        return self.snapshot(
+          kind: .image,
+          size: request.sourcePixelSize,
+          modelStatus: .downloadRequired
+        )
       }
     )
     var preparedBackend: UpscalingBackendID?
@@ -339,7 +344,15 @@ struct UpscalingTests {
     )
     var result: UpscalingResult?
 
-    for try await event in AppleVideoUpscalingProvider().events(for: request) {
+    let provider = AppleVideoUpscalingProvider { _, _ in
+      Issue.record("Fast video upscaling should not probe the optional model backend")
+      return self.snapshot(
+        kind: .video,
+        size: request.sourcePixelSize,
+        modelStatus: .downloadRequired
+      )
+    }
+    for try await event in provider.events(for: request) {
       if case .completed(let completed) = event { result = completed }
     }
 

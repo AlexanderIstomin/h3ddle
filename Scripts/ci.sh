@@ -42,13 +42,30 @@ xcrun clang -std=c11 -Wall -Wextra -Werror -D_DARWIN_C_SOURCE \
 "$h3_checkpoint_test"
 
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
-# Swift Testing runs tests concurrently in one process by default. Several of
-# these suites exercise process-global macOS facilities (Core Image, AVFoundation,
-# URLProtocol, environment variables, and helper processes), and Xcode 26.3 can
-# terminate the runner with a signal when those facilities are torn down at the
-# same time. Keep CI deterministic without weakening coverage.
-swift test --no-parallel --package-path "$repository_root/Packages/H3ddleKit"
-swift test --no-parallel --package-path "$repository_root/Engine"
+# Swift Testing normally puts every target in one process and runs tests
+# concurrently. Several targets exercise process-global macOS facilities (Core
+# Image, AVFoundation, URLProtocol, environment variables, and helper
+# processes); Xcode 26 can terminate that shared runner during teardown even
+# after the assertions pass. Discover targets from SwiftPM so new suites cannot
+# be omitted, then give each target a fresh, serial runner process.
+run_swift_test_targets() {
+    package_path=$1
+    test_targets=$(
+        swift test list --package-path "$package_path" |
+            sed -n 's/^\([[:alnum:]_]*Tests\)\..*/\1/p' |
+            sort -u
+    )
+    if [ -z "$test_targets" ]; then
+        echo "No Swift test targets discovered in $package_path." >&2
+        exit 1
+    fi
+    for test_target in $test_targets; do
+        swift test --no-parallel --package-path "$package_path" --filter "$test_target"
+    done
+}
+
+run_swift_test_targets "$repository_root/Packages/H3ddleKit"
+run_swift_test_targets "$repository_root/Engine"
 swift build --package-path "$repository_root/Engine"
 engine_handshake=$(
     "$repository_root/Engine/.build/debug/H3ddleEngineService" \

@@ -72,8 +72,19 @@ public struct AppleImageUpscalingProvider: UpscalingProvider {
           guard request.sourceKind == .image else {
             throw UpscalingError.unsupportedMediaKind
           }
-          let snapshot = capabilityProbe(request.sourceKind, request.sourcePixelSize)
-          let plan = try AppleImageUpscalingPlanner.plan(for: request, snapshot: snapshot)
+          let plan: AppleImageUpscalingPlan
+          if request.mode == .fast {
+            // Fast mode always uses the model-free Accelerate path. Avoid
+            // waking the optional VideoToolbox model (and its GPU driver) when
+            // its result cannot affect backend selection.
+            plan = AppleImageUpscalingPlan(
+              backend: .accelerateVImage,
+              videoToolboxScaleFactor: nil
+            )
+          } else {
+            let snapshot = capabilityProbe(request.sourceKind, request.sourcePixelSize)
+            plan = try AppleImageUpscalingPlanner.plan(for: request, snapshot: snapshot)
+          }
 
           continuation.yield(.preparing(backend: plan.backend))
           continuation.yield(.progress(phase: "Reading source", fractionComplete: 0.1))
