@@ -197,6 +197,7 @@ final class AppModel {
   var modelReport: EngineModelReport?
   let managedModel = ModelCatalog.minimaxH3Ref2VAInt8
   let managedManifests = [
+    ModelCatalog.fastH3VSA,
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,

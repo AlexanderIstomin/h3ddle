@@ -23,14 +23,15 @@ redistributed by H3ddle. The public FastVideo implementation used to document
 the checkpoint format and serving schedule is Apache-2.0 licensed; no
 FastVideo source code is vendored in this repository.
 
-H3ddle can also locally convert the learned VSA checkpoint from
+H3ddle can also convert the learned VSA checkpoint from
 `FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree`, pinned to revision
-`b65818d41939b5085451074fe8ca8b799f8d4921`. The native tile geometry,
-selection, and compression semantics are adapted from FastVideo's
+`b65818d41939b5085451074fe8ca8b799f8d4921`. With written permission from the
+MiniMax/Hailuo team, the converted learned-VSA transformer is distributed from
+`PulpCut/FastH3-VSA-INT8-ConvRot`; it remains subject to the MiniMax H3
+Community License Agreement included with that repository. The native tile
+geometry, selection, and compression semantics are adapted from FastVideo's
 Apache-2.0-licensed `video_sparse_attn_h3.py` implementation at commit
-`b2db0c0a137e610fa2406d942a3c32c0179f047c`. Model weights remain under the
-MiniMax H3 Community License Agreement and are neither committed nor
-redistributed by H3ddle.
+`b2db0c0a137e610fa2406d942a3c32c0179f047c`.
 
 ## TAEF1
 
