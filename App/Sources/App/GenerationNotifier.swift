@@ -14,7 +14,13 @@ import os
 /// Notification Centre rather than over the thing they are looking at.
 @MainActor
 enum GenerationNotifier {
-  private static let log = Logger(subsystem: "com.h3ddle.app", category: "notifications")
+  // UserNotifications invokes completion handlers on its own queue. Keeping
+  // the immutable, Sendable logger outside MainActor prevents those callbacks
+  // from inheriting an executor precondition they cannot satisfy.
+  nonisolated private static let log = Logger(
+    subsystem: "com.h3ddle.app",
+    category: "notifications"
+  )
   private static var askedForAuthorization = false
 
   /// Asked for on the first generation rather than at launch: a permission
@@ -23,7 +29,7 @@ enum GenerationNotifier {
     guard !askedForAuthorization, hostsNotifications else { return }
     askedForAuthorization = true
     UNUserNotificationCenter.current()
-      .requestAuthorization(options: [.alert, .sound]) { granted, error in
+      .requestAuthorization(options: [.alert, .sound]) { @Sendable granted, error in
         if let error {
           log.info("Notification authorization failed: \(error.localizedDescription, privacy: .public)")
         } else {
@@ -59,7 +65,7 @@ enum GenerationNotifier {
     let request = UNNotificationRequest(
       identifier: UUID().uuidString, content: content, trigger: nil
     )
-    UNUserNotificationCenter.current().add(request) { error in
+    UNUserNotificationCenter.current().add(request) { @Sendable error in
       if let error {
         log.info("Could not post a notification: \(error.localizedDescription, privacy: .public)")
       }

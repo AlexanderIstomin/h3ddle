@@ -4,18 +4,16 @@ import Foundation
 /// Metal Core Image kernels for effects that stock CI filters cannot express.
 /// Compiled at first use via `CIKernel` — not the deprecated CIKL source path.
 enum CompositorKernels {
-  // CIKernel is not Sendable in the SDK's annotations, but a compiled kernel
-  // is immutable and documented thread-safe; these lets are initialized once
-  // and only read afterwards, so the unsafe marker states a fact rather than
-  // suppressing a real race.
-  nonisolated(unsafe) static let grain: CIKernel? =
+  // Compiled kernels are immutable, Sendable values under the macOS 26 SDK.
+  // These lets are initialized once and only read afterwards.
+  static let grain: CIKernel? =
     loadResult.kernels.first { $0.name == "h3FilmGrain" }
-  nonisolated(unsafe) static let chroma: CIColorKernel? =
+  static let chroma: CIColorKernel? =
     loadResult.kernels.compactMap { $0 as? CIColorKernel }
     .first { $0.name == "h3ChromaKey" }
   static var compileError: String? { loadResult.error }
 
-  private nonisolated(unsafe) static let loadResult:
+  private static let loadResult:
     (kernels: [CIKernel], error: String?) = {
       do {
         return (try CIKernel.kernels(withMetalString: metalSource), nil)

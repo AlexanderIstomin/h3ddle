@@ -95,6 +95,6 @@ struct CanvasGizmoOverlay: View {
   }
 }
 
-extension CanvasCorner: Identifiable {
+extension CanvasCorner: @retroactive Identifiable {
   public var id: String { rawValue }
 }

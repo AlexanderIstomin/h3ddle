@@ -123,8 +123,13 @@ struct UpscalingTests {
       mode: .fast
     )
     let provider = AppleImageUpscalingProvider(
-      capabilityProbe: { kind, size in
-        self.snapshot(kind: kind, size: size, modelStatus: .downloadRequired)
+      capabilityProbe: { _, _ in
+        Issue.record("Fast image upscaling should not probe the optional model backend")
+        return self.snapshot(
+          kind: .image,
+          size: request.sourcePixelSize,
+          modelStatus: .downloadRequired
+        )
       }
     )
     var preparedBackend: UpscalingBackendID?
@@ -316,7 +321,13 @@ struct UpscalingTests {
     }
   }
 
-  @Test("Video provider writes an exact-size local movie")
+  @Test(
+    "Video provider writes an exact-size local movie",
+    .disabled(
+      if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+      "GitHub's macOS VM lacks AppleM2ScalerParavirtDriver and AVFoundation crashes"
+    )
+  )
   func videoProviderWritesOutput() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("h3ddle-video-upscale-test-\(UUID().uuidString)")
@@ -339,7 +350,15 @@ struct UpscalingTests {
     )
     var result: UpscalingResult?
 
-    for try await event in AppleVideoUpscalingProvider().events(for: request) {
+    let provider = AppleVideoUpscalingProvider { _, _ in
+      Issue.record("Fast video upscaling should not probe the optional model backend")
+      return self.snapshot(
+        kind: .video,
+        size: request.sourcePixelSize,
+        modelStatus: .downloadRequired
+      )
+    }
+    for try await event in provider.events(for: request) {
       if case .completed(let completed) = event { result = completed }
     }
 
@@ -349,7 +368,13 @@ struct UpscalingTests {
     #expect(output.duration > 0)
   }
 
-  @Test("Temporal video finalization restores the source audio")
+  @Test(
+    "Temporal video finalization restores the source audio",
+    .disabled(
+      if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+      "GitHub's macOS VM lacks AppleM2ScalerParavirtDriver and AVFoundation crashes"
+    )
+  )
   func temporalVideoFinalizerPreservesAudio() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("h3ddle-temporal-mux-test-\(UUID().uuidString)")

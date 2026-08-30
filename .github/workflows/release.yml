@@ -11,10 +11,19 @@ permissions:
 jobs:
   build-app:
     runs-on: macos-15
+    env:
+      # Match CI and compile against the SDK that provides the VideoToolbox
+      # super-resolution APIs while preserving macOS 15 as the deployment and
+      # runner target.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Verify Xcode toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
       - name: Install project generator and media tooling
         run: brew install xcodegen ffmpeg
       - name: Generate the Xcode project
@@ -72,12 +81,19 @@ jobs:
           "corrupted" warning is not expected—please report it instead of
           disabling Gatekeeper.
 
-          This update adds a persistent generation queue for every media type,
-          including editing, ordering, sequential execution, progress, retries,
-          and bulk cancellation. Compatible H3 jobs now checkpoint after each
-          completed denoising pass, can be paused and resumed, and recover after
-          an app or helper interruption. Model switching and normal job
-          completion no longer terminate the shared helper between queued jobs.
+          This update adds FastH3 VSA as a managed H3 video model: select it in
+          Models and H3ddle downloads and verifies the pinned package. Measured
+          end-to-end generation is 696 seconds for VSA versus 958 seconds for
+          the equivalent four-pass dense package, with comparable prompt and
+          audio adherence. Reference controls now follow each model's actual
+          capabilities, audio-design prompts persist, and active studio jobs
+          expose Cancel while queue pausing remains in the Queue panel.
+
+          The release also fixes the notification callback actor-isolation crash
+          reported on macOS 26, isolates inline video-preview state to the main
+          actor, and builds with the Xcode 26 SDK required by native
+          VideoToolbox super-resolution. Fast upscaling no longer probes an
+          optional neural scaler that it does not use.
 
           **Requirements:** Apple silicon and macOS 15 or later. FFmpeg is an
           optional fallback for containers the system frameworks cannot read.

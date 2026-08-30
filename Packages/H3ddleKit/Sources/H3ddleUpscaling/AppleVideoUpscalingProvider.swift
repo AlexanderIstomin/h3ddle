@@ -111,8 +111,19 @@ public struct AppleVideoUpscalingProvider: UpscalingProvider {
           guard request.sourceKind == .video else {
             throw UpscalingError.unsupportedMediaKind
           }
-          let snapshot = capabilityProbe(request.sourceKind, request.sourcePixelSize)
-          let plan = try AppleVideoUpscalingPlanner.plan(for: request, snapshot: snapshot)
+          let plan: AppleVideoUpscalingPlan
+          if request.mode == .fast {
+            // Fast mode always uses the model-free AVFoundation path. Avoid
+            // initializing the optional temporal model and GPU driver when
+            // their capabilities cannot affect backend selection.
+            plan = AppleVideoUpscalingPlan(
+              backend: .avFoundation,
+              videoToolboxScaleFactor: nil
+            )
+          } else {
+            let snapshot = capabilityProbe(request.sourceKind, request.sourcePixelSize)
+            plan = try AppleVideoUpscalingPlanner.plan(for: request, snapshot: snapshot)
+          }
           continuation.yield(.preparing(backend: plan.backend))
           continuation.yield(.progress(phase: "Reading video", fractionComplete: 0.05))
           let output: UpscalingResult
