@@ -36,6 +36,39 @@ struct ModelPackageDownloaderTests {
     #expect(manifest.licenseURL.absoluteString.contains("939557dc319dd91227e30195a763f272ba7f8765"))
   }
 
+  @Test("FastH3 exposes only the pinned learned-VSA package")
+  func fastH3VSAManifest() throws {
+    let manifest = ModelCatalog.fastH3VSA
+    let transformer = try #require(
+      manifest.files.first { $0.role == .transformer }
+    )
+
+    #expect(manifest.displayName == "FastH3 · VSA")
+    #expect(manifest.generationProfile == .fastH3)
+    #expect(manifest.generationProfile.isVideoOnly)
+    #expect(!manifest.generationProfile.acceptsReferenceInputs)
+    #expect(manifest.files.count == 10)
+    #expect(manifest.totalByteCount == 55_937_721_123)
+    #expect(transformer.byteCount == 22_966_486_018)
+    #expect(
+      transformer.sha256
+        == "53335dfb80a09e9de0ef8dce2ef36b5b91e9167044b4da7a3a1219746f474f40"
+    )
+    #expect(transformer.sourceRepository == "PulpCut/FastH3-VSA-INT8-ConvRot")
+    #expect(
+      manifest.downloadURL(for: transformer).absoluteString
+        == "https://huggingface.co/PulpCut/FastH3-VSA-INT8-ConvRot/resolve/"
+          + "69e16041b137737fbc2df0885b7a195d37f321f6/diffusion_models/"
+          + "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+    )
+    #expect(
+      transformer.localCandidatePath?.hasSuffix(
+        "FastH3-VSA-Native/diffusion_models/"
+          + "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+      ) == true
+    )
+  }
+
   @Test("LTX pins the released input-major transformer")
   func ltxInputMajorManifest() throws {
     let manifest = ModelCatalog.ltx25
@@ -66,6 +99,12 @@ struct ModelPackageDownloaderTests {
 
   @Test("Video and image package descriptions name user-facing capabilities")
   func packageCapabilityDescriptions() {
+    let fastH3 = ModelCatalog.fastH3VSA.detail
+    #expect(fastH3.contains("5–15 second videos with synchronized sound"))
+    #expect(fastH3.contains("text prompts"))
+    #expect(fastH3.contains("exactly four passes"))
+    #expect(fastH3.contains("image references and still generation are not supported"))
+
     let ltx = ModelCatalog.ltx25.detail
     #expect(ltx.contains("2–20 second videos with synchronized sound"))
     #expect(ltx.contains("start/end frames"))

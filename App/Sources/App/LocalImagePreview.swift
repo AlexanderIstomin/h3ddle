@@ -5,13 +5,19 @@ import SwiftUI
 
 struct LocalImagePreview<FailureContent: View>: View {
   let url: URL
+  var contentMode: ContentMode = .fit
   let failureContent: () -> FailureContent
 
   @State private var image: CGImage?
   @State private var loadFailed = false
 
-  init(url: URL, @ViewBuilder failureContent: @escaping () -> FailureContent) {
+  init(
+    url: URL,
+    contentMode: ContentMode = .fit,
+    @ViewBuilder failureContent: @escaping () -> FailureContent
+  ) {
     self.url = url
+    self.contentMode = contentMode
     self.failureContent = failureContent
   }
 
@@ -21,7 +27,7 @@ struct LocalImagePreview<FailureContent: View>: View {
         Image(decorative: image, scale: 1)
           .resizable()
           .interpolation(.high)
-          .scaledToFit()
+          .aspectRatio(contentMode: contentMode)
       } else if loadFailed {
         failureContent()
       } else {

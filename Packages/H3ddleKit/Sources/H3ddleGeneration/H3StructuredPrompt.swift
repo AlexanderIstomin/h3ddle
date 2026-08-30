@@ -20,10 +20,10 @@ public enum H3StructuredPrompt {
   ///
   /// A body that already carries the description label passes through
   /// unchanged, so hand-written schema prompts are never re-wrapped. The
-  /// soundscape line appears only when the caller provides one — the composer
-  /// never invents ambience. An empty music field becomes the guide's `N/A`
-  /// marker, which is its documented "no background music" value. Image
-  /// generations drop both audio fields: a still has no soundtrack to
+  /// soundscape and music lines use the guide's `N/A` marker when the caller
+  /// leaves them empty. Keeping all three trained fields present avoids making
+  /// the model infer dialogue, ambience, or music from an omitted audio field.
+  /// Image generations drop both audio fields: a still has no soundtrack to
   /// describe.
   ///
   /// `endFrameAlignmentSeconds` is the effective clip length and belongs only
@@ -60,9 +60,10 @@ public enum H3StructuredPrompt {
     if kind != .image {
       let trimmedSoundscape = soundscape?.trimmingCharacters(
         in: .whitespacesAndNewlines)
-      if let trimmedSoundscape, !trimmedSoundscape.isEmpty {
-        sections.append("\(soundscapeLabel) \(trimmedSoundscape)")
-      }
+      sections.append(
+        "\(soundscapeLabel) "
+          + ((trimmedSoundscape?.isEmpty == false) ? trimmedSoundscape! : "N/A")
+      )
       let trimmedMusic = music?.trimmingCharacters(in: .whitespacesAndNewlines)
       if let trimmedMusic, !trimmedMusic.isEmpty {
         sections.append("\(musicLabel) \(trimmedMusic)")

@@ -117,4 +117,21 @@ struct GenerationStatisticsTests {
     stats.deviceMemoryBytes = nil
     #expect(stats.socialSummary.contains("on Apple silicon, fully offline."))
   }
+
+  @Test("Phase timing and sampled peak memory survive in the copied summary")
+  func performanceTelemetry() {
+    var stats = statistics(kind: .video)
+    stats.phaseDurations = [
+      GenerationPhaseTimeline.Entry(phase: "Preparing generation", duration: 12.25),
+      GenerationPhaseTimeline.Entry(phase: "denoise", duration: 240.5),
+    ]
+    stats.peakEngineMemoryBytes = 21_474_836_480
+
+    #expect(
+      stats.socialSummary.contains(
+        "Performance: Preparing generation 12.2s · denoise 240.5s; "
+          + "peak sampled engine memory 20.0 GB."
+      )
+    )
+  }
 }

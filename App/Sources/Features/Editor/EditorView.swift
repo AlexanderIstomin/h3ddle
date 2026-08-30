@@ -15,34 +15,8 @@ struct EditorView: View {
       VStack(spacing: 0) {
         toolbar
         Divider().overlay(H3Color.line)
-        HStack(spacing: 0) {
-          if model.showsProjectSettings {
-            ProjectSettingsPanel(model: model)
-          } else if model.showsTransitionsPanel {
-            TransitionsPanelView(model: model)
-          } else if model.showsEffectsPanel {
-            EffectsPanelView(model: model)
-          } else if model.showsTextPanel {
-            TextInspectorPanel(model: model)
-          }
-          VStack(spacing: 0) {
-            ProgramCanvasView(model: model, clipMenu: $clipMenu)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-            VStack(spacing: 0) {
-              TransportBarView(model: model)
-              ProgramTimelineView(
-                model: model,
-                appendMenu: $appendMenu,
-                clipMenu: $clipMenu
-              )
-            }
-          }
-          if model.showsGenerationQueue {
-            Divider().overlay(H3Color.line)
-            GenerationQueueView(model: model, queue: model.generationQueue)
-              .id(model.generationQueueRevision)
-          }
-        }
+        workspace
+        programDock
       }
       .background(H3Color.canvas)
       .foregroundStyle(H3Color.textPrimary)
@@ -63,13 +37,8 @@ struct EditorView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: model.activeGenerationKind)
-    .animation(.easeOut(duration: 0.16), value: model.showsProjectSettings)
+    .animation(.easeOut(duration: 0.16), value: model.openPanel)
     .animation(.easeOut(duration: 0.16), value: model.showsExport)
-    .animation(.easeOut(duration: 0.16), value: model.showsTextPanel)
-    .animation(.easeOut(duration: 0.16), value: model.showsGenerationQueue)
-    .sheet(isPresented: $model.showsModelSettings) {
-      ModelSettingsView(model: model)
-    }
     .alert(
       "Couldn’t import media",
       isPresented: Binding(
@@ -141,17 +110,8 @@ struct EditorView: View {
         appendMenu = nil
         return .handled
       }
-      if model.showsEffectsPanel {
-        model.showsEffectsPanel = false
-        model.selectedEffectID = nil
-        return .handled
-      }
-      if model.showsTransitionsPanel {
-        model.closeTransitionsPanel()
-        return .handled
-      }
-      if model.showsTextPanel {
-        model.closeTextPanel()
+      if model.openPanel != nil {
+        model.closeOpenPanel()
         return .handled
       }
       return .ignored
@@ -163,6 +123,79 @@ struct EditorView: View {
     .onChange(of: model.showsExport) { _, _ in
       clipMenu = nil
       appendMenu = nil
+    }
+  }
+
+  private var workspace: some View {
+    ZStack(alignment: .leading) {
+      HStack(spacing: 0) {
+        Color.clear.frame(width: LeftRailMetrics.width)
+        ProgramCanvasView(model: model, clipMenu: $clipMenu)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      if let panel = model.openPanel {
+        LeftRailPanel(
+          title: panel.panelTitle,
+          navigationHelp: panel.parentPanel.map { "Back to \($0.panelTitle)" } ?? "Collapse panel",
+          onClose: { navigateBack(from: panel) }
+        ) {
+          panelBody(panel)
+        }
+        .padding(.leading, LeftRailMetrics.width)
+        .transition(.move(edge: .leading).combined(with: .opacity))
+        .zIndex(1)
+      }
+      LeftRailView(model: model)
+        .zIndex(2)
+    }
+  }
+
+  private var programDock: some View {
+    VStack(spacing: 0) {
+      TransportBarView(model: model)
+      ProgramTimelineView(
+        model: model,
+        appendMenu: $appendMenu,
+        clipMenu: $clipMenu
+      )
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  @ViewBuilder
+  private func panelBody(_ panel: EditorPanel) -> some View {
+    switch panel {
+    case .project:
+      ProjectSettingsPanel(model: model, embedded: true)
+    case .video:
+      LibraryPanelView(model: model, kind: .video)
+    case .images:
+      LibraryPanelView(model: model, kind: .image)
+    case .audio:
+      LibraryPanelView(model: model, kind: .audio)
+    case .effects:
+      EffectsPanelView(model: model, embedded: true)
+    case .transitions:
+      TransitionsPanelView(model: model, embedded: true)
+    case .text:
+      TextInspectorPanel(model: model, embedded: true)
+    case .adjust:
+      AdjustPanelView(model: model)
+    case .upscale:
+      UpscalePanelView(model: model)
+    case .queue:
+      GenerationQueueView(model: model, queue: model.generationQueue, embedded: true)
+        .id(model.generationQueueRevision)
+    case .models:
+      ModelSettingsView(model: model, embedded: true)
+    }
+  }
+
+  private func navigateBack(from panel: EditorPanel) {
+    if let parent = panel.parentPanel {
+      model.openRail(parent)
+    } else {
+      model.closeOpenPanel()
     }
   }
 
@@ -391,18 +424,15 @@ struct EditorView: View {
           .interpolation(.high)
           .frame(width: 24, height: 24)
           .accessibilityHidden(true)
-        Text("H3ddle")
+        Text(model.project.name)
           .font(.system(size: 15, weight: .semibold))
           .accessibilityIdentifier("editor-root")
 
         Button {
           if model.showsProjectSettings {
-            model.showsProjectSettings = false
+            model.closeOpenPanel()
           } else {
-            model.showsEffectsPanel = false
-            model.showsTextPanel = false
-            model.closeTransitionsPanel()
-            model.showsProjectSettings = true
+            model.openRail(.project)
           }
         } label: {
           Image(systemName: "slider.vertical.3")
@@ -414,46 +444,6 @@ struct EditorView: View {
 
       Spacer(minLength: 0)
 
-      Button {
-        model.showsGenerationQueue.toggle()
-      } label: {
-        HStack(spacing: 6) {
-          Image(systemName: "list.bullet.rectangle.portrait")
-          Text("Queue")
-          if model.queuedGenerationCount > 0 {
-            Text("\(model.queuedGenerationCount)")
-              .font(.system(size: 9, weight: .bold, design: .monospaced))
-              .foregroundStyle(Color.white)
-              .padding(.horizontal, 6)
-              .frame(height: 18)
-              .background(H3Color.accent)
-              .clipShape(Capsule())
-          }
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(model.showsGenerationQueue
-          ? H3Color.accent : H3Color.textSecondary)
-      }
-      .buttonStyle(H3QuietButtonStyle())
-      .help(model.showsGenerationQueue ? "Close generation queue" : "Open generation queue")
-      .accessibilityIdentifier("generation-queue-toggle")
-
-      Button {
-        model.showsModelSettings = true
-      } label: {
-        HStack(spacing: 6) {
-          Circle()
-            .fill(model.isGenerating ? H3Color.accent : modelStatusColor)
-            .frame(width: 6, height: 6)
-          Text("Models")
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(H3Color.textSecondary)
-        }
-      }
-      .buttonStyle(H3QuietButtonStyle())
-      .help(model.modelStatusTitle)
-      .accessibilityIdentifier("model-status")
-
       Button("Export") {
         model.showsExport = true
       }
@@ -463,16 +453,5 @@ struct EditorView: View {
     .padding(.horizontal, H3Spacing.medium)
     .frame(height: 50)
     .background(H3Color.chrome)
-  }
-
-  private var modelStatusColor: Color {
-    switch model.modelValidationState {
-    case .ready, .validating:
-      H3Color.accent
-    case .failed:
-      H3Color.danger
-    case .notSelected:
-      H3Color.textSecondary.opacity(0.45)
-    }
   }
 }

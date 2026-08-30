@@ -6,6 +6,7 @@ import SwiftUI
 
 struct TextInspectorPanel: View {
   @Bindable var model: AppModel
+  var embedded = false
   @State private var contentDraft = ""
   @State private var familyQuery = ""
   @State private var showsFamilyPicker = false
@@ -19,8 +20,10 @@ struct TextInspectorPanel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      header
-      Divider().overlay(H3Color.line)
+      if !embedded {
+        header
+        Divider().overlay(H3Color.line)
+      }
       if let item = selected {
         ScrollView {
           VStack(alignment: .leading, spacing: 20) {
@@ -43,10 +46,12 @@ struct TextInspectorPanel: View {
         emptyState
       }
     }
-    .frame(width: 320)
-    .background(H3Color.surface)
+    .frame(width: embedded ? nil : 320)
+    .background(embedded ? Color.clear : H3Color.surface)
     .overlay(alignment: .trailing) {
-      Rectangle().fill(H3Color.line).frame(width: 1)
+      if !embedded {
+        Rectangle().fill(H3Color.line).frame(width: 1)
+      }
     }
     .accessibilityIdentifier("text-panel")
   }
@@ -56,6 +61,7 @@ struct TextInspectorPanel: View {
       Text("Text")
         .font(.system(size: 13, weight: .semibold))
       Spacer()
+      if !embedded {
       Button {
         model.closeTextPanel()
       } label: {
@@ -71,27 +77,22 @@ struct TextInspectorPanel: View {
       .foregroundStyle(H3Color.textSecondary)
       .help("Close Text")
       .accessibilityIdentifier("text-close")
+      }
     }
     .padding(.horizontal, 12)
     .frame(height: 44)
   }
 
   private var emptyState: some View {
-    VStack(spacing: 10) {
-      Image(systemName: "textformat")
-        .font(.system(size: 20, weight: .medium))
-        .foregroundStyle(H3Color.accent)
-      Text("Select a T1 clip to edit")
-        .font(.system(size: 12.5))
-        .foregroundStyle(H3Color.textSecondary)
-      Button("Add text") {
-        model.insertTextAtPlayhead(opensInspector: true)
-      }
-      .buttonStyle(H3QuietButtonStyle())
-      .accessibilityIdentifier("text-panel-add")
+    EmptyPanelPlaceholder(
+      title: "No text selected",
+      detail: "Select a T1 clip to edit its style, or add a title at the playhead.",
+      actionTitle: "Add text",
+      actionIdentifier: "text-panel-add",
+      action: { model.insertTextAtPlayhead(opensInspector: true) }
+    ) {
+      EmptyPanelGlyph(systemName: "textformat")
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(24)
   }
 
   private var contentEditor: some View {

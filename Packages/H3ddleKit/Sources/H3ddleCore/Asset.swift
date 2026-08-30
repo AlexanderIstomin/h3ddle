@@ -10,6 +10,11 @@ public struct AssetID: Hashable, Codable, Sendable, RawRepresentable {
   public init() {
     self.init(rawValue: UUID())
   }
+
+  public init?(uuidString: String) {
+    guard let id = UUID(uuidString: uuidString) else { return nil }
+    self.init(rawValue: id)
+  }
 }
 
 public enum MediaKind: String, Codable, CaseIterable, Sendable {

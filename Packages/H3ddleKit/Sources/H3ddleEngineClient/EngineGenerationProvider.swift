@@ -197,6 +197,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           blockCache: request.blockCache,
           previewDenoise: request.previewDenoise,
           useBetaSchedule: request.useBetaSchedule,
+          h3ModelProfile: request.h3ModelProfile ?? .standard,
           seed: request.seed,
           sourceStrength: request.sourceStrength,
           canvasWidth: request.canvasWidth,
@@ -263,6 +264,15 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           while true {
             do {
               try session.run(command: command) { event in
+                if let performance = event.performance {
+                  continuation.yield(
+                    .resourceUsage(
+                      GenerationResourceUsage(
+                        physicalFootprintBytes: performance.physicalFootprintBytes
+                      )
+                    )
+                  )
+                }
                 switch event.kind {
                 case .progress:
                   continuation.yield(

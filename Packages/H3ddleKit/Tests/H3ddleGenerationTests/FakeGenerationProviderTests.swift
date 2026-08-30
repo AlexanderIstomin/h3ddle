@@ -20,6 +20,8 @@ struct FakeGenerationProviderTests {
       switch event {
       case .progress:
         progressCount += 1
+      case .resourceUsage:
+        break
       case .completed(let asset):
         completedKind = asset.kind == .audio ? .audio : nil
         #expect(FileManager.default.fileExists(atPath: asset.url.path))

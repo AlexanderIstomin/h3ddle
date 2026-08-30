@@ -30,6 +30,29 @@ struct TimelineTests {
     #expect(!timeline.visualItems[1].includesNativeAudio)
   }
 
+  @Test("Visual insert at an index splits the lane")
+  func insertsVisualAtIndex() throws {
+    var timeline = ProjectTimeline()
+    let first = videoAsset(name: "A", duration: 2)
+    let second = videoAsset(name: "B", duration: 3)
+    let inserted = videoAsset(name: "C", duration: 1)
+    try timeline.appendVisual(first)
+    try timeline.appendVisual(second)
+    _ = try timeline.insertVisual(inserted, at: 1)
+    #expect(timeline.visualItems.map(\.assetID) == [first.id, inserted.id, second.id])
+  }
+
+  @Test("Audio can be placed at an explicit start time")
+  func placesAudioAtTime() throws {
+    var timeline = ProjectTimeline()
+    let bed = audioAsset(name: "Bed", duration: 2)
+    let sting = audioAsset(name: "Sting", duration: 1)
+    try timeline.appendAudio(bed)
+    let placed = try timeline.placeAudio(sting, at: 4)
+    #expect(abs(placed.startTime - 4) < 0.000_1)
+    #expect(abs(timeline.audioTrackEnd - 5) < 0.000_1)
+  }
+
   @Test("Split at playhead divides a visual clip and carries the source offset")
   func splitsVisualAtPlayhead() throws {
     var timeline = ProjectTimeline()
@@ -655,6 +678,29 @@ struct TimelineTests {
     #expect(TimelineReorderMath.destinationIndex(dropTime: 2.2, others: others) == 1)
     #expect(TimelineReorderMath.destinationIndex(dropTime: 5.2, others: others) == 3)
     #expect(TimelineReorderMath.destinationIndex(dropTime: 1, others: []) == 0)
+  }
+
+  @Test("Insertion time at dest 0 is the 0s mark")
+  func insertionTimeAtZeroIsLaneStart() {
+    let others: [(start: TimeInterval, duration: TimeInterval)] = [
+      (2, 3),
+      (6, 2),
+    ]
+    #expect(abs(TimelineReorderMath.insertionTime(dest: 0, others: others)) < 0.000_1)
+    #expect(abs(TimelineReorderMath.insertionTime(dest: 1, others: others) - 6) < 0.000_1)
+    #expect(abs(TimelineReorderMath.insertionTime(dest: 2, others: others) - 8) < 0.000_1)
+    #expect(abs(TimelineReorderMath.insertionTime(dest: 0, others: [])) < 0.000_1)
+  }
+
+  @Test("Selecting a clip seeks only when the playhead is outside it")
+  func selectionSeeksOnlyWhenOutsideClip() {
+    #expect(TimelineSelection.seekTime(playhead: 1.5, start: 1, duration: 4) == nil)
+    #expect(TimelineSelection.seekTime(playhead: 1, start: 1, duration: 4) == nil)
+    #expect(TimelineSelection.seekTime(playhead: 4.999, start: 1, duration: 4) == nil)
+    #expect(TimelineSelection.seekTime(playhead: 0.5, start: 1, duration: 4) == 1)
+    #expect(TimelineSelection.seekTime(playhead: 5, start: 1, duration: 4) == 1)
+    #expect(TimelineSelection.seekTime(playhead: 12, start: 1, duration: 4) == 1)
+    #expect(TimelineSelection.seekTime(playhead: 0, start: 0, duration: 3) == nil)
   }
 
   @Test("Legacy visual items decode without canvas fields")

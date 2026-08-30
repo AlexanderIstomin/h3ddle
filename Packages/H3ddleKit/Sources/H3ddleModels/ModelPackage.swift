@@ -82,14 +82,33 @@ public enum ModelGenerationProfile: String, Codable, Equatable, Sendable {
   /// Step-distilled weights: few denoising passes, beta sigma spacing,
   /// high fidelity with loose prompt control.
   case turbo
+  /// FastVideo's four-call FastH3 preview. Unlike the older Turbo weights it
+  /// uses the released serving grid and is trained only for text-to-video
+  /// with jointly generated audio.
+  case fastH3
 
   /// Overrides the quality preset's step default when set.
   public var defaultDenoisingSteps: Int? {
-    self == .turbo ? 8 : nil
+    switch self {
+    case .standard: nil
+    case .turbo: 8
+    case .fastH3: 4
+    }
   }
 
   public var usesBetaSchedule: Bool {
     self == .turbo
+  }
+
+  /// FastH3 Preview v1 is T2VA-only. Keeping this on the profile makes a
+  /// manually added converted package obey the same product boundary as a
+  /// future managed package.
+  public var isVideoOnly: Bool {
+    self == .fastH3
+  }
+
+  public var acceptsReferenceInputs: Bool {
+    self != .fastH3
   }
 }
 
@@ -321,6 +340,50 @@ public enum ModelCatalog {
         isDirectory: false
       )
       .path
+  )
+
+  /// FastVideo's released four-call learned-VSA checkpoint, converted into
+  /// the exact input-major package consumed by h3.c. Only the transformer is
+  /// unique: the text encoder, VAEs, tokenizer, and runtime configs reuse the
+  /// same pinned files as the standard H3 package.
+  public static let fastH3VSA = ModelPackageManifest(
+    id: "h3ddle-fasth3-vsa-int8-v1",
+    displayName: "FastH3 · VSA",
+    detail:
+      "Creates 5–15 second videos with synchronized sound from text prompts "
+      + "at a 480p-or-larger short edge. Uses the learned sparse-attention "
+      + "checkpoint at exactly four passes; image references and still "
+      + "generation are not supported.",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
+    licenseName: "MiniMax H3 Community License Agreement",
+    licenseURL: URL(
+      string:
+        "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/939557dc319dd91227e30195a763f272ba7f8765/LICENSE"
+    )!,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    generationProfile: .fastH3,
+    files: [
+      ModelPackageFile(
+        role: .transformer,
+        path: "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        byteCount: 22_966_486_018,
+        sha256: "53335dfb80a09e9de0ef8dce2ef36b5b91e9167044b4da7a3a1219746f474f40",
+        sourceRepository: "PulpCut/FastH3-VSA-INT8-ConvRot",
+        sourceRevision: "69e16041b137737fbc2df0885b7a195d37f321f6",
+        localCandidatePath: URL.applicationSupportDirectory
+          .appendingPathComponent("H3ddle", isDirectory: true)
+          .appendingPathComponent("Conversion", isDirectory: true)
+          .appendingPathComponent("FastH3-VSA-Native", isDirectory: true)
+          .appendingPathComponent("diffusion_models", isDirectory: true)
+          .appendingPathComponent(
+            "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            isDirectory: false
+          )
+          .path
+      ),
+    ] + sharedMinimaxH3Files
   )
 
   /// Adds the compact Ref2VA AdaLN overlay alongside the standard FL2VA core.

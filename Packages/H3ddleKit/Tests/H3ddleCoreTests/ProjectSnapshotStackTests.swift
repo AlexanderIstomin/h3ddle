@@ -3,6 +3,7 @@ import Testing
 
 @testable import H3ddleCore
 
+
 @Suite("Project snapshot stack")
 struct ProjectSnapshotStackTests {
   @Test("Checkpoint then undo restores the previous project")

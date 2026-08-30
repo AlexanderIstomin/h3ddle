@@ -16,6 +16,7 @@ const char *h3ddle_h3_device_name(const h3_device_info *device);
 const char *h3ddle_h3_device_architecture(const h3_device_info *device);
 const char *h3ddle_h3_model_layout_name(const h3_model_info *model);
 int h3ddle_h3_model_supports_generation(const h3_model_info *model);
+int h3ddle_h3_model_is_fasth3(const h3_model_info *model);
 
 /* Stable Audio 3 sound effects. The package is loaded and released per
  * call: at 1.7 GB it is cheap to reload, and holding it resident would

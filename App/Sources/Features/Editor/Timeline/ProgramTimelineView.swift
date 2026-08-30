@@ -72,24 +72,39 @@ struct ProgramTimelineView: View {
             )
               .frame(height: TimelineChrome.rulerHeight)
             if model.showsEffectLanes {
-              effectLane(items: model.fxLanesExpanded ? [] : model.effectLaneItems)
+              effectLane(items: [], muted: model.textTrackMuted)
+            }
+            textLane
+            if model.showsEffectLanes {
+              effectLane(
+                items: model.fxLanesExpanded ? [] : model.effectLaneItems,
+                muted: model.visualTrackMuted
+              )
               if model.fxLanesExpanded {
                 ForEach(model.effectLaneItems) { item in
-                  effectLane(items: [item])
+                  effectLane(items: [item], muted: model.visualTrackMuted)
                 }
               }
             }
-            textLane
             visualLane
+            if model.showsEffectLanes {
+              effectLane(items: [], muted: model.audioTrackMuted)
+            }
             audioLane
           }
           .frame(width: contentWidth, alignment: .topLeading)
 
           playhead
+          if let landMarkerTime {
+            landMarker(at: landMarkerTime)
+          }
         }
       }
       .scrollIndicators(.hidden)
       .scrollPosition($timelineScrollPosition)
+      .onChange(of: model.timelineRevealToken) { _, _ in
+        scrollTimeline(to: model.timelineRevealTime)
+      }
       .onScrollGeometryChange(for: CGFloat.self) { geometry in
         geometry.contentOffset.x
       } action: { _, offset in
@@ -179,6 +194,20 @@ struct ProgramTimelineView: View {
     timelineScrollPosition.scrollTo(x: nextScroll)
   }
 
+  private func scrollTimeline(to time: TimeInterval) {
+    if time <= 0.000_1 {
+      timelineScrollPosition.scrollTo(edge: .leading)
+      timelineScrollPosition.scrollTo(x: 0)
+      return
+    }
+    let x = metrics.x(for: time)
+    let pad: CGFloat = 24
+    let visibleStart = timelineScrollX + pad
+    let visibleEnd = timelineScrollX + timelineViewportWidth - pad
+    if x >= visibleStart && x <= visibleEnd { return }
+    timelineScrollPosition.scrollTo(x: Double(max(0, x - pad)))
+  }
+
   private var textLane: some View {
     let renderedItems = model.project.timeline.textItems.filter { item in
       textMove?.itemID == item.id
@@ -186,6 +215,7 @@ struct ProgramTimelineView: View {
     }
     return ZStack(alignment: .topLeading) {
       laneBackground(alt: true)
+        .onTapGesture { model.selectedTimelineItem = nil }
         .overlay {
           GeometryReader { proxy in
             SecondaryClickProbe { local in
@@ -227,11 +257,11 @@ struct ProgramTimelineView: View {
         .zIndex(isMoving ? 12 : 0)
         .opacity(isMoving ? 0.92 : 1)
         .onTapGesture(count: 2) {
-          model.selectedTimelineItem = .text(item.id)
+          model.selectTimelineClip(.text(item.id))
           model.openTextPanel()
         }
         .onTapGesture {
-          model.selectedTimelineItem = .text(item.id)
+          model.selectTimelineClip(.text(item.id))
         }
         .overlay {
           GeometryReader { proxy in
@@ -268,6 +298,7 @@ struct ProgramTimelineView: View {
     }
     return ZStack(alignment: .topLeading) {
       laneBackground(alt: false)
+        .onTapGesture { model.selectedTimelineItem = nil }
       ForEach(renderedPlacements, id: \.item.id) { placement in
         let asset = model.project.asset(id: placement.item.assetID)
         let isMoving = visualMove?.itemID == placement.item.id
@@ -297,8 +328,11 @@ struct ProgramTimelineView: View {
         .offset(x: metrics.x(for: placement.startTime) + (isMoving ? (visualMove?.translation ?? 0) : 0))
         .zIndex(isMoving ? 12 : (placement.item.transition != nil ? 2 : 0))
         .opacity(isMoving ? 0.92 : 1)
+        .onTapGesture(count: 2) {
+          model.toggleAdjust(for: .visual(placement.item.id))
+        }
         .onTapGesture {
-          model.selectedTimelineItem = .visual(placement.item.id)
+          model.selectTimelineClip(.visual(placement.item.id))
         }
         .overlay {
           GeometryReader { proxy in
@@ -347,15 +381,6 @@ struct ProgramTimelineView: View {
         }
         }
       }
-      if let visualMove, visualMove.proposedIndex != visualMove.fromIndex {
-        insertionCaret(
-          x: insertionX(
-            dest: visualMove.proposedIndex,
-            placements: visualMove.reorderTargets
-          ),
-          height: TimelineChrome.visualLaneHeight
-        )
-      }
       appendControl(track: .visual)
         .offset(
           x: metrics.x(for: model.project.timeline.visualDuration) + 8,
@@ -368,7 +393,16 @@ struct ProgramTimelineView: View {
         Color.black.opacity(0.16).allowsHitTesting(false)
       }
     }
-    .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-lane-drop")
+    .timelineMediaDrop(lane: .visual, model: model, accessibilityID: "visual-lane-drop") {
+      id, location in
+      let time = metrics.time(for: location.x)
+      let others = model.project.timeline.visualPlacements.map {
+        ($0.startTime, $0.item.duration)
+      }
+      let index = TimelineReorderMath.destinationIndex(dropTime: time, others: others)
+      model.insertLibraryAsset(id, visualIndex: index)
+      return true
+    }
   }
 
   private var audioLane: some View {
@@ -378,6 +412,7 @@ struct ProgramTimelineView: View {
     }
     return ZStack(alignment: .topLeading) {
       laneBackground(alt: true)
+        .onTapGesture { model.selectedTimelineItem = nil }
       ForEach(renderedItems) { item in
         let isMoving = audioMove?.itemID == item.id
         TimelineClipView(
@@ -403,8 +438,11 @@ struct ProgramTimelineView: View {
         .offset(x: metrics.x(for: item.startTime) + (isMoving ? (audioMove?.translation ?? 0) : 0))
         .zIndex(isMoving ? 12 : 0)
         .opacity(isMoving ? 0.92 : 1)
+        .onTapGesture(count: 2) {
+          model.toggleAdjust(for: .audio(item.id))
+        }
         .onTapGesture {
-          model.selectedTimelineItem = .audio(item.id)
+          model.selectTimelineClip(.audio(item.id))
         }
         .overlay {
           GeometryReader { proxy in
@@ -420,15 +458,6 @@ struct ProgramTimelineView: View {
           }
         }
       }
-      if let audioMove, audioMove.proposedIndex != audioMove.fromIndex {
-        insertionCaret(
-          x: insertionX(
-            dest: audioMove.proposedIndex,
-            placements: audioMove.reorderTargets
-          ),
-          height: TimelineChrome.audioLaneHeight
-        )
-      }
       appendControl(track: .audio)
         .offset(
           x: metrics.x(for: model.project.timeline.audioTrackEnd) + 8,
@@ -441,10 +470,14 @@ struct ProgramTimelineView: View {
         Color.black.opacity(0.16).allowsHitTesting(false)
       }
     }
-    .timelineMediaDrop(lane: .audio, model: model, accessibilityID: "audio-lane-drop")
+    .timelineMediaDrop(lane: .audio, model: model, accessibilityID: "audio-lane-drop") {
+      id, location in
+      model.insertLibraryAsset(id, audioStart: metrics.time(for: location.x))
+      return true
+    }
   }
 
-  private func effectLane(items: [EffectLaneItem]) -> some View {
+  private func effectLane(items: [EffectLaneItem], muted: Bool) -> some View {
     let renderedItems = items.filter { item in
       shouldRenderTimelineSpan(start: item.startTime, duration: item.duration)
     }
@@ -469,7 +502,7 @@ struct ProgramTimelineView: View {
       Rectangle().fill(H3Color.hairSoft).frame(height: 1)
     }
     .overlay {
-      if model.visualTrackMuted {
+      if muted {
         Color.black.opacity(0.16).allowsHitTesting(false)
       }
     }
@@ -738,11 +771,11 @@ struct ProgramTimelineView: View {
     appendMenu = nil
     switch target {
     case .visual(let id):
-      model.selectedTimelineItem = .visual(id)
+      model.selectTimelineClip(.visual(id))
     case .audio(let id):
-      model.selectedTimelineItem = .audio(id)
+      model.selectTimelineClip(.audio(id))
     case .text(let id):
-      model.selectedTimelineItem = .text(id)
+      model.selectTimelineClip(.text(id))
     case .insertText:
       break
     }
@@ -880,32 +913,69 @@ struct ProgramTimelineView: View {
     } else {
       model.setAudioStart(
         audioMove.itemID,
-        startTime: audioMove.originStart + metrics.time(for: audioMove.translation)
+        startTime: snappedStart(
+          audioMove.originStart + metrics.time(for: audioMove.translation)
+        )
       )
     }
   }
 
-  private func insertionX(
-    dest: Int,
-    placements: [(start: TimeInterval, duration: TimeInterval)]
-  ) -> CGFloat {
-    if dest <= 0 {
-      return placements.first.map { metrics.x(for: $0.start) } ?? 0
+  private var landMarkerTime: TimeInterval? {
+    if let visualMove, visualMove.proposedIndex != visualMove.fromIndex {
+      return TimelineReorderMath.insertionTime(
+        dest: visualMove.proposedIndex,
+        others: visualMove.reorderTargets
+      )
     }
-    if dest >= placements.count {
-      return placements.last.map { metrics.x(for: $0.start + $0.duration) } ?? 0
+    if let audioMove {
+      if audioMove.proposedIndex != audioMove.fromIndex {
+        return TimelineReorderMath.insertionTime(
+          dest: audioMove.proposedIndex,
+          others: audioMove.reorderTargets
+        )
+      }
+      let proposed = max(
+        0,
+        audioMove.originStart + metrics.time(for: audioMove.translation)
+      )
+      if proposed <= zeroSnapTime { return 0 }
     }
-    return metrics.x(for: placements[dest].start)
+    if let textMove {
+      let proposed = max(
+        0,
+        textMove.originStart + metrics.time(for: textMove.translation)
+      )
+      if proposed <= zeroSnapTime { return 0 }
+    }
+    return nil
   }
 
-  private func insertionCaret(x: CGFloat, height: CGFloat) -> some View {
-    RoundedRectangle(cornerRadius: 1, style: .continuous)
-      .fill(H3Color.accent)
-      .frame(width: 2, height: height - 4)
-      .offset(x: x - 1, y: 2)
-      .shadow(color: H3Color.accent.opacity(0.7), radius: 3)
-      .zIndex(14)
-      .allowsHitTesting(false)
+  private var zeroSnapTime: TimeInterval {
+    max(metrics.time(for: 12), 0.05)
+  }
+
+  private func snappedStart(_ proposed: TimeInterval) -> TimeInterval {
+    let time = max(0, proposed)
+    return time <= zeroSnapTime ? 0 : time
+  }
+
+  private func landMarker(at time: TimeInterval) -> some View {
+    let x = metrics.x(for: max(0, time))
+    return ZStack(alignment: .top) {
+      Rectangle()
+        .fill(H3Color.accent)
+        .frame(width: 2)
+        .frame(maxHeight: .infinity)
+      Image(systemName: "arrowtriangle.down.fill")
+        .font(.system(size: 8, weight: .bold))
+        .foregroundStyle(H3Color.accent)
+        .offset(y: -1)
+    }
+    .shadow(color: H3Color.accent.opacity(0.7), radius: 3)
+    .offset(x: max(0, x - 1))
+    .zIndex(7)
+    .allowsHitTesting(false)
+    .accessibilityIdentifier("timeline-land-marker")
   }
 
   private func dragText(_ item: TextItem, translation: CGFloat) {
@@ -935,7 +1005,9 @@ struct ProgramTimelineView: View {
     guard let textMove, abs(textMove.translation) >= 1 else { return }
     model.setTextStart(
       textMove.itemID,
-      startTime: max(0, textMove.originStart + metrics.time(for: textMove.translation))
+      startTime: snappedStart(
+        textMove.originStart + metrics.time(for: textMove.translation)
+      )
     )
   }
 

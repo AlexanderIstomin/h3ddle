@@ -42,6 +42,8 @@ Editing and output:
 - a program timeline with a T1 text lane, filmstrip, and waveform previews;
 - canvas objects with direct gesture editing, text items, visual effects and
   transitions, and undo/redo;
+- autosaved projects that keep the asset library and composition across launches;
+- a left rail with Video / Images / Audio bins, inspectors, Queue, and Models;
 - drag-and-drop import of existing video, image, and audio files;
 - H.264, H.265, or ProRes export with loudness normalization; and
 - Download and Copy statistics on any finished generation.
@@ -217,6 +219,100 @@ the hybrid for comparison; if only the overlay is installed, the loader uses
 it automatically. The hybrid intentionally changes generation and is not an
 exact-output or speed optimization. Standard and Turbo Ref2VA produce the same
 overlay bytes, so the managed packages share one pinned download.
+
+### FastH3 four-step preview
+
+H3ddle can run FastVideo's Dense and learned-VSA FastH3 previews through the native Metal
+engine. This is a text-to-video-with-audio profile: it always uses the exact
+four-call serving schedule and does not accept image, audio, or inpainting
+references. H3ddle validates those constraints in both the app protocol and
+the weight loader, and disables its approximate reuse/cache controls for this
+profile.
+
+The app offers the recommended learned-VSA build as **FastH3 · VSA** in the
+Video section of Models. A managed install downloads the converted transformer
+from [`PulpCut/FastH3-VSA-INT8-ConvRot`](https://huggingface.co/PulpCut/FastH3-VSA-INT8-ConvRot)
+and reuses the pinned H3 text encoder, VAEs, tokenizer, and configuration files
+already shared by the standard package. Dense remains a local conversion and
+parity baseline; it is not offered as a managed download.
+
+FastH3 updates MiniMax H3's original full timestep/AdaLN path, which is not
+shape-compatible with H3ddle's compact eight-dimensional transformer. Build a
+native package only when reproducing the conversion or comparing the Dense
+baseline. Start from one of FastVideo's already-merged checkpoints instead of
+applying the LoRA to an existing H3ddle file:
+
+```sh
+hf download FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree \
+  --revision f624f08c6c279ab43534c003e556fc5b295b6558 \
+  --include 'transformer/*' \
+  --local-dir /path/to/FastH3-Dense
+
+python3 -B Scripts/convert-fasth3-package.py \
+  --source /path/to/FastH3-Dense/transformer \
+  --template /path/to/minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors \
+  --out /path/to/model/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+```
+
+To reproduce the managed step-1300 VSA transformer, substitute:
+
+```sh
+hf download FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree \
+  --revision b65818d41939b5085451074fe8ca8b799f8d4921 \
+  --include 'transformer/*' \
+  --local-dir /path/to/FastH3-VSA
+
+python3 -B Scripts/convert-fasth3-package.py \
+  --source /path/to/FastH3-VSA/transformer \
+  --template /path/to/minimax_h3_fl2va_pruned_int8_convrot_input_major.safetensors \
+  --attention vsa \
+  --out /path/to/model/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+```
+
+The conversion needs roughly 66 GB for the merged source and produces an
+approximately 21 GB Dense or 23 GB VSA transformer. It keeps H3ddle's input-major INT8 ConvRot
+core, translates Diffusers' value-first SwiGLU weights into h3.c's gate-first
+layout, and precomputes the full trained AdaLN projection at the seven timestep
+rows the four-call schedule can reach. Put a local result in a compatible H3
+model folder at the exact path shown above; the model picker detects the
+embedded `fasth3` profile automatically. When both local FastH3 variants are
+installed, VSA becomes the preferred selection once; choosing Dense manually
+afterward is respected. FastH3 runs only inside its released 5–15
+second envelope and starts at a 480-pixel short edge; the app promotes its
+resolution picker to the 512p tier and the worker rejects smaller requests.
+
+Completed queue receipts retain engine phase durations and the highest sampled
+helper-process memory footprint. **Copy statistics** includes both, so a Dense
+versus VSA comparison no longer depends on transient console output.
+
+#### Apple Silicon benchmark
+
+A controlled end-to-end comparison on a 32 GB M1 Pro used the same prompt,
+soundscape, seed, 512×512 canvas, 124 frames, four-call serving schedule, and
+cache settings. Both outputs were 5.175-second H.264 clips at 24 fps with
+stereo AAC:
+
+| FastH3 attention | Total generation time | Time saved vs Dense | End-to-end reduction | Relative throughput |
+| --- | ---: | ---: | ---: | ---: |
+| Dense | 958.174 s | — | — | 1.000× |
+| Learned VSA | 696.043 s | 262.132 s | 27.4% | 1.377× |
+
+The deterministic native VSA primitive test, which includes ragged prefix and
+3D video tiles, exact top-k routing, sparse softmax, and the learned correction,
+measured cosine similarity `0.999998633`, mean absolute error `0.000065549`,
+and maximum error `0.000706643` against its CPU reference after BF16 output
+rounding. These are local M1 Pro measurements, not projections for other Apple
+Silicon configurations.
+
+FastVideo's 14× headline compares its four-call, 90%-sparse VSA configuration
+with a 49-call dense B200 baseline. It is not the expected gain over H3ddle's
+existing eight-call Turbo package. VSA package format 2 carries all 50 learned
+gate projections and selects a dedicated native tile-64 Metal path: segment-
+pure prefix tiles, 3D 4×4×4 video tiling, FP32 true-size pooling, exact top-k
+video routing, sparse token softmax, and the gated pooled correction. H3ddle's
+optional training-free Sol attention has different mathematics and is never
+used as a substitute. Dense package format 1 remains available as the parity
+and quality baseline.
 
 The managed LTX-2.5 transformer is likewise stored input-major. Its 1,344 INT8
 projections are exact transposes of Lightricks' regular layout and its other

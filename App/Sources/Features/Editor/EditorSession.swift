@@ -27,6 +27,90 @@ enum TimelineItemID: Hashable {
   case text(UUID)
 }
 
+enum EditorPanel: String, CaseIterable, Identifiable {
+  case project
+  case video
+  case images
+  case audio
+  case effects
+  case transitions
+  case text
+  case adjust
+  case upscale
+  case queue
+  case models
+
+  var id: String { rawValue }
+
+  static let railTabs: [EditorPanel] = [
+    .video, .images, .audio, .effects, .transitions, .text, .adjust, .queue, .models,
+  ]
+
+  var railLabel: String {
+    switch self {
+    case .project: "Project"
+    case .video: "Video"
+    case .images: "Images"
+    case .audio: "Audio"
+    case .effects: "Effects"
+    case .transitions: "Transitions"
+    case .text: "Text"
+    case .adjust: "Adjust"
+    case .upscale: "Upscale"
+    case .queue: "Queue"
+    case .models: "Models"
+    }
+  }
+
+  var railSymbol: String {
+    switch self {
+    case .project: "slider.vertical.3"
+    case .video: "film"
+    case .images: "photo"
+    case .audio: "waveform"
+    case .effects: "sparkles"
+    case .transitions: "rectangle.split.2x1"
+    case .text: "textformat"
+    case .adjust: "dial.low"
+    case .upscale: "arrow.up.left.and.arrow.down.right"
+    case .queue: "list.bullet.rectangle.portrait"
+    case .models: "cpu"
+    }
+  }
+
+  var panelTitle: String {
+    switch self {
+    case .project: "Project"
+    case .video: "Video"
+    case .images: "Images"
+    case .audio: "Audio"
+    case .effects: "Effects"
+    case .transitions: "Transitions"
+    case .text: "Text"
+    case .adjust: "Adjust"
+    case .upscale: "Upscale"
+    case .queue: "Queue"
+    case .models: "Models"
+    }
+  }
+
+  var libraryKind: MediaKind? {
+    switch self {
+    case .video: .video
+    case .images: .image
+    case .audio: .audio
+    default: nil
+    }
+  }
+
+  var parentPanel: EditorPanel? {
+    switch self {
+    case .upscale: .adjust
+    default: nil
+    }
+  }
+}
+
 struct CanvasGestureSession: Equatable {
   enum Kind: Equatable {
     case move

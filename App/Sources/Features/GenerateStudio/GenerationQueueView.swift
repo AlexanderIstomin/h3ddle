@@ -6,6 +6,7 @@ import SwiftUI
 struct GenerationQueueView: View {
   @Bindable var model: AppModel
   let queue: GenerationJobQueue
+  var embedded = false
   @State private var pausedJobPendingEdit: GenerationQueueJob?
 
   private var queueJobs: [GenerationQueueJob] {
@@ -26,7 +27,11 @@ struct GenerationQueueView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      header
+      if embedded {
+        embeddedToolbar
+      } else {
+        header
+      }
       Divider().overlay(H3Color.line)
       queueProgress
       Divider().overlay(H3Color.line)
@@ -47,6 +52,7 @@ struct GenerationQueueView: View {
                 activeJobID: model.activeQueueJobID,
                 remaining: job.id == model.activeQueueJobID
                   ? model.generationRemainingDescription : nil,
+                onShowProgress: { model.showGenerationProgress(job.id) },
                 onEdit: { edit(job) },
                 onRunNext: { model.runGenerationJobNext(job.id) },
                 onPause: { model.pauseGenerationJob(job.id) },
@@ -78,6 +84,7 @@ struct GenerationQueueView: View {
                 job: job,
                 activeJobID: model.activeQueueJobID,
                 remaining: nil,
+                onShowProgress: { model.showGenerationProgress(job.id) },
                 onEdit: { edit(job) },
                 onRunNext: { model.runGenerationJobNext(job.id) },
                 onPause: { model.pauseGenerationJob(job.id) },
@@ -95,9 +102,10 @@ struct GenerationQueueView: View {
         .padding(14)
       }
     }
-    .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
-    .background(H3Color.surface)
+    .frame(minWidth: embedded ? nil : 360, idealWidth: embedded ? nil : 390, maxWidth: embedded ? .infinity : 420)
+    .background(embedded ? Color.clear : H3Color.surface)
     .foregroundStyle(H3Color.textPrimary)
+    .accessibilityIdentifier("generation-queue")
     .alert(item: $pausedJobPendingEdit) { job in
       Alert(
         title: Text("Edit paused generation?"),
@@ -112,6 +120,16 @@ struct GenerationQueueView: View {
     }
   }
 
+  private var embeddedToolbar: some View {
+    HStack(spacing: 8) {
+      Spacer(minLength: 0)
+      runAllButton
+      cancelAllButton
+    }
+    .padding(.horizontal, 12)
+    .frame(height: 44)
+  }
+
   private var header: some View {
     HStack(spacing: 10) {
       Image(systemName: "list.bullet.rectangle.portrait")
@@ -120,27 +138,9 @@ struct GenerationQueueView: View {
       Text("GENERATION QUEUE")
         .font(.system(size: 10, weight: .bold, design: .monospaced))
         .tracking(1.2)
-        .accessibilityIdentifier("generation-queue")
       Spacer()
-      Button {
-        model.runAllGenerationJobs()
-      } label: {
-        Label("Run All", systemImage: "play.fill")
-      }
-      .buttonStyle(H3QuietButtonStyle())
-      .disabled(!hasWaitingJobs)
-      .help("Schedule every waiting job in its current order")
-      .accessibilityIdentifier("generation-queue-run-all")
-      Button {
-        model.cancelAllGenerationJobs()
-      } label: {
-        Text("Cancel All")
-      }
-      .buttonStyle(H3QuietButtonStyle())
-      .foregroundStyle(H3Color.danger)
-      .disabled(!queue.hasCancellableJobs)
-      .help("Cancel the current generation and every waiting or paused job")
-      .accessibilityIdentifier("generation-queue-cancel-all")
+      runAllButton
+      cancelAllButton
       Button {
         model.showsGenerationQueue = false
       } label: {
@@ -153,6 +153,31 @@ struct GenerationQueueView: View {
     .padding(.horizontal, 14)
     .frame(height: 50)
     .background(H3Color.chrome)
+  }
+
+  private var runAllButton: some View {
+    Button {
+      model.runAllGenerationJobs()
+    } label: {
+      Label("Run All", systemImage: "play.fill")
+    }
+    .buttonStyle(H3QuietButtonStyle())
+    .disabled(!hasWaitingJobs)
+    .help("Schedule every waiting job in its current order")
+    .accessibilityIdentifier("generation-queue-run-all")
+  }
+
+  private var cancelAllButton: some View {
+    Button {
+      model.cancelAllGenerationJobs()
+    } label: {
+      Text("Cancel All")
+    }
+    .buttonStyle(H3QuietButtonStyle())
+    .foregroundStyle(H3Color.danger)
+    .disabled(!queue.hasCancellableJobs)
+    .help("Cancel the current generation and every waiting or paused job")
+    .accessibilityIdentifier("generation-queue-cancel-all")
   }
 
   @ViewBuilder private var queueProgress: some View {
@@ -252,6 +277,7 @@ private struct GenerationQueueRow: View {
   let job: GenerationQueueJob
   let activeJobID: UUID?
   let remaining: String?
+  let onShowProgress: () -> Void
   let onEdit: () -> Void
   let onRunNext: () -> Void
   let onPause: () -> Void
@@ -339,6 +365,9 @@ private struct GenerationQueueRow: View {
         Button(action: onRemove) { Image(systemName: "trash") }
           .help("Remove job")
       case .preparing, .running:
+        Button("Show", action: onShowProgress)
+          .help("Show live progress in Generation Studio")
+          .accessibilityIdentifier("generation-job-show")
         if job.supportsPause {
           Button("Pause", action: onPause)
             .accessibilityIdentifier("generation-job-pause")

@@ -6,6 +6,7 @@ import H3ddleEngineProtocol
 import H3ddleGeneration
 import H3ddleMedia
 import H3ddleModels
+import H3ddleUpscaling
 import ImageIO
 import Observation
 import os
@@ -127,8 +128,12 @@ struct ModelChoice: Identifiable, Equatable {
 @MainActor
 @Observable
 final class AppModel {
-  var project = H3ddleProject(name: "First H3ddle")
+  var project = H3ddleProject(name: "Untitled Project")
+  var projectSession: ProjectSession
+  private let projectStore: ProjectPackageStore
+  private var projectSaveTask: Task<Void, Never>?
   var activeGenerationKind: GenerationKind?
+  private(set) var generationStudioJobID: UUID?
   var isGenerating = false
   var generationPhase = ""
   /// Audio studio only: which of three models is generating. H3 writes the
@@ -171,9 +176,20 @@ final class AppModel {
   var errorMessage: String?
   var importErrorMessage: String?
   var showsExport = false
-  var showsModelSettings = false
-  var showsGenerationQueue = false
-  var showsProjectSettings = false
+  var openPanel: EditorPanel?
+  var selectedLibraryAssetID: AssetID?
+  var showsModelSettings: Bool {
+    get { openPanel == .models }
+    set { setPanel(.models, newValue) }
+  }
+  var showsGenerationQueue: Bool {
+    get { openPanel == .queue }
+    set { setPanel(.queue, newValue) }
+  }
+  var showsProjectSettings: Bool {
+    get { openPanel == .project }
+    set { setPanel(.project, newValue) }
+  }
   var modelDirectory: URL?
   var modelValidationState: ModelValidationState = .notSelected
   var modelValidationMessage = "Choose a local MiniMax H3 model folder."
@@ -181,6 +197,7 @@ final class AppModel {
   var modelReport: EngineModelReport?
   let managedModel = ModelCatalog.minimaxH3Ref2VAInt8
   let managedManifests = [
+    ModelCatalog.fastH3VSA,
     ModelCatalog.minimaxH3Ref2VAInt8,
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,
@@ -221,18 +238,35 @@ final class AppModel {
   var timelineMode = TimelinePresentationMode.expanded
   var showsEffectLanes = true
   var fxLanesExpanded = false
-  var showsEffectsPanel = false
+  var showsEffectsPanel: Bool {
+    get { openPanel == .effects }
+    set { setPanel(.effects, newValue) }
+  }
   var selectedEffectID: UUID?
-  var showsTransitionsPanel = false
+  var showsTransitionsPanel: Bool {
+    get { openPanel == .transitions }
+    set { setPanel(.transitions, newValue) }
+  }
   var browsesTransitionCatalog = false
-  var selectedTimelineItem: TimelineItemID?
+  var selectedTimelineItem: TimelineItemID? {
+    didSet {
+      if selectedTimelineItem == nil, openPanel == .adjust || openPanel == .upscale {
+        closeOpenPanel()
+      }
+    }
+  }
   var visualTrackMuted = false
   var audioTrackMuted = false
   var textTrackMuted = false
-  var showsTextPanel = false
+  var showsTextPanel: Bool {
+    get { openPanel == .text }
+    set { setPanel(.text, newValue) }
+  }
   var canvasGesture: CanvasGestureSession?
   private var snapshots = ProjectSnapshotStack()
   var studioResults: [GenerationResult] = []
+  private(set) var assetUpscalingJobs: [AssetID: AssetUpscalingJob] = [:]
+  @ObservationIgnored private var assetUpscalingTasks: [AssetID: Task<Void, Never>] = [:]
   var generationQueue = GenerationJobQueue()
   /// Structural and lifecycle transitions replace the visible queue subtree.
   /// Progress-only updates deliberately leave its identity alone so a long
@@ -264,10 +298,18 @@ final class AppModel {
   var studioInpaintMaskKind: EngineVideoInpaintMaskKind = .still
   var studioPreservesInpaintAudio = true
   /// Optional schema fields for the composed prompt: the ambient soundscape
-  /// and non-diegetic music sections H3 was trained to read. Empty fields are
-  /// omitted or become the guide's N/A marker; see H3StructuredPrompt.
-  var studioSoundscape = ""
-  var studioMusic = ""
+  /// and non-diegetic music sections H3 was trained to read. Empty fields use
+  /// the guide's N/A marker; see H3StructuredPrompt.
+  var studioSoundscape = "" {
+    didSet {
+      userDefaults.set(studioSoundscape, forKey: Self.studioSoundscapeKey)
+    }
+  }
+  var studioMusic = "" {
+    didSet {
+      userDefaults.set(studioMusic, forKey: Self.studioMusicKey)
+    }
+  }
   /// Which saved voice speaks, or nil for the model's own unconditioned one.
   /// Held by identifier rather than by URL so a voice survives being renamed.
   var selectedVoiceID: UUID? {
@@ -361,6 +403,7 @@ final class AppModel {
   /// share nothing and are free to run together.
   private var downloadTasks: [ModelCapability: Task<Void, Never>] = [:]
   private var phaseTimeline = GenerationPhaseTimeline()
+  private var peakGenerationMemoryBytes: UInt64?
   private var activeGenerationSettings = ""
   private var pendingStatistics: GenerationStatistics?
   private var lastPersistedQueueProgress = -1.0
@@ -386,6 +429,8 @@ final class AppModel {
   private static let modelBookmarkKey = "H3ddle.modelDirectoryBookmark"
   private static let previewDenoiseKey = "H3ddle.previewDenoise"
   private static let generationPromptKey = "H3ddle.generationPrompt"
+  private static let studioSoundscapeKey = "H3ddle.studioSoundscape"
+  private static let studioMusicKey = "H3ddle.studioMusic"
   private static let studioSettingsKey = "H3ddle.studioGenerationSettings"
   /// Stable Audio is distilled to this many passes. Fewer degrades it
   /// sharply and more buys nothing, so it is a default rather than a
@@ -399,6 +444,7 @@ final class AppModel {
   static let imageModelDefaultSteps = 8
 
   private static let selectedModelKey = "H3ddle.selectedModelID"
+  private static let preferredFastH3VSAKey = "H3ddle.preferredFastH3VSA.v1"
   private static let selectedAudioModelKey = "H3ddle.selectedAudioModelID"
   private static let selectedImageModelKey = "H3ddle.selectedImageModelID"
   private static let localModelsKey = "H3ddle.localModelBookmarks"
@@ -416,6 +462,7 @@ final class AppModel {
     generationRecoveryStore: EngineGenerationRecoveryStore =
       EngineGenerationRecoveryStore(),
     generationQueueStore: GenerationQueueStore = GenerationQueueStore(),
+    projectStore: ProjectPackageStore? = nil,
     userDefaults: UserDefaults = .standard
   ) {
     let session = engineSession ?? EngineSession(executableURL: engineExecutableURL)
@@ -426,9 +473,14 @@ final class AppModel {
     self.generationRecoveryStore = generationRecoveryStore
     self.generationQueueStore = generationQueueStore
     self.userDefaults = userDefaults
+    let store = projectStore ?? Self.defaultProjectStore()
+    self.projectStore = store
+    self.projectSession = ProjectSession(id: UUID(), packageURL: store.rootURL)
     generationQueue = generationQueueStore.load()
     generationQueue.prepareForRelaunch()
     generationPrompt = userDefaults.string(forKey: Self.generationPromptKey) ?? ""
+    studioSoundscape = userDefaults.string(forKey: Self.studioSoundscapeKey) ?? ""
+    studioMusic = userDefaults.string(forKey: Self.studioMusicKey) ?? ""
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
     }
@@ -443,6 +495,19 @@ final class AppModel {
     restoreVoices()
     refreshManagedModelStatus()
     try? generationQueueStore.save(generationQueue)
+    openStoredProject()
+  }
+
+  private static func defaultProjectStore() -> ProjectPackageStore {
+    if ProcessInfo.processInfo.arguments.contains("-ApplePersistenceIgnoreState") {
+      return ProjectPackageStore(
+        rootURL: FileManager.default.temporaryDirectory.appendingPathComponent(
+          "H3ddleEphemeralProjects-\(ProcessInfo.processInfo.processIdentifier)",
+          isDirectory: true
+        )
+      )
+    }
+    return ProjectPackageStore()
   }
 
   var modelStatusTitle: String {
@@ -532,6 +597,7 @@ final class AppModel {
 
   func presentGeneration(_ kind: GenerationKind) {
     errorMessage = nil
+    generationStudioJobID = nil
     // Opening a composer while another job runs must not reset that job's
     // progress/ETA. The queue deliberately makes composition available while
     // its single worker is busy.
@@ -564,6 +630,7 @@ final class AppModel {
     mutate(&project.settings)
     playback.clock.framesPerSecond = project.settings.framesPerSecond
     syncPlayback()
+    scheduleProjectSave()
   }
 
   func applyStudioPreset(_ preset: GenerationPreset) {
@@ -701,14 +768,31 @@ final class AppModel {
     let videoEngine: VideoGenerationEngine = kind == .video ? self.videoEngine : .h3
     let usesVideoInpainting = kind == .video && videoEngine == .h3
       && studioVideoInpainting != nil
-    let effectiveCoreReuse = usesVideoInpainting ? 1 : coreReuse
-    let effectiveBlockCache = usesVideoInpainting ? false : blockCache
     let ownPackage =
       audioEngine.usesOwnPackage || imageEngine.usesOwnPackage
       || videoEngine.usesOwnPackage
     let selectedChoice = selectedModelID(for: kind).flatMap { id in
       modelChoices.first { $0.id == id }
     }
+    let h3GenerationProfile = selectedChoice?.generationProfile ?? .standard
+    // FastH3 is trained for four complete transformer calls. Persisted
+    // advanced-control values can survive a model switch, but they must not
+    // leak into the request, estimate, queue receipt, or statistics as if the
+    // native service had honoured them. The service repeats these guards at
+    // the process boundary.
+    let usesFastH3 = kind == .video && videoEngine == .h3
+      && h3GenerationProfile == .fastH3
+    let effectiveDenoisingSteps = usesFastH3 ? 4 : denoisingSteps
+    let effectiveActiveDiTLayers = usesFastH3 ? 50 : activeDiTLayers
+    let exactH3Path = usesVideoInpainting || usesFastH3
+    let effectiveCoreReuse = exactH3Path ? 1 : coreReuse
+    let effectiveBlockCache = exactH3Path ? false : blockCache
+    let h3ModelProfile: EngineH3ModelProfile =
+      switch h3GenerationProfile {
+      case .standard: .standard
+      case .turbo: .turbo
+      case .fastH3: .fastH3
+      }
     let useBetaSchedule = !ownPackage
       && (selectedChoice?.generationProfile ?? .standard).usesBetaSchedule
     /// Frames and references are H3's conditioning. The engine *refuses* a
@@ -716,6 +800,7 @@ final class AppModel {
     /// right on the way out.
     let acceptsImageInputs =
       kind != .audio && imageEngine == .h3 && videoEngine.acceptsReferenceInputs
+      && h3GenerationProfile.acceptsReferenceInputs
     /// Z-Image reads exactly one picture — the one it works from — and takes
     /// neither an end frame nor references, so it is its own question rather
     /// than a widening of the one above.
@@ -737,8 +822,8 @@ final class AppModel {
       label: settingsLabel,
       duration: duration,
       quality: quality,
-      denoisingSteps: denoisingSteps,
-      activeDiTLayers: activeDiTLayers,
+      denoisingSteps: effectiveDenoisingSteps,
+      activeDiTLayers: effectiveActiveDiTLayers,
       coreReuse: effectiveCoreReuse,
       blockCache: effectiveBlockCache,
       fastStill: fastStill,
@@ -766,7 +851,7 @@ final class AppModel {
       case (.audio, .stableAudio, _, _): denoisingSteps ?? Self.soundEffectDefaultSteps
       case (.image, _, .zImage, _): denoisingSteps ?? Self.imageModelDefaultSteps
       case (.video, _, _, .ltx): denoisingSteps ?? 8
-      default: denoisingSteps ?? quality.denoisingSteps
+      default: effectiveDenoisingSteps ?? quality.denoisingSteps
       }
     }()
     let projectedDuration: TimeInterval? = {
@@ -805,7 +890,7 @@ final class AppModel {
           height: height,
           frames: frames,
           denoisingSteps: resolvedSteps,
-          activeDiTLayers: activeDiTLayers ?? quality.activeDiTLayers,
+          activeDiTLayers: effectiveActiveDiTLayers ?? quality.activeDiTLayers,
           denoiseReuse: reuse,
           coreReuse: core,
           blockCache: effectiveBlockCache,
@@ -859,7 +944,7 @@ final class AppModel {
       modelName: runningModelName,
       aspectRatio: kind == .audio ? nil : studioAspect.rawValue,
       transformerBlocks: usesH3Settings
-        ? (activeDiTLayers ?? quality.activeDiTLayers) : nil,
+        ? (effectiveActiveDiTLayers ?? quality.activeDiTLayers) : nil,
       coreReuse: usesH3Settings
         ? (effectiveBlockCache ? 1 : effectiveCoreReuse ?? 1) : nil,
       blockCache: usesH3Settings ? effectiveBlockCache : nil,
@@ -910,13 +995,15 @@ final class AppModel {
       duration: duration,
       quality: quality,
       denoisingSteps: audioEngine == .stableAudio
-        ? (denoisingSteps ?? Self.soundEffectDefaultSteps) : denoisingSteps,
-      activeDiTLayers: activeDiTLayers,
+        ? (effectiveDenoisingSteps ?? Self.soundEffectDefaultSteps)
+        : effectiveDenoisingSteps,
+      activeDiTLayers: effectiveActiveDiTLayers,
       coreReuse: effectiveCoreReuse,
       fastStill: fastStill,
       blockCache: effectiveBlockCache,
       previewDenoise: previewDenoise,
       useBetaSchedule: useBetaSchedule,
+      h3ModelProfile: h3ModelProfile,
       seed: seed,
       sourceStrength: acceptsSourcePicture && studioStartFrame != nil
         ? studioSourceStrength : nil,
@@ -1085,6 +1172,8 @@ final class AppModel {
     generationProgress = 0
     generationPhase = job.phase
     phaseTimeline = GenerationPhaseTimeline()
+    phaseTimeline.record(phase: job.phase, elapsed: 0)
+    peakGenerationMemoryBytes = nil
     generationProgressTracker = GenerationProgressTracker(
       profile: progressProfile(for: job.request))
     lastPersistedQueueProgress = -1
@@ -1173,6 +1262,11 @@ final class AppModel {
               phase: phase,
               elapsed: Self.seconds(in: startedAt.duration(to: clock.now))
             )
+          case .resourceUsage(let usage):
+            guard activeGenerationID == generationID else { return }
+            if let bytes = usage.physicalFootprintBytes {
+              peakGenerationMemoryBytes = max(peakGenerationMemoryBytes ?? 0, bytes)
+            }
           case .preview(let url):
             let image = await Task.detached(priority: .utility) {
               Self.loadPreviewImage(from: url)
@@ -1212,6 +1306,7 @@ final class AppModel {
           asset: completedAsset,
           startedAt: startedAt
         )
+        registerGeneratedAsset(completedAsset)
       } else {
         failQueuedGeneration(
           generationID,
@@ -1325,6 +1420,9 @@ final class AppModel {
     guard let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID })
     else { return }
     let elapsed = Self.seconds(in: startedAt.duration(to: ContinuousClock().now))
+    phaseTimeline.finish(elapsed: elapsed)
+    let phaseDurations = phaseTimeline.entries
+    let peakEngineMemoryBytes = peakGenerationMemoryBytes
     mutateGenerationQueue { queue in
       queue.jobs[index].state = .completed
       queue.jobs[index].isScheduled = false
@@ -1337,6 +1435,8 @@ final class AppModel {
       if var statistics = queue.jobs[index].statistics {
         statistics.seconds = elapsed
         statistics.clipSeconds = asset.duration
+        statistics.phaseDurations = phaseDurations
+        statistics.peakEngineMemoryBytes = peakEngineMemoryBytes
         queue.jobs[index].statistics = statistics
       }
       queue.finishRunIfNeeded()
@@ -1506,6 +1606,7 @@ final class AppModel {
 
   func registerUndoCheckpoint() {
     snapshots.checkpoint(project)
+    scheduleProjectSave()
   }
 
   func undo() {
@@ -1538,6 +1639,105 @@ final class AppModel {
     }
     playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
     syncPlayback()
+    scheduleProjectSave()
+  }
+
+  func setPanel(_ panel: EditorPanel, _ open: Bool) {
+    if open {
+      openPanel = panel
+    } else if openPanel == panel {
+      openPanel = nil
+    }
+  }
+
+  func openRail(_ panel: EditorPanel) {
+    openPanel = panel
+  }
+
+  func toggleRail(_ panel: EditorPanel) {
+    if openPanel == panel {
+      closeOpenPanel()
+    } else {
+      openPanel = panel
+    }
+  }
+
+  func toggleAdjust(for id: TimelineItemID) {
+    selectTimelineClip(id)
+    if openPanel == .adjust || openPanel == .upscale {
+      closeOpenPanel()
+    } else {
+      openRail(.adjust)
+    }
+  }
+
+  func closeOpenPanel() {
+    if openPanel == .effects { selectedEffectID = nil }
+    if openPanel == .transitions { browsesTransitionCatalog = false }
+    openPanel = nil
+  }
+
+  func createNewProject() {
+    cancelAllAssetUpscalingJobs()
+    flushProjectSave()
+    do {
+      let created = try projectStore.create()
+      project = created.project
+      projectSession = created.session
+      snapshots = ProjectSnapshotStack()
+      selectedTimelineItem = nil
+      playback.clock.framesPerSecond = project.settings.framesPerSecond
+      playback.clock.setTime(0, duration: programDuration)
+      syncPlayback()
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  func renameProject(_ name: String) {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed != project.name else { return }
+    registerUndoCheckpoint()
+    project.name = trimmed
+  }
+
+  func scheduleProjectSave() {
+    projectSaveTask?.cancel()
+    projectSaveTask = Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(600))
+      guard !Task.isCancelled else { return }
+      flushProjectSave()
+    }
+  }
+
+  func flushProjectSave() {
+    projectSaveTask?.cancel()
+    projectSaveTask = nil
+    do {
+      let saved = try projectStore.save(project, session: projectSession)
+      project.assets = saved.project.assets
+      projectSession = saved.session
+    } catch {
+      Self.generationLog.error(
+        "Could not save project: \(error.localizedDescription, privacy: .public)"
+      )
+    }
+  }
+
+  private func openStoredProject() {
+    do {
+      let opened = try projectStore.loadLastOpenedOrCreate()
+      project = opened.project
+      projectSession = opened.session
+      snapshots = ProjectSnapshotStack()
+      playback.clock.framesPerSecond = project.settings.framesPerSecond
+      playback.clock.setTime(0, duration: programDuration)
+      syncPlayback()
+    } catch {
+      Self.generationLog.error(
+        "Could not open project: \(error.localizedDescription, privacy: .public)"
+      )
+    }
   }
 
   var visualLaneAudible: Bool {
@@ -1566,9 +1766,19 @@ final class AppModel {
     syncPlayback()
   }
 
+  /// Bumped when the timeline should scroll to `timelineRevealTime`.
+  private(set) var timelineRevealToken = 0
+  private(set) var timelineRevealTime: TimeInterval = 0
+
   func skipToStart() {
     playback.skipToStart()
     syncPlayback()
+    requestTimelineReveal(0)
+  }
+
+  func requestTimelineReveal(_ time: TimeInterval) {
+    timelineRevealTime = max(0, time)
+    timelineRevealToken += 1
   }
 
   func skipToEnd() {
@@ -1579,6 +1789,37 @@ final class AppModel {
   func seekPlayback(_ time: TimeInterval) {
     playback.seek(time, duration: programDuration)
     syncPlayback()
+  }
+
+  func selectTimelineClip(_ id: TimelineItemID) {
+    selectedTimelineItem = id
+    guard let range = timelineRange(of: id) else { return }
+    if let time = TimelineSelection.seekTime(
+      playhead: playback.clock.currentTime,
+      start: range.start,
+      duration: range.duration
+    ) {
+      seekPlayback(time)
+    }
+  }
+
+  private func timelineRange(of id: TimelineItemID) -> (start: TimeInterval, duration: TimeInterval)? {
+    switch id {
+    case .visual(let clipID):
+      guard let placement = project.timeline.visualPlacements.first(where: { $0.item.id == clipID })
+      else { return nil }
+      return (placement.startTime, placement.item.duration)
+    case .audio(let clipID):
+      guard let item = project.timeline.audioItems.first(where: { $0.id == clipID }) else {
+        return nil
+      }
+      return (item.startTime, item.duration)
+    case .text(let clipID):
+      guard let item = project.timeline.textItems.first(where: { $0.id == clipID }) else {
+        return nil
+      }
+      return (item.startTime, item.duration)
+    }
   }
 
   func syncPlayback() {
@@ -1611,6 +1852,237 @@ final class AppModel {
     }
   }
 
+  func registerGeneratedAsset(_ asset: AssetReference) {
+    project.addAsset(asset)
+    scheduleProjectSave()
+  }
+
+  func assetUpscalingJob(for sourceAssetID: AssetID) -> AssetUpscalingJob? {
+    assetUpscalingJobs[sourceAssetID]
+  }
+
+  func startAssetUpscale(
+    asset: AssetReference,
+    sourcePixelSize: UpscalingPixelSize,
+    sourceDuration: TimeInterval,
+    targetPixelSize: UpscalingPixelSize,
+    mode: UpscalingMode,
+    scaleFactor: Int
+  ) {
+    assetUpscalingTasks[asset.id]?.cancel()
+
+    let job = AssetUpscalingJob(
+      sourceAssetID: asset.id,
+      sourcePixelSize: sourcePixelSize,
+      sourceDuration: sourceDuration,
+      targetPixelSize: targetPixelSize,
+      mode: mode,
+      scaleFactor: scaleFactor
+    )
+    assetUpscalingJobs[asset.id] = job
+
+    let request = UpscalingRequest(
+      id: job.id,
+      sourceURL: asset.url,
+      sourceKind: asset.kind,
+      sourcePixelSize: sourcePixelSize,
+      sourceDuration: sourceDuration,
+      targetPixelSize: targetPixelSize,
+      destinationURL: assetUpscaleDestination(for: asset.kind),
+      mode: mode,
+      preservesAudio: asset.kind == .video
+    )
+
+    assetUpscalingTasks[asset.id] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        if assetUpscalingJobs[asset.id]?.id == job.id {
+          assetUpscalingTasks[asset.id] = nil
+        }
+      }
+      do {
+        let provider: any UpscalingProvider
+        switch asset.kind {
+        case .image:
+          provider = AppleImageUpscalingProvider()
+        case .video:
+          provider = AppleVideoUpscalingProvider()
+        case .audio:
+          throw UpscalingError.unsupportedMediaKind
+        }
+
+        for try await event in provider.events(for: request) {
+          try Task.checkCancellation()
+          switch event {
+          case .preparing:
+            updateAssetUpscalingJob(asset.id, jobID: job.id) {
+              $0.phase = "Preparing"
+            }
+          case .progress(let phase, let fractionComplete):
+            updateAssetUpscalingJob(asset.id, jobID: job.id) {
+              $0.phase = phase
+              $0.progress = min(max(fractionComplete, 0), 1)
+            }
+          case .completed(let result):
+            let derived = AssetReference(
+              kind: asset.kind,
+              displayName: "\(asset.displayName) \(scaleFactor)×",
+              url: result.outputURL,
+              duration: result.duration
+            )
+            registerGeneratedAsset(derived)
+            updateAssetUpscalingJob(asset.id, jobID: job.id) {
+              $0.state = .completed
+              $0.phase = "Completed"
+              $0.progress = 1
+              $0.completedAsset = derived
+              $0.completedPixelSize = result.pixelSize
+              $0.errorMessage = nil
+            }
+          }
+        }
+        try Task.checkCancellation()
+        if assetUpscalingJobs[asset.id]?.state == .running {
+          throw UpscalingError.failed("Upscaling stopped before producing an output.")
+        }
+      } catch is CancellationError {
+        updateAssetUpscalingJob(asset.id, jobID: job.id) {
+          $0.state = .cancelled
+          $0.phase = "Cancelled"
+        }
+      } catch {
+        updateAssetUpscalingJob(asset.id, jobID: job.id) {
+          $0.state = .failed
+          $0.phase = "Failed"
+          $0.errorMessage = error.localizedDescription
+        }
+      }
+    }
+  }
+
+  func cancelAssetUpscale(_ sourceAssetID: AssetID) {
+    assetUpscalingTasks[sourceAssetID]?.cancel()
+  }
+
+  func revealLibraryAsset(_ assetID: AssetID) {
+    guard let asset = project.asset(id: assetID) else { return }
+    selectedLibraryAssetID = assetID
+    switch asset.kind {
+    case .image:
+      openRail(.images)
+    case .video:
+      openRail(.video)
+    case .audio:
+      openRail(.audio)
+    }
+  }
+
+  private func updateAssetUpscalingJob(
+    _ sourceAssetID: AssetID,
+    jobID: UUID,
+    _ update: (inout AssetUpscalingJob) -> Void
+  ) {
+    guard var job = assetUpscalingJobs[sourceAssetID], job.id == jobID else { return }
+    update(&job)
+    assetUpscalingJobs[sourceAssetID] = job
+  }
+
+  private func assetUpscaleDestination(for kind: MediaKind) -> URL {
+    let mediaDirectory = projectSession.packageURL.appendingPathComponent(
+      ProjectPackageStore.mediaDirectoryName,
+      isDirectory: true
+    )
+    return mediaDirectory.appendingPathComponent(
+      "\(UUID().uuidString.lowercased()).\(kind == .video ? "mp4" : "png")"
+    )
+  }
+
+  private func cancelAllAssetUpscalingJobs() {
+    for task in assetUpscalingTasks.values { task.cancel() }
+    assetUpscalingTasks.removeAll()
+    assetUpscalingJobs.removeAll()
+  }
+
+  func insertLibraryAsset(_ id: AssetID) {
+    guard var asset = project.asset(id: id) else { return }
+    if asset.kind == .image {
+      asset.duration = 3
+    }
+    registerUndoCheckpoint()
+    do {
+      try append(asset)
+    } catch {
+      _ = snapshots.popUndo(current: project)
+      errorMessage = error.localizedDescription
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func insertLibraryAsset(_ id: AssetID, visualIndex: Int) {
+    guard var asset = project.asset(id: id), asset.kind.isVisual else { return }
+    if asset.kind == .image { asset.duration = 3 }
+    registerUndoCheckpoint()
+    do {
+      _ = try project.timeline.insertVisual(asset, at: visualIndex)
+    } catch {
+      _ = snapshots.popUndo(current: project)
+      errorMessage = error.localizedDescription
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func insertLibraryAsset(_ id: AssetID, audioStart: TimeInterval) {
+    guard let asset = project.asset(id: id), asset.kind == .audio else { return }
+    registerUndoCheckpoint()
+    do {
+      _ = try project.timeline.placeAudio(asset, at: audioStart)
+    } catch {
+      _ = snapshots.popUndo(current: project)
+      errorMessage = error.localizedDescription
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func renameLibraryAsset(_ id: AssetID, to name: String) {
+    registerUndoCheckpoint()
+    project.renameAsset(id, to: name)
+  }
+
+  func removeLibraryAsset(_ id: AssetID, removingClips: Bool = false) {
+    registerUndoCheckpoint()
+    let url = project.asset(id: id)?.url
+    guard project.removeAsset(id, removingClips: removingClips) else {
+      _ = snapshots.popUndo(current: project)
+      return
+    }
+    if selectedLibraryAssetID == id { selectedLibraryAssetID = nil }
+    if let url, project.assets.contains(where: { $0.url == url }) == false,
+      url.path.contains("/Media/")
+    {
+      try? FileManager.default.removeItem(at: url)
+    }
+    playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+    syncPlayback()
+  }
+
+  func importToLibrary(_ urls: [URL]) async {
+    let visual = MediaImport.partition(urls, onto: .visual).accepted
+    let audio = MediaImport.partition(urls, onto: .audio).accepted
+    if !visual.isEmpty {
+      await importFiles(visual, onto: .visual, append: false)
+    }
+    if !audio.isEmpty {
+      await importFiles(audio, onto: .audio, append: false)
+    }
+  }
+
+  func libraryAssets(kind: MediaKind) -> [AssetReference] {
+    project.libraryAssets(kind: kind)
+  }
+
   @discardableResult
   func receiveDroppedFiles(_ urls: [URL], onto lane: MediaImportLane) -> Bool {
     let split = MediaImport.partition(urls, onto: lane)
@@ -1624,9 +2096,13 @@ final class AppModel {
     return true
   }
 
-  func importFiles(_ urls: [URL], onto lane: MediaImportLane) async {
+  func importFiles(
+    _ urls: [URL],
+    onto lane: MediaImportLane,
+    append: Bool = true
+  ) async {
     importErrorMessage = nil
-    let directory = Self.importedMediaDirectory
+    let directory = projectStore.mediaDirectory(for: project.id)
     var lastError: String?
     registerUndoCheckpoint()
     var importedAny = false
@@ -1637,7 +2113,11 @@ final class AppModel {
           onto: lane,
           copyingInto: directory
         )
-        try appendImported(imported)
+        if append {
+          try appendImported(imported)
+        } else {
+          project.addAsset(imported.asset)
+        }
         importedAny = true
       } catch {
         lastError = error.localizedDescription
@@ -1898,6 +2378,7 @@ final class AppModel {
     }
 
     let request = job.request
+    generationStudioJobID = nil
     activeGenerationKind = request.kind
     editingGenerationJobID = jobID
     generationPrompt = job.displayPrompt
@@ -1932,6 +2413,24 @@ final class AppModel {
   }
 
   func dismissGenerationStudio() {
+    editingGenerationJobID = nil
+    generationStudioJobID = nil
+    activeGenerationKind = nil
+  }
+
+  func showGenerationProgress(_ jobID: UUID) {
+    guard let job = generationQueue.jobs.first(where: { $0.id == jobID }),
+      job.state.isActive
+    else { return }
+    errorMessage = nil
+    editingGenerationJobID = nil
+    generationStudioJobID = jobID
+    activeGenerationKind = job.request.kind
+    showsGenerationQueue = false
+  }
+
+  func hideGenerationProgress(_ jobID: UUID) {
+    guard generationStudioJobID == jobID else { return }
     editingGenerationJobID = nil
     activeGenerationKind = nil
   }
@@ -2049,6 +2548,7 @@ final class AppModel {
   }
 
   func shutdownEngine() {
+    flushProjectSave()
     if let jobID = activeGenerationID {
       updateQueueElapsed(jobID: jobID, elapsed: generationElapsed)
       persistGenerationQueue()
@@ -2146,6 +2646,7 @@ final class AppModel {
         phase: "Waiting to start"
       )
       mutateGenerationQueue { $0.append(job, scheduled: true) }
+      advanceGenerationQueue()
       showsGenerationQueue = true
     }
 
@@ -2434,6 +2935,7 @@ final class AppModel {
     return modelChoices.filter {
       $0.isInstalled && capabilities.contains($0.capability)
         && (role == nil || $0.audioRole == role)
+        && (!$0.generationProfile.isVideoOnly || kind == .video)
         && (kind != .image || $0.capability == .image
           || $0.videoEngine.supportsStillGeneration)
     }
@@ -2665,6 +3167,7 @@ final class AppModel {
       userDefaults.removeObject(forKey: Self.modelBookmarkKey)
     }
     refreshModelChoices()
+    preferFastH3VSAOnce()
     if let selected = selectedModelChoice, selected.videoEngine == .h3,
       selected.isLocalFolder,
       let directory = selected.directory
@@ -2679,6 +3182,26 @@ final class AppModel {
       selectedModelID = onlyLocal.id
       selectModelDirectory(directory)
     }
+  }
+
+  /// Migrate an existing Dense FastH3 selection once. Subsequent picker
+  /// choices are respected, so Dense remains available as a reference and
+  /// compatibility fallback rather than being forcibly replaced on launch.
+  private func preferFastH3VSAOnce() {
+    guard !userDefaults.bool(forKey: Self.preferredFastH3VSAKey) else { return }
+    let options = modelChoices.compactMap { choice -> FastH3ModelOption? in
+      guard choice.isInstalled, choice.capability == .video,
+        choice.videoEngine == .h3, let directory = choice.directory,
+        let attention = ModelFolderInspection.fastH3Attention(at: directory)
+      else { return nil }
+      return FastH3ModelOption(id: choice.id, attention: attention)
+    }
+    guard options.contains(where: { $0.attention == .vsa }) else { return }
+    selectedModelID = FastH3ModelSelection.preferredID(
+      among: options,
+      selectedID: selectedModelID
+    )
+    userDefaults.set(true, forKey: Self.preferredFastH3VSAKey)
   }
 
   /// Managed installs resolve asynchronously; re-apply a persisted managed
@@ -3234,12 +3757,6 @@ final class AppModel {
     }
   }
 
-  private static var importedMediaDirectory: URL {
-    URL.applicationSupportDirectory
-      .appendingPathComponent("H3ddle", isDirectory: true)
-      .appendingPathComponent("Media", isDirectory: true)
-  }
-
   private func finishGenerationTiming(
     generationID: UUID,
     startedAt: ContinuousClock.Instant,
@@ -3260,6 +3777,8 @@ final class AppModel {
       generationDurations[completedAssetID] = elapsed
       if var statistics = pendingStatistics {
         statistics.seconds = elapsed
+        statistics.phaseDurations = phaseTimeline.entries
+        statistics.peakEngineMemoryBytes = peakGenerationMemoryBytes
         generationStatistics[completedAssetID] = statistics
       }
       DockAttention.markGenerationFinished()
@@ -3271,6 +3790,7 @@ final class AppModel {
       DockAttention.markGenerationStopped()
     }
     pendingStatistics = nil
+    peakGenerationMemoryBytes = nil
     activeGenerationID = nil
     activeGenerationRecovery = nil
     endGenerationModelAccess()

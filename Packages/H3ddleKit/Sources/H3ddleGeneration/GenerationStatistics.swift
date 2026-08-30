@@ -28,6 +28,11 @@ public struct GenerationStatistics: Hashable, Codable, Sendable {
   public var voiceName: String?
   public var deviceName: String?
   public var deviceMemoryBytes: UInt64?
+  /// Wall-clock time spent in each engine-reported phase. Repeated phase
+  /// names remain separate so preview work interrupting denoise is visible.
+  public var phaseDurations: [GenerationPhaseTimeline.Entry]?
+  /// Highest physical-footprint sample reported by the engine helper.
+  public var peakEngineMemoryBytes: UInt64?
 
   public init(
     kind: GenerationKind,
@@ -50,7 +55,9 @@ public struct GenerationStatistics: Hashable, Codable, Sendable {
     speechVariation: Double? = nil,
     voiceName: String? = nil,
     deviceName: String? = nil,
-    deviceMemoryBytes: UInt64? = nil
+    deviceMemoryBytes: UInt64? = nil,
+    phaseDurations: [GenerationPhaseTimeline.Entry]? = nil,
+    peakEngineMemoryBytes: UInt64? = nil
   ) {
     self.kind = kind
     self.seconds = seconds
@@ -73,6 +80,8 @@ public struct GenerationStatistics: Hashable, Codable, Sendable {
     self.voiceName = voiceName
     self.deviceName = deviceName
     self.deviceMemoryBytes = deviceMemoryBytes
+    self.phaseDurations = phaseDurations
+    self.peakEngineMemoryBytes = peakEngineMemoryBytes
   }
 
   /// "6 min 1 s", "48 s" — coarse on purpose, because a post does not want
@@ -133,6 +142,25 @@ public struct GenerationStatistics: Hashable, Codable, Sendable {
     }
     if let voiceName { settings.append("voice \(voiceName)") }
     sentence += " Settings: " + settings.joined(separator: ", ") + "."
+    var performance: [String] = []
+    if let phaseDurations, !phaseDurations.isEmpty {
+      performance.append(
+        phaseDurations
+          .map { String(format: "%@ %.1fs", $0.phase, $0.duration) }
+          .joined(separator: " · ")
+      )
+    }
+    if let peakEngineMemoryBytes {
+      performance.append(
+        String(
+          format: "peak sampled engine memory %.1f GB",
+          Double(peakEngineMemoryBytes) / 1_073_741_824
+        )
+      )
+    }
+    if !performance.isEmpty {
+      sentence += " Performance: " + performance.joined(separator: "; ") + "."
+    }
     sentence +=
       " Made with H3ddle, an open-source local MiniMax H3 app for macOS:"
       + " https://github.com/AlexanderIstomin/h3ddle"

@@ -52,6 +52,8 @@ targets:
         product: H3ddleMedia
       - package: H3ddleKit
         product: H3ddleModels
+      - package: H3ddleKit
+        product: H3ddleUpscaling
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.h3ddle.desktop

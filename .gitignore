@@ -5,6 +5,10 @@ build/
 *.xcuserstate
 xcuserdata/
 
+# Python converter/test bytecode is local build output.
+__pycache__/
+*.py[cod]
+
 # Local model material and generated engine artifacts never belong in Git.
 Models/
 Engine/Build/
@@ -17,4 +21,4 @@ LocalReferences/
 # Machine-local configuration.
 Secrets.xcconfig
 .env
-
+.vscode/

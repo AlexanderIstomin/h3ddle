@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ModelSettingsView: View {
   @Bindable var model: AppModel
+  var embedded = false
 
   @State private var isChoosingModel = false
   /// Which list the folder about to be chosen should join.
@@ -14,15 +15,18 @@ struct ModelSettingsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      header
-      Divider().overlay(H3Color.line)
+      if !embedded {
+        header
+        Divider().overlay(H3Color.line)
+      }
       ScrollView {
         modelList
       }
     }
-    .frame(width: 610, height: 680)
-    .background(H3Color.surface)
+    .frame(width: embedded ? nil : 610, height: embedded ? nil : 680)
+    .background(embedded ? Color.clear : H3Color.surface)
     .foregroundStyle(H3Color.textPrimary)
+    .accessibilityIdentifier("model-settings")
     .fileImporter(
       isPresented: $isChoosingModel,
       allowedContentTypes: [.folder],
@@ -113,9 +117,9 @@ struct ModelSettingsView: View {
           .foregroundStyle(H3Color.accent)
         Text("Models")
           .font(.system(size: 18, weight: .semibold))
-          .accessibilityIdentifier("model-settings")
       }
       Spacer()
+      if !embedded {
       Button {
         model.showsModelSettings = false
       } label: {
@@ -135,12 +139,13 @@ struct ModelSettingsView: View {
       .buttonStyle(.plain)
       .keyboardShortcut(.cancelAction)
       .accessibilityIdentifier("close-models")
+      }
     }
     .padding(H3Spacing.large)
   }
 
   private var modelList: some View {
-    VStack(alignment: .leading, spacing: H3Spacing.large) {
+    VStack(alignment: .leading, spacing: embedded ? 16 : H3Spacing.large) {
       // Every category is shown even when empty: the section carries its own
       // way to add a folder, so an empty one is an invitation rather than a
       // sign something failed to load.
@@ -185,7 +190,7 @@ struct ModelSettingsView: View {
         }
       }
     }
-    .padding(H3Spacing.large)
+    .padding(embedded ? 14 : H3Spacing.large)
   }
 
   private func addFolderButton(for capability: ModelCapability) -> some View {

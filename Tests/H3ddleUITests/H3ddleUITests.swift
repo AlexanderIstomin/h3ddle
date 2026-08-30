@@ -31,7 +31,7 @@ final class H3ddleUITests: XCTestCase {
       let button = app.buttons[identifier]
       guard button.waitForExistence(timeout: 8) else { continue }
       button.click()
-      if app.staticTexts[appearance].waitForExistence(timeout: 8) { return }
+      if app.descendants(matching: .any)[appearance].waitForExistence(timeout: 8) { return }
       if attempt < attempts { continue }
       XCTFail(
         "clicking \(identifier) never revealed \(appearance) in \(attempts) attempts",
@@ -91,7 +91,7 @@ final class H3ddleUITests: XCTestCase {
       "the queue cancel-all control never became accessible"
     )
 
-    let close = app.buttons["generation-queue-close"]
+    let close = app.buttons["left-panel-close"]
     XCTAssertTrue(
       close.waitForExistence(timeout: 8),
       "the queue close control never became accessible"
@@ -131,6 +131,44 @@ final class H3ddleUITests: XCTestCase {
       app.staticTexts["Nothing waiting"].waitForExistence(timeout: 8),
       "the open queue did not move the cancelled job out of its active section"
     )
+  }
+
+  @MainActor
+  func testRunningQueueJobRestoresAndHidesGenerationStudio() {
+    let app = XCUIApplication()
+    app.launchArguments += [
+      "-ApplePersistenceIgnoreState", "YES", "-H3ddleUITestActiveQueueJob",
+    ]
+    app.launch()
+    XCTAssertTrue(
+      app.staticTexts["editor-root"].waitForExistence(timeout: 30),
+      "the editor never became accessible"
+    )
+
+    let show = app.buttons["generation-job-show"]
+    if !show.waitForExistence(timeout: 2),
+      !app.buttons["left-panel-close"].exists
+    {
+      app.buttons["generation-queue-toggle"].click()
+    }
+    XCTAssertTrue(show.waitForExistence(timeout: 8))
+    show.click()
+    XCTAssertTrue(app.staticTexts["generation-studio"].waitForExistence(timeout: 8))
+
+    let hide = app.buttons["generation-hide"]
+    XCTAssertTrue(hide.waitForExistence(timeout: 8))
+    hide.click()
+    XCTAssertTrue(
+      app.staticTexts["generation-studio"].waitForNonExistence(timeout: 8),
+      "Hide did not return to the editor"
+    )
+
+    let queueToggle = app.buttons["generation-queue-toggle"]
+    XCTAssertTrue(queueToggle.waitForExistence(timeout: 8))
+    queueToggle.click()
+    XCTAssertTrue(show.waitForExistence(timeout: 8))
+    show.click()
+    XCTAssertTrue(app.buttons["generation-hide"].waitForExistence(timeout: 8))
   }
 
   @MainActor

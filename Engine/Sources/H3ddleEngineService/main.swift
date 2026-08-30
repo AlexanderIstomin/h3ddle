@@ -1,4 +1,5 @@
 import CoreGraphics
+import Darwin
 import Foundation
 import H3Native
 import H3ddleEngineProtocol
@@ -352,10 +353,31 @@ private enum EngineOutput {
         }
       )
     }
+    if event.performance == nil {
+      event.performance = EnginePerformanceSample(
+        physicalFootprintBytes: currentPhysicalFootprintBytes()
+      )
+    }
     guard let data = try? EngineLineCodec.encode(event) else { return }
     lock.withLock {
       FileHandle.standardOutput.write(data)
     }
+  }
+
+  private static func currentPhysicalFootprintBytes() -> UInt64? {
+    var information = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(
+      MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+    )
+    let result = withUnsafeMutablePointer(to: &information) { pointer in
+      pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(
+          mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count
+        )
+      }
+    }
+    guard result == KERN_SUCCESS else { return nil }
+    return UInt64(information.phys_footprint)
   }
 
   static func fail(_ command: EngineCommand, message: String) {
@@ -1324,6 +1346,20 @@ private final class EngineRuntime: @unchecked Sendable {
         EngineOutput.fail(command, message: lastH3Error(nil))
         return
       }
+      guard let loadedModel = h3_model(context) else {
+        EngineOutput.fail(command, message: "The H3 model profile is unavailable")
+        return
+      }
+      let packageIsFastH3 = h3ddle_h3_model_is_fasth3(loadedModel) != 0
+      guard packageIsFastH3 == (request.h3ModelProfile == .fastH3) else {
+        EngineOutput.fail(
+          command,
+          message: packageIsFastH3
+            ? "This FastH3 package requires the four-step FastH3 generation profile."
+            : "The selected package is not a FastH3 checkpoint."
+        )
+        return
+      }
 
       var parameters = h3ddle_h3_default_params()
       // Community stills decode one frame of a short H3 clip. The full
@@ -1422,6 +1458,55 @@ private final class EngineRuntime: @unchecked Sendable {
         parameters.token_reduction = 0
       }
       parameters.use_beta_schedule = request.useBetaSchedule ? 1 : 0
+      if request.h3ModelProfile == .fastH3 {
+        guard request.kind == .video else {
+          EngineOutput.fail(
+            command, message: "FastH3 Preview v1 supports text-to-video generation only."
+          )
+          return
+        }
+        guard parameters.steps == 4, !request.useBetaSchedule else {
+          EngineOutput.fail(
+            command,
+            message: "FastH3 Preview v1 requires exactly 4 passes on the serving schedule."
+          )
+          return
+        }
+        guard request.firstFrameURL == nil, request.lastFrameURL == nil,
+          request.referenceImageURLs.isEmpty, request.video?.inpainting == nil
+        else {
+          EngineOutput.fail(
+            command,
+            message:
+              "FastH3 Preview v1 is T2VA-only and cannot use keyframes, references, or inpainting."
+          )
+          return
+        }
+        guard EngineFastH3PreviewContract.supports(
+          width: Int(parameters.width),
+          height: Int(parameters.height),
+          frames: Int(parameters.frames)
+        ) else {
+          EngineOutput.fail(
+            command,
+            message:
+              "FastH3 Preview v1 requires a short edge of at least "
+              + "\(EngineFastH3PreviewContract.minimumShortEdge) pixels and "
+              + "\(EngineFastH3PreviewContract.minimumFrames)–"
+              + "\(EngineFastH3PreviewContract.maximumFrames) frames."
+          )
+          return
+        }
+        // Four-call distillation has no spare evaluations or layers to reuse.
+        // Keep the model on its trained path even when old custom controls
+        // survive a package switch in persisted studio settings.
+        parameters.dit_layers = 50
+        parameters.denoise_reuse = 1
+        parameters.core_reuse = 1
+        parameters.block_cache = 0
+        parameters.token_reduction = 0
+        parameters.audio_refine_steps = 0
+      }
       if request.kind == .video, request.useBetaSchedule,
         let rawRefineSteps = ProcessInfo.processInfo.environment[
           "H3_TURBO_AUDIO_REFINE_STEPS"
