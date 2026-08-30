@@ -11,10 +11,19 @@ permissions:
 jobs:
   build-app:
     runs-on: macos-15
+    env:
+      # Match CI and compile against the SDK that provides the VideoToolbox
+      # super-resolution APIs while preserving macOS 15 as the deployment and
+      # runner target.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Verify Xcode toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
       - name: Install project generator and media tooling
         run: brew install xcodegen ffmpeg
       - name: Generate the Xcode project
