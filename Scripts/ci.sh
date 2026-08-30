@@ -42,8 +42,13 @@ xcrun clang -std=c11 -Wall -Wextra -Werror -D_DARWIN_C_SOURCE \
 "$h3_checkpoint_test"
 
 xcodegen generate --spec "$repository_root/project.yml" --project "$repository_root"
-swift test --package-path "$repository_root/Packages/H3ddleKit"
-swift test --package-path "$repository_root/Engine"
+# Swift Testing runs tests concurrently in one process by default. Several of
+# these suites exercise process-global macOS facilities (Core Image, AVFoundation,
+# URLProtocol, environment variables, and helper processes), and Xcode 26.3 can
+# terminate the runner with a signal when those facilities are torn down at the
+# same time. Keep CI deterministic without weakening coverage.
+swift test --no-parallel --package-path "$repository_root/Packages/H3ddleKit"
+swift test --no-parallel --package-path "$repository_root/Engine"
 swift build --package-path "$repository_root/Engine"
 engine_handshake=$(
     "$repository_root/Engine/.build/debug/H3ddleEngineService" \
