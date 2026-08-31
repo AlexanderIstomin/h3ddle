@@ -78,6 +78,13 @@ typedef struct {
  * lets cancellation land without waiting for the entire pass. */
 typedef int (*ltx_dit_tick)(int completed, int total, void *context);
 
+/* Called after each completed Euler step, while the updated video latent is
+ * already present on the host. `video_latent` excludes appended conditioning
+ * rows. Returning zero cancels on the same terms as `ltx_dit_tick`. */
+typedef int (*ltx_dit_preview)(int completed_steps, int total_steps,
+                               const float *video_latent,
+                               size_t video_elements, void *context);
+
 /* `video_context` is `[span][4096]` and `audio_context` `[span][2048]`, as
  * `ltx_connector_run` leaves them; `span` is the tokenizer's, not the register
  * count.
@@ -93,6 +100,7 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                    const float *audio_context, uint32_t span,
                    float *video_latent, float *audio_latent,
                    ltx_dit_tick tick, void *tick_context,
+                   ltx_dit_preview preview, void *preview_context,
                    char *error, size_t error_size);
 
 #endif

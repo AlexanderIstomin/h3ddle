@@ -6,6 +6,34 @@ import Testing
 
 @Suite("Media import")
 struct MediaImportTests {
+  @Test("Import restores embedded H3ddle generation metadata")
+  func importGenerationMetadata() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("H3ddleMetadataImport-\(UUID().uuidString)", isDirectory: true)
+    let source = root.appendingPathComponent("source.png")
+    let destination = root.appendingPathComponent("Media", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let png = Data(
+      base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )!
+    try png.write(to: source)
+    let metadata = Data(#"{"version":1,"displayPrompt":"portrait"}"#.utf8)
+    try EmbeddedGenerationMetadata.write(metadata, to: source)
+
+    let imported = try await MediaImport.makeAsset(
+      from: source,
+      onto: .visual,
+      copyingInto: destination
+    )
+
+    #expect(
+      imported.asset.metadata[AssetMetadataKey.generationRecipe]?
+        .object?["displayPrompt"]?.string == "portrait"
+    )
+  }
+
   @Test("Extensions map to the timeline kinds")
   func classifiesExtensions() {
     #expect(MediaImport.kind(for: URL(fileURLWithPath: "/tmp/still.PNG")) == .image)

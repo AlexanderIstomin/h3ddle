@@ -403,7 +403,7 @@ public actor ModelPackageDownloader {
       || alreadyInPlace
       || !installedCandidates(sha256: file.sha256, excludingPackage: manifest.id).isEmpty
       // Counted here as well as used above, so the size the app quotes before
-      // the download is the size the download actually is. Quoting 38.69 GB and
+      // the download is the size the download actually is. Quoting 38.72 GB and
       // then fetching none of it is its own kind of wrong.
       || !huggingFaceCacheCandidates(sha256: file.sha256).isEmpty
   }

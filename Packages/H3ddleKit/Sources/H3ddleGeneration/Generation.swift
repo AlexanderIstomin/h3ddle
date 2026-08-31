@@ -87,8 +87,9 @@ public enum ImageGenerationModelSelection {
 /// Both write video with a soundtrack, so nothing about the *output* tells
 /// them apart — only the package does. H3 is the resident engine with the
 /// reference inputs, keyframes, previews and quality ladder built around it;
-/// LTX-2.5 renders markedly better motion in eight steps and supports none of
-/// that.
+/// LTX-2.5 renders markedly better motion in eight steps, accepts up to four
+/// picture conditions, and supplies still previews through its own tiny
+/// decoder, but keeps a separate package and a smaller settings surface.
 public enum VideoGenerationEngine: String, Codable, Sendable {
   case h3
   case ltx

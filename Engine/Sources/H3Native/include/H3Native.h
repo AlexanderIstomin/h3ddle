@@ -95,7 +95,12 @@ int h3ddle_zimage_supports_frame(int width, int height);
  * wait. During denoise its fraction counts the 48 transformer blocks inside
  * that step; during video VAE it counts real decoder operations across every
  * tile. Returning zero abandons the run, which is how cancellation reaches
- * it; a cancelled call returns zero with an empty `error`. */
+ * it; a cancelled call returns zero with an empty `error`.
+ *
+ * With `preview_denoise` set, `on_preview` receives one inexpensive tiny-
+ * decoder still after every denoising step and follows H3's frame convention:
+ * non-zero cancels. A missing or failed preview decoder does not fail the
+ * final full-VideoVAE render. */
 typedef int (*h3ddle_ltx_step)(const char *phase, int completed, int total,
                                void *opaque);
 int h3ddle_ltx_plan(int width, int height, int frames, int fps,
@@ -112,7 +117,9 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
                         int steps, unsigned long long seed,
                         const char *first_frame, const char *last_frame,
                         const char *const *references, int reference_count,
-                        const char *output_path, h3ddle_ltx_step on_step,
+                        const char *output_path, int preview_denoise,
+                        h3ddle_ltx_step on_step,
+                        h3_frame_callback on_preview,
                         void *opaque, char *error, size_t error_size);
 
 /* Decodes any audio file AVFoundation reads into mono float at

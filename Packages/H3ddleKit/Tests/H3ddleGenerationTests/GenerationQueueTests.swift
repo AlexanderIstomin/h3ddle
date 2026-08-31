@@ -1,4 +1,5 @@
 import Foundation
+import H3ddleCore
 import Testing
 
 @testable import H3ddleGeneration
@@ -158,7 +159,9 @@ struct GenerationQueueTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = GenerationQueueStore(rootURL: root)
     var queue = GenerationJobQueue()
-    let original = job(prompt: "persist me", recovery: true)
+    var original = job(prompt: "persist me", recovery: true)
+    original.modelID = "saved-model-v1"
+    original.modelDirectory = URL(fileURLWithPath: "/tmp/saved-model-v1", isDirectory: true)
     queue.append(original, scheduled: true)
 
     try store.save(queue)
@@ -166,5 +169,26 @@ struct GenerationQueueTests {
 
     #expect(restored == queue)
     #expect(FileManager.default.fileExists(atPath: store.documentURL.path))
+  }
+
+  @Test("Clip replacement targets survive queue persistence")
+  func replacementTargetPersists() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("H3ddleQueueReplacement-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = GenerationQueueStore(rootURL: root)
+    var queued = job(prompt: "final pass")
+    let target = GenerationReplacementTarget(
+      projectID: UUID(),
+      clipID: UUID(),
+      expectedAssetID: AssetID()
+    )
+    queued.replacementTarget = target
+    var queue = GenerationJobQueue()
+    queue.append(queued, scheduled: true)
+
+    try store.save(queue)
+
+    #expect(store.load().jobs[0].replacementTarget == target)
   }
 }

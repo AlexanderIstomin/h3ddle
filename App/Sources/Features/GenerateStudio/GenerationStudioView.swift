@@ -153,7 +153,8 @@ struct GenerationStudioView: View {
 
           ModelDropdownMenu(
             choices: model.installedModelChoices(for: kind),
-            selectedID: model.selectedModelID(for: kind)
+            selectedID: model.rememberedModelChoice(for: kind)?.id
+              ?? model.selectedModelID(for: kind)
           ) { choice in
             model.selectModel(choice.id, for: kind)
             if let steps = model.defaultDenoisingSteps(for: choice) {
@@ -245,6 +246,10 @@ struct GenerationStudioView: View {
     !model.installedModelChoices(for: kind).isEmpty
   }
 
+  private var hasRememberedModel: Bool {
+    model.rememberedModelChoice(for: kind) != nil
+  }
+
   private var noModelSection: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text("No models installed")
@@ -277,6 +282,19 @@ struct GenerationStudioView: View {
         .font(.system(size: 9, weight: .bold, design: .monospaced))
         .tracking(1.6)
         .foregroundStyle(H3Color.textSecondary.opacity(0.75))
+
+      if model.pendingGenerationReplacementTarget != nil {
+        Label(
+          "The new result will replace this timeline clip. The draft stays in Media.",
+          systemImage: "arrow.triangle.2.circlepath"
+        )
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(H3Color.textSecondary)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(H3Color.accent.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      }
 
       ZStack(alignment: .bottomLeading) {
         TextEditor(text: $model.generationPrompt)
@@ -820,8 +838,8 @@ struct GenerationStudioView: View {
   /// as what it sends — a control that collects conditioning the engine will
   /// reject is worse than one that is not there.
   /// LTX on the video lane. Almost nothing in H3's settings column applies to
-  /// it: no retained DiT blocks, no core reuse, no block cache, no denoising
-  /// preview, no beta schedule, and a canvas it chooses rather than inherits.
+  /// it: no retained DiT blocks, no core reuse, no block cache, no beta
+  /// schedule, and a canvas it chooses rather than inherits.
   /// Showing those controls is not merely untidy — every one of them is a
   /// promise the engine will not keep.
   private var isLTX: Bool { kind == .video && model.videoEngine == .ltx }
@@ -910,14 +928,16 @@ struct GenerationStudioView: View {
             }
           }
 
-          if hasUsableModel {
+          if hasUsableModel || hasRememberedModel {
             // Speech has no duration to choose: the line decides how long it
             // takes, and the ceiling is derived from it.
-            if kind != .image, !(kind == .audio && model.audioMode == .speech) {
+            if hasModelSettings, kind != .image,
+              !(kind == .audio && model.audioMode == .speech)
+            {
               durationSection
             }
             modelSection
-            if supportsVideoInpainting {
+            if hasModelSettings, supportsVideoInpainting {
               videoInpaintingSection
             }
           } else {
@@ -927,7 +947,8 @@ struct GenerationStudioView: View {
           // Every knob in here describes an H3 pass — DiT layers, core reuse,
           // how many frames a still is kept from, and the presets that set
           // them together. A package with its own engine reads none of them,
-          // so both lanes show this only while H3 is the model drawing.
+          // so both lanes show this only while H3 is the model drawing. The
+          // common preview toggle is also offered in each engine's own group.
           if hasModelSettings,
             (kind == .video && model.videoEngine == .h3)
               || (kind == .image && model.imageEngine == .h3)
@@ -945,6 +966,7 @@ struct GenerationStudioView: View {
           if hasModelSettings, isLTX {
             ltxResolutionControls
             ltxPassesControls
+            denoisingPreviewControl
             seedControls
           }
 
@@ -1119,10 +1141,28 @@ struct GenerationStudioView: View {
         .foregroundStyle(H3Color.textSecondary)
       ModelDropdown(
         choices: model.installedModelChoices(for: kind),
-        selectedID: model.selectedModelID(for: kind),
+        selectedID: model.rememberedModelChoice(for: kind)?.id
+          ?? model.selectedModelID(for: kind),
+        rememberedChoice: model.rememberedModelChoice(for: kind),
         isOpen: $modelMenuOpen,
         onFrameChange: { modelPickerFrame = $0 }
       )
+      if let message = model.unavailableSelectedModelMessage(for: kind) {
+        HStack(alignment: .top, spacing: 8) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(H3Color.accent)
+          Text(message)
+            .font(.system(size: 10))
+            .foregroundStyle(H3Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Button("Open Models") {
+          model.dismissGenerationStudio()
+          model.showsModelSettings = true
+        }
+        .buttonStyle(H3QuietButtonStyle())
+        .accessibilityIdentifier("open-model-update-from-studio")
+      }
     }
   }
 
@@ -1577,8 +1617,9 @@ struct GenerationStudioView: View {
     }
   }
 
-  /// H3 and Z-Image use different tiny decoders, but the offer is identical:
-  /// show the current trajectory after every pass and allow an early cancel.
+  /// H3, LTX and Z-Image use different tiny decoders, but the offer is
+  /// identical: show the current trajectory after every pass and allow an
+  /// early cancel.
   private var denoisingPreviewControl: some View {
     Toggle(isOn: $model.previewDenoise) {
       VStack(alignment: .leading, spacing: 4) {
@@ -1711,8 +1752,15 @@ struct GenerationStudioView: View {
             .foregroundStyle(H3Color.textSecondary)
             .accessibilityIdentifier("generation-completed-duration")
         }
+        if let message = submittedGenerationJob?.replacementMessage {
+          Text(message)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(H3Color.textSecondary)
+            .multilineTextAlignment(.center)
+        }
         HStack(spacing: 10) {
           Button("Generate another") {
+            model.prepareAnotherGeneration()
             stage = .compose
           }
           .buttonStyle(H3QuietButtonStyle())
@@ -1735,13 +1783,15 @@ struct GenerationStudioView: View {
             .buttonStyle(H3QuietButtonStyle())
             .accessibilityIdentifier("copy-statistics")
           }
-          Button {
-            model.insertToTimeline(result)
-          } label: {
-            Label("Insert to timeline", systemImage: "plus")
+          if submittedGenerationJob?.replacementTarget == nil {
+            Button {
+              model.insertToTimeline(result)
+            } label: {
+              Label("Insert to timeline", systemImage: "plus")
+            }
+            .buttonStyle(H3PrimaryButtonStyle())
+            .accessibilityIdentifier("insert-to-timeline")
           }
-          .buttonStyle(H3PrimaryButtonStyle())
-          .accessibilityIdentifier("insert-to-timeline")
         }
       }
     }
@@ -1950,6 +2000,7 @@ struct GenerationStudioView: View {
   }
 
   private var generateLabel: String {
+    if model.pendingGenerationReplacementTarget != nil { return "Regenerate & replace" }
     if model.editingGenerationJobID != nil { return "Save & run" }
     if model.isGenerating { return "Queue generation" }
     return switch kind {
@@ -1970,6 +2021,11 @@ struct GenerationStudioView: View {
   private var submittedJobState: GenerationJobState? {
     guard let submittedJobID else { return nil }
     return model.generationQueue.jobs.first { $0.id == submittedJobID }?.state
+  }
+
+  private var submittedGenerationJob: GenerationQueueJob? {
+    guard let submittedJobID else { return nil }
+    return model.generationQueue.jobs.first { $0.id == submittedJobID }
   }
 
   private func restorePresentedGeneration() {
@@ -2034,7 +2090,9 @@ struct GenerationStudioView: View {
   /// still validating. Readiness decides which provider can run; tying the
   /// controls to it made the whole section disappear on first open and only
   /// return after a model-picker change retriggered validation.
-  private var hasModelSettings: Bool { hasUsableModel }
+  private var hasModelSettings: Bool {
+    hasUsableModel && model.hasSelectedInstalledModel(for: kind)
+  }
 
   /// Fifteen seconds is H3's ceiling, where every extra second costs a
   /// transformer pass over more frames. Stable Audio was trained to two
@@ -2312,11 +2370,12 @@ private struct GenerationResultMedia: View {
 private struct ModelDropdown: View {
   var choices: [ModelChoice]
   var selectedID: String?
+  var rememberedChoice: ModelChoice?
   @Binding var isOpen: Bool
   var onFrameChange: (CGRect) -> Void
 
   private var selected: ModelChoice? {
-    choices.first { $0.id == selectedID }
+    choices.first { $0.id == selectedID } ?? rememberedChoice
   }
 
   var body: some View {
@@ -2327,6 +2386,11 @@ private struct ModelDropdown: View {
         Text(selected?.displayName ?? "Choose a model")
           .font(.system(size: 13, weight: .semibold))
         Spacer()
+        if selected?.isInstalled == false {
+          Text("UPDATE REQUIRED")
+            .font(.system(size: 8, weight: .bold, design: .monospaced))
+            .foregroundStyle(H3Color.accent)
+        }
         Image(systemName: "chevron.down")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(H3Color.textSecondary.opacity(0.7))

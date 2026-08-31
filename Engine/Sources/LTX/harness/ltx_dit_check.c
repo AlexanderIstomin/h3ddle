@@ -138,8 +138,8 @@ int main(int argc, char **argv) {
     double last = now();
     const double began = last;
     if (!ltx_dit_sample(gpu, dit, &request, video_context, audio_context, span,
-                        video_latent, audio_latent, report, &last, error,
-                        sizeof(error))) {
+                        video_latent, audio_latent, report, &last, NULL, NULL,
+                        error, sizeof(error))) {
         fprintf(stderr, error[0] ? "FAIL: %s\n" : "cancelled\n", error);
         return 1;
     }

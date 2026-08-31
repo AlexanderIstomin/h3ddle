@@ -175,6 +175,7 @@ final class AppModel {
   }
   var errorMessage: String?
   var importErrorMessage: String?
+  var regenerationErrorMessage: String?
   var showsExport = false
   var openPanel: EditorPanel?
   var selectedLibraryAssetID: AssetID?
@@ -273,6 +274,7 @@ final class AppModel {
   /// generation cannot disturb the panel's scroll position.
   private(set) var generationQueueRevision = 0
   var editingGenerationJobID: UUID?
+  private(set) var pendingGenerationReplacementTarget: GenerationReplacementTarget?
   var studioAspect = ProgramAspectRatio.sixteenNine
   var studioSettings = GenerationStudioSettings.makeDefault() {
     didSet {
@@ -597,6 +599,7 @@ final class AppModel {
 
   func presentGeneration(_ kind: GenerationKind) {
     errorMessage = nil
+    pendingGenerationReplacementTarget = nil
     generationStudioJobID = nil
     // Opening a composer while another job runs must not reset that job's
     // progress/ETA. The queue deliberately makes composition available while
@@ -1067,7 +1070,8 @@ final class AppModel {
       isScheduled: scheduled,
       phase: scheduled ? "Waiting to start" : "Queued",
       projectedDuration: projectedDuration,
-      statistics: statistics
+      statistics: statistics,
+      replacementTarget: pendingGenerationReplacementTarget
     )
 
     if replacesEditedJob {
@@ -1277,7 +1281,11 @@ final class AppModel {
             }
           case .completed(let asset):
             generationProgressTracker.finish()
-            let stableAsset = try persistGeneratedAsset(asset, for: generationID)
+            var stableAsset = try persistGeneratedAsset(asset, for: generationID)
+            stableAsset = try attachGenerationRecipe(
+              to: stableAsset,
+              for: generationID
+            )
             pendingStatistics?.clipSeconds = stableAsset.duration
             studioResults.insert(
               GenerationResult(
@@ -1307,6 +1315,7 @@ final class AppModel {
           startedAt: startedAt
         )
         registerGeneratedAsset(completedAsset)
+        applyCompletedReplacement(for: generationID, asset: completedAsset)
       } else {
         failQueuedGeneration(
           generationID,
@@ -1409,6 +1418,32 @@ final class AppModel {
     var stable = asset
     stable.url = destination
     return stable
+  }
+
+  private func attachGenerationRecipe(
+    to asset: AssetReference,
+    for jobID: UUID
+  ) throws -> AssetReference {
+    guard var job = generationQueue.jobs.first(where: { $0.id == jobID }) else {
+      return asset
+    }
+    job.finishedAt = Date()
+    let recipe = GenerationRecipe(
+      job: job,
+      projectAssets: project.assets,
+      parentAssetID: job.replacementTarget?.expectedAssetID
+    )
+    let enriched = try recipe.attaching(to: asset)
+    do {
+      try EmbeddedGenerationMetadata.write(recipe.encodedJSON(), to: enriched.url)
+    } catch {
+      // Project metadata remains authoritative. Embedding is a portability
+      // feature and must not turn a valid generation into a failed job.
+      Self.generationLog.error(
+        "Could not embed generation metadata: \(error.localizedDescription, privacy: .public)"
+      )
+    }
+    return enriched
   }
 
   private static func isNonemptyRegularFile(_ url: URL) -> Bool {
@@ -1860,6 +1895,53 @@ final class AppModel {
   func registerGeneratedAsset(_ asset: AssetReference) {
     project.addAsset(asset)
     scheduleProjectSave()
+  }
+
+  private func applyCompletedReplacement(
+    for jobID: UUID,
+    asset: AssetReference
+  ) {
+    guard let target = generationQueue.jobs.first(where: { $0.id == jobID })?
+      .replacementTarget
+    else { return }
+
+    let message: String
+    if target.projectID != project.id {
+      message = "Generated final version; the original project is not open. Kept in Media."
+    } else if target.lane != .visual {
+      message = "Generated final version; the target lane is unavailable. Kept in Media."
+    } else if let item = project.timeline.visualItems.first(where: { $0.id == target.clipID }),
+      item.assetID == target.expectedAssetID
+    {
+      do {
+        // The new asset is already registered. Checkpointing now means Undo
+        // restores the draft assignment while retaining both library assets.
+        registerUndoCheckpoint()
+        try project.timeline.replaceVisualAsset(clipID: target.clipID, with: asset)
+        selectedTimelineItem = .visual(target.clipID)
+        playback.clock.setTime(playback.clock.currentTime, duration: programDuration)
+        syncPlayback()
+        scheduleProjectSave()
+        message = "Replaced the timeline clip. The draft remains in Media."
+      } catch TimelineError.replacementTooShort(let required, let available) {
+        _ = snapshots.popUndo(current: project)
+        message = String(
+          format: "Generated final version, but it is too short for the edited clip (%.2fs available, %.2fs required). Kept in Media.",
+          available,
+          required
+        )
+      } catch {
+        _ = snapshots.popUndo(current: project)
+        message = "Generated final version, but the clip could not be replaced. Kept in Media."
+      }
+    } else {
+      message = "Generated final version; the target clip changed or was removed. Kept in Media."
+    }
+
+    if let index = generationQueue.jobs.firstIndex(where: { $0.id == jobID }) {
+      mutateGenerationQueue { $0.jobs[index].replacementMessage = message }
+      persistGenerationQueue()
+    }
   }
 
   func assetUpscalingJob(for sourceAssetID: AssetID) -> AssetUpscalingJob? {
@@ -2382,10 +2464,18 @@ final class AppModel {
       persistGenerationQueue()
     }
 
+    restoreGenerationComposer(from: job, editingJobID: jobID)
+  }
+
+  private func restoreGenerationComposer(
+    from job: GenerationQueueJob,
+    editingJobID: UUID?
+  ) {
     let request = job.request
     generationStudioJobID = nil
     activeGenerationKind = request.kind
-    editingGenerationJobID = jobID
+    self.editingGenerationJobID = editingJobID
+    pendingGenerationReplacementTarget = job.replacementTarget
     generationPrompt = job.displayPrompt
     studioSettings = job.studioSettings
     studioSettings.duration = request.duration
@@ -2417,10 +2507,102 @@ final class AppModel {
     showsGenerationQueue = false
   }
 
+  func canRegenerateVisual(_ clipID: UUID) -> Bool {
+    guard let item = project.timeline.visualItems.first(where: { $0.id == clipID }),
+      let asset = project.asset(id: item.assetID),
+      asset.metadata[AssetMetadataKey.generationRecipe] != nil
+    else { return false }
+    return !generationQueue.jobs.contains {
+      !$0.state.isFinished && $0.replacementTarget?.clipID == clipID
+    }
+  }
+
+  func isRegeneratingVisual(_ clipID: UUID) -> Bool {
+    generationQueue.jobs.contains {
+      !$0.state.isFinished && $0.replacementTarget?.clipID == clipID
+    }
+  }
+
+  /// Opens the existing composer with the source asset's immutable recipe.
+  /// Submission creates an ordinary durable queue job plus a clip-local
+  /// replacement target; the draft continues playing until that job finishes.
+  func presentRegeneration(forVisualClip clipID: UUID) {
+    regenerationErrorMessage = nil
+    guard let item = project.timeline.visualItems.first(where: { $0.id == clipID }),
+      let asset = project.asset(id: item.assetID)
+    else {
+      regenerationErrorMessage = "The selected timeline clip is unavailable."
+      return
+    }
+    do {
+      guard let recipe = try GenerationRecipe.recipe(from: asset) else {
+        regenerationErrorMessage = "This asset does not contain generation parameters."
+        return
+      }
+      let request = try recipe.resolvedRequest(projectAssets: project.assets)
+      let target = GenerationReplacementTarget(
+        projectID: project.id,
+        clipID: clipID,
+        expectedAssetID: asset.id
+      )
+      var settings = recipe.studioSettings
+      settings.duration = request.duration
+      if let seed = request.seed { settings.seed = seed }
+      settings.apply(preset: .high)
+      settings.duration = request.duration
+      if let seed = request.seed { settings.seed = seed }
+      let draft = GenerationQueueJob(
+        request: request,
+        modelID: recipe.modelID,
+        displayPrompt: recipe.displayPrompt,
+        settingsDescription: recipe.settingsDescription,
+        studioSettings: settings,
+        aspectRatio: recipe.aspectRatio,
+        soundscape: recipe.soundscape,
+        music: recipe.music,
+        replacementTarget: target
+      )
+      restoreGenerationComposer(from: draft, editingJobID: nil)
+      choosePreferredRegenerationModel(for: request.kind)
+    } catch {
+      regenerationErrorMessage = error.localizedDescription
+    }
+  }
+
+  private func choosePreferredRegenerationModel(for kind: GenerationKind) {
+    let choices = installedModelChoices(for: kind)
+    let preferred: ModelChoice? = switch kind {
+    case .video:
+      choices.first {
+        $0.videoEngine == .h3 && $0.generationProfile == .standard
+      } ?? choices.first {
+        $0.videoEngine == .h3 && $0.generationProfile == .turbo
+      } ?? choices.first { $0.generationProfile != .fastH3 }
+    case .image:
+      choices.first { $0.generationProfile == .standard }
+        ?? choices.first { $0.generationProfile != .fastH3 }
+    case .audio:
+      choices.first
+    }
+    guard let preferred else { return }
+    selectModel(preferred.id, for: kind)
+    if let steps = defaultDenoisingSteps(for: preferred) {
+      updateStudioKnobs { $0.denoisingSteps = steps }
+    }
+  }
+
   func dismissGenerationStudio() {
     editingGenerationJobID = nil
+    pendingGenerationReplacementTarget = nil
     generationStudioJobID = nil
     activeGenerationKind = nil
+  }
+
+  func prepareAnotherGeneration() {
+    editingGenerationJobID = nil
+    generationStudioJobID = nil
+    pendingGenerationReplacementTarget = nil
+    errorMessage = nil
   }
 
   func showGenerationProgress(_ jobID: UUID) {
@@ -2429,6 +2611,7 @@ final class AppModel {
     else { return }
     errorMessage = nil
     editingGenerationJobID = nil
+    pendingGenerationReplacementTarget = job.replacementTarget
     generationStudioJobID = jobID
     activeGenerationKind = job.request.kind
     showsGenerationQueue = false
@@ -2437,26 +2620,39 @@ final class AppModel {
   func hideGenerationProgress(_ jobID: UUID) {
     guard generationStudioJobID == jobID else { return }
     editingGenerationJobID = nil
+    pendingGenerationReplacementTarget = nil
     activeGenerationKind = nil
   }
 
   private func selectQueuedJobModel(_ job: GenerationQueueJob) {
-    guard let modelID = job.modelID,
-      let choice = modelChoices.first(where: { $0.id == modelID && $0.isInstalled })
-    else { return }
+    guard let modelID = job.modelID else { return }
+    // A managed model remains in `modelChoices` while an updated manifest is
+    // being fetched, but it has no installed directory during that interval.
+    // Restore the identity regardless: otherwise Edit & Run Again shows
+    // "Choose a model" even though the queue retained the exact model ID.
+    // Directory matching also carries old local-folder jobs across an ID
+    // migration when the same folder is still registered.
+    let exactChoice = modelChoices.first { $0.id == modelID }
+    let directoryChoice = job.modelDirectory.flatMap { savedDirectory in
+      modelChoices.first {
+        $0.directory?.standardizedFileURL == savedDirectory.standardizedFileURL
+      }
+    }
+    guard let choice = exactChoice ?? directoryChoice else { return }
+    let restoredModelID = choice.id
     switch choice.capability {
     case .audio:
-      selectedAudioModelID = modelID
+      selectedAudioModelID = restoredModelID
       audioMode = switch choice.audioRole {
       case .music: .music
       case .soundEffects: .soundEffects
       case .speech, nil: .speech
       }
     case .image:
-      selectedImageModelID = modelID
+      selectedImageModelID = restoredModelID
     case .video:
-      selectedModelID = modelID
-      if job.request.kind == .image { selectedImageModelID = modelID }
+      selectedModelID = restoredModelID
+      if job.request.kind == .image { selectedImageModelID = restoredModelID }
       if choice.videoEngine == .h3, !isGenerating, let directory = choice.directory {
         selectModelDirectory(directory)
       }
@@ -2917,6 +3113,30 @@ final class AppModel {
     }
   }
 
+  /// The choice explicitly named by the person or a restored queue job, even
+  /// when its managed package currently needs an update. Generation still
+  /// requires an installed choice; retaining this record keeps the studio
+  /// from presenting an unavailable saved model as if the job forgot it.
+  func rememberedModelChoice(for kind: GenerationKind) -> ModelChoice? {
+    let rememberedID: String? = switch kind {
+    case .video: selectedModelID
+    case .image: selectedImageModelID ?? selectedImageModelChoice?.id
+    case .audio: selectedAudioModelID
+    }
+    guard let rememberedID else { return nil }
+    return modelChoices.first { $0.id == rememberedID }
+  }
+
+  func unavailableSelectedModelMessage(for kind: GenerationKind) -> String? {
+    guard let choice = rememberedModelChoice(for: kind), !choice.isInstalled else {
+      return nil
+    }
+    if managedStatuses[choice.id]?.updateIsAvailable == true {
+      return "\(choice.displayName) is saved with this generation but needs an update before it can run again."
+    }
+    return "\(choice.displayName) is saved with this generation but is not installed on this Mac."
+  }
+
   var installedModelChoices: [ModelChoice] {
     modelChoices.filter(\.isInstalled)
   }
@@ -2947,7 +3167,8 @@ final class AppModel {
   }
 
   func hasSelectedInstalledModel(for kind: GenerationKind) -> Bool {
-    guard let selectedID = selectedModelID(for: kind) else { return false }
+    let selectedID = rememberedModelChoice(for: kind)?.id ?? selectedModelID(for: kind)
+    guard let selectedID else { return false }
     return installedModelChoices(for: kind).contains {
       $0.id == selectedID && $0.directory != nil
     }

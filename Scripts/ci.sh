@@ -10,6 +10,17 @@ python3 -B "$repository_root/Scripts/test-convert-turbo-package.py"
 python3 -B "$repository_root/Scripts/test-convert-fasth3-package.py"
 python3 -B "$repository_root/Scripts/test-run-with-timeout.py"
 
+# The tokenizer JSON embedded in LTX-2.5 deliberately emits bare Gemma IDs;
+# the LTX pipeline must add Gemma's BOS itself. Keep this outside the shared
+# tokenizer so H3 tokenization cannot change with it.
+ltx_prompt_test="${TMPDIR:-/tmp}/h3ddle-ltx-prompt-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror \
+    "$repository_root/Engine/Sources/LTX/ltx_prompt.c" \
+    "$repository_root/Engine/Tests/LTXPromptTests/ltx_prompt_test.c" \
+    -I"$repository_root/Engine/Sources/LTX" \
+    -o "$ltx_prompt_test"
+"$ltx_prompt_test"
+
 # The LTX VAE decoder is native C and its tile planner deliberately has no
 # model-weight dependency. Exercise the real planner here: a Swift duplicate
 # could pass while the memory-bound production path drifted.
@@ -20,6 +31,28 @@ xcrun clang -std=c11 -Wall -Wextra -Werror \
     -I"$repository_root/Engine/Sources/LTX" \
     -o "$ltx_tiling_test"
 "$ltx_tiling_test"
+
+# The tiny LTX preview decoder ends in a learned 48-channel image followed by
+# a 4x channel-to-space rearrangement. Keep that layout executable without
+# requiring the optional checkpoint or a Metal device.
+ltx_tae_geometry_test="${TMPDIR:-/tmp}/h3ddle-ltx-tae-geometry-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror \
+    "$repository_root/Engine/Sources/LTX/ltx_tae_geometry.c" \
+    "$repository_root/Engine/Tests/LTXTAETests/ltx_tae_geometry_test.c" \
+    -I"$repository_root/Engine/Sources/LTX" \
+    -o "$ltx_tae_geometry_test"
+"$ltx_tae_geometry_test"
+
+# LTX's vocoder emits interleaved stereo, while the shared H3 muxer accepts
+# channel-major PCM. Exercise that engine boundary without model weights so a
+# future fix to either audio path cannot silently corrupt the other one.
+ltx_audio_layout_test="${TMPDIR:-/tmp}/h3ddle-ltx-audio-layout-test"
+xcrun clang -std=c11 -Wall -Wextra -Werror \
+    "$repository_root/Engine/Sources/LTX/ltx_resample.c" \
+    "$repository_root/Engine/Tests/LTXAudioLayoutTests/ltx_audio_layout_test.c" \
+    -I"$repository_root/Engine/Sources/LTX" \
+    -o "$ltx_audio_layout_test"
+"$ltx_audio_layout_test"
 
 # The inpainting mask crosses the VAE's non-uniform temporal grouping and the
 # transformer's 2x2 latent patches. Keep that geometry executable without

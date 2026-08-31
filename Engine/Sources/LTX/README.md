@@ -20,10 +20,12 @@ new Metal**, which is most of why it was worth porting.
 | file | what |
 |------|------|
 | `ltx_audio.c` | audio VAE decoder and BigVGAN vocoder: latent → 16 kHz stereo |
+| `ltx_resample.c` | interleaved 16 kHz stereo → channel-major muxer PCM |
 | `ltx_video.c` | video VAE decoder: latent → frames, 8× in time and 32× in space |
 | `ltx_connector.c` | the tower's features → DiT context, 8 blocks per stream |
 | `ltx_text.c` | Gemma 4 12B int8, 48 layers, and the feature aggregation |
 | `ltx_dit.c` | the dual-stream DiT and its sampler, 48 blocks, both latents |
+| `ltx_tae.c` | 23.5 MB still-preview decoder used between denoising steps |
 | `ltx_generate.c` | prompt to clip: the five stages, in the order memory allows |
 
 All five stages are here. `Vendor/h3.c/tests/ltx_generate.c` remains as the
@@ -60,9 +62,10 @@ a real constraint rather than scaffolding, and it is the shape of
 
 The tokenizer rides inside the text encoder checkpoint as a `tokenizer_json`
 tensor rather than sitting beside it as a file, and this copy of it has a
-**no-op post-processor** — no `<bos>` is prepended, unlike stock Gemma. h3.c's
-SentencePiece path reproduces its ids exactly; `h3_gemma_tokenizer_test`
-against the reference `tokenizers` library is what says so.
+**no-op post-processor**. h3.c's SentencePiece path reproduces those bare ids
+exactly; `h3_gemma_tokenizer_test` against the reference `tokenizers` library
+is what says so. LTX then prepends Gemma's `<bos>` as a pipeline step, matching
+the reference ComfyUI tokenizer without changing the shared tokenizer or H3.
 
 The video VAE decodes through **overlapping temporal and spatial tiles**. Its
 late F32 feature map is 128 channels at one quarter of the output size; running
@@ -74,6 +77,27 @@ and make the activation ceiling follow the tile rather than clip duration.
 Every submitted decoder operation advances one run-wide VAE counter, including
 across tile boundaries. Besides making the long phase visible, that callback is
 where cancellation lands instead of waiting for the complete decode.
+
+Live denoising previews do not run that tiled VideoVAE. The already-host-side
+first latent frame is decoded by madebyollin's `taeltx2_3` TAEHV checkpoint,
+with temporal growth disabled and all spatial growth retained. That adds a
+23.5 MB download and three reusable F32 feature buffers; the full VideoVAE and
+the final clip remain byte-for-byte on their normal path. Missing or failed
+preview weights disable previews for the run instead of failing generation.
+
+The tiny decoder has a model-backed dispatch and output-range smoke test:
+
+    clang -O2 -fobjc-arc -o ltx_tae_check \
+        harness/ltx_tae_check.c ltx_tae.c ltx_tae_geometry.c \
+        ../../Vendor/h3.c/h3_gpu.m ../../Vendor/h3.c/h3_weights.c \
+        ../../Vendor/h3.c/h3_safetensors.c \
+        -I../../Vendor/h3.c -I. \
+        -framework Foundation -framework Metal \
+        -framework MetalPerformanceShaders \
+        -framework MetalPerformanceShadersGraph -framework Accelerate -lm
+
+    ./ltx_tae_check /path/to/taeltx2_3.safetensors \
+        ../../Vendor/h3.c/h3_shaders.metal
 
 ## Things that are true and not obvious
 

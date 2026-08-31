@@ -951,12 +951,11 @@ private final class EngineRuntime: @unchecked Sendable {
 
   /// LTX-2.5: a prompt in, an MP4 with its own soundtrack out.
   ///
-  /// Nothing of H3's applies — no shared model cache, no preview decoder, no
-  /// reference conditioning — and unlike every other engine here it writes its
-  /// own container. A clip is 200 MB of float pixels at 512 square, and there
-  /// is nothing this side would do with them but hand them back to the muxer,
-  /// so the packing and the write happen in C and `outputURL` receives a
-  /// finished file.
+  /// Unlike every other engine here it writes its own container. A clip is
+  /// 200 MB of float pixels at 512 square, and there is nothing this side would
+  /// do with them but hand them back to the muxer, so packing and writing stay
+  /// in C. Live previews reuse the common frame callback but come from LTX's
+  /// separate tiny decoder; the production VideoVAE still runs only once.
   ///
   /// The package is loaded a stage at a time and released as the call returns.
   /// It is not a caching decision: the Gemma tower and the DiT are 37 GB
@@ -1005,7 +1004,9 @@ private final class EngineRuntime: @unchecked Sendable {
                     references.baseAddress,
                     Int32(referencePaths.count),
                     output,
+                    request.previewDenoise ? 1 : 0,
                     ltxStepCallback,
+                    request.previewDenoise ? generationFrameCallback : nil,
                     opaque,
                     &error,
                     error.count

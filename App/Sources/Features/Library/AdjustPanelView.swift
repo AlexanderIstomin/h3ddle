@@ -97,11 +97,11 @@ struct AdjustPanelView: View {
             preview
               .padding(.bottom, 14)
             if let asset = selectedAsset, asset.kind.isVisual {
-              upscaleButton(asset)
-                .padding(.bottom, 14)
+              visualActionRow
+                .padding(.bottom, 16)
             }
             if let visual = selectedVisual {
-              fitRow(visual)
+              framingSection(visual)
               transformSection(
                 transform: visual.canvasTransform,
                 onChange: { model.setVisualCanvasTransform(visual.id, $0) }
@@ -206,55 +206,65 @@ struct AdjustPanelView: View {
     .accessibilityIdentifier("inspector-asset-preview")
   }
 
-  private func fitRow(_ visual: VisualItem) -> some View {
-    HStack(spacing: 6) {
-      fitChip("Fit", selected: visual.canvasFit == .fit) {
-        model.setVisualCanvasFit(visual.id, .fit)
-      }
-      fitChip("Cover", selected: visual.canvasFit == .cover) {
-        model.setVisualCanvasFit(visual.id, .cover)
+  private func framingSection(_ visual: VisualItem) -> some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Text("Canvas framing")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(H3Color.textSecondary)
+      HStack(spacing: 6) {
+        fitChip("Fit", selected: visual.canvasFit == .fit) {
+          model.setVisualCanvasFit(visual.id, .fit)
+        }
+        fitChip("Cover", selected: visual.canvasFit == .cover) {
+          model.setVisualCanvasFit(visual.id, .cover)
+        }
       }
     }
     .padding(.bottom, 14)
   }
 
-  private func upscaleButton(_ asset: AssetReference) -> some View {
-    Button {
-      model.openRail(.upscale)
-    } label: {
-      HStack(spacing: 10) {
-        Image(systemName: "arrow.up.left.and.arrow.down.right")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(H3Color.accent)
-          .frame(width: 28, height: 28)
-          .background(H3Color.accent.opacity(0.12))
-          .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Upscale")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(H3Color.textPrimary)
-          Text(asset.kind == .video ? "Increase video resolution locally" : "Increase image resolution locally")
-            .font(.system(size: 9))
-            .foregroundStyle(H3Color.textSecondary)
-        }
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(H3Color.textSecondary)
+  private var visualActionRow: some View {
+    HStack(spacing: 6) {
+      Button {
+        model.openRail(.upscale)
+      } label: {
+        Label("Upscale", systemImage: "arrow.up.left.and.arrow.down.right")
+          .frame(maxWidth: .infinity)
       }
-      .padding(.horizontal, 10)
-      .frame(maxWidth: .infinity)
-      .frame(height: 48)
-      .background(H3Color.controlFill)
-      .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .stroke(H3Color.line, lineWidth: 1)
+      .buttonStyle(H3QuietButtonStyle())
+      .help("Open upscale settings")
+      .accessibilityIdentifier("open-upscale-panel")
+
+      Button {
+        guard let visual = selectedVisual else { return }
+        model.presentRegeneration(forVisualClip: visual.id)
+      } label: {
+        Label("Regenerate", systemImage: "arrow.clockwise")
+          .frame(maxWidth: .infinity)
       }
-      .contentShape(Rectangle())
+      .buttonStyle(H3QuietButtonStyle())
+      .disabled(!canRegenerateSelectedVisual)
+      .opacity(canRegenerateSelectedVisual ? 1 : 0.4)
+      .help(regenerateHelp)
+      .accessibilityIdentifier("regenerate-selected-clip")
     }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier("open-upscale-panel")
+  }
+
+  private var canRegenerateSelectedVisual: Bool {
+    selectedVisual.map { model.canRegenerateVisual($0.id) } ?? false
+  }
+
+  private var regenerateHelp: String {
+    guard let visual = selectedVisual else {
+      return "Regeneration is available for clips on the timeline"
+    }
+    if model.isRegeneratingVisual(visual.id) {
+      return "A replacement is already being generated"
+    }
+    if !model.canRegenerateVisual(visual.id) {
+      return "Regeneration requires saved generation settings"
+    }
+    return "Open this clip's generation settings"
   }
 
   private func fitChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {

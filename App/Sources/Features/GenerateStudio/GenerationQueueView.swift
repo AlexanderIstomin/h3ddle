@@ -336,6 +336,11 @@ private struct GenerationQueueRow: View {
           .font(.system(size: 9.5, weight: .medium))
           .foregroundStyle(H3Color.danger)
           .fixedSize(horizontal: false, vertical: true)
+      } else if let message = job.replacementMessage {
+        Text(message)
+          .font(.system(size: 9.5, weight: .medium))
+          .foregroundStyle(H3Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
 
       actions

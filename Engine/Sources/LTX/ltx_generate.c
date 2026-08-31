@@ -29,6 +29,8 @@
 #include "ltx_audio.h"
 #include "ltx_connector.h"
 #include "ltx_dit.h"
+#include "ltx_prompt.h"
+#include "ltx_tae.h"
 #include "ltx_text.h"
 #include "ltx_video.h"
 
@@ -60,6 +62,7 @@ enum { SPAN = 256, TEMPORAL = 8, SPATIAL = LTX_VIDEO_SPATIAL };
     "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
 #define VIDEO_VAE_PATH "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
 #define AUDIO_VAE_PATH "vae/ltx-2.5-audio-vae-bf16.safetensors"
+#define TAE_PATH "vae_approx/taeltx2_3.safetensors"
 
 static int fail(char *error, size_t error_size, const char *format, ...) {
     if (error && error_size) {
@@ -143,7 +146,14 @@ int ltx_plan(const ltx_request *request, ltx_shape *shape,
  * of silence before the first denoise step, which reads as a hang. */
 typedef struct {
     ltx_progress progress;
+    ltx_preview preview;
     void *context;
+    ltx_tae *tae;
+    float *preview_rgb;
+    size_t preview_latent_elements;
+    int preview_width;
+    int preview_height;
+    int preview_disabled;
 } relay;
 
 static int text_tick(int layer, int layers, void *context) {
@@ -176,6 +186,30 @@ static int video_tick(int completed, int total, void *context) {
     return r->progress("video VAE", completed, total, r->context);
 }
 
+static int denoise_preview(int completed, int total, const float *latent,
+                           size_t elements, void *context) {
+    relay *r = context;
+    if (!r->preview || r->preview_disabled) return 1;
+    if (!r->tae || !r->preview_rgb || elements != r->preview_latent_elements) {
+        fprintf(stderr, "ltx: disabling live previews after a latent-size "
+                        "mismatch\n");
+        r->preview_disabled = 1;
+        return 1;
+    }
+    char error[512] = {0};
+    if (!ltx_tae_decode(r->tae, latent, r->preview_rgb,
+                        error, sizeof(error))) {
+        fprintf(stderr, "ltx: disabling live previews: %s\n",
+                error[0] ? error : "the tiny decoder failed");
+        r->preview_disabled = 1;
+        return 1;
+    }
+    /* Public frame callbacks use non-zero for cancellation, while the DiT's
+     * internal callback uses zero. Keep that translation at this boundary. */
+    return !r->preview(r->preview_rgb, r->preview_width, r->preview_height,
+                       completed, total, r->context);
+}
+
 /* A phase with nothing to report inside it still says it started. Returning
  * zero here cancels, the same as anywhere else. */
 static int announce(const relay *r, const char *phase) {
@@ -187,10 +221,11 @@ static int announce(const relay *r, const char *phase) {
 
 /* Gemma's tokenizer rides in the text encoder checkpoint as a `tokenizer_json`
  * tensor rather than beside it as a file, so it is read out and parsed from
- * memory. It is also *not* the stock Gemma tokenizer: the post-processor in
- * this copy is a no-op, so no <bos> is prepended, and h3.c's SentencePiece
- * path reproduces its ids exactly -- checked against the reference
- * `tokenizers` library in `h3_gemma_tokenizer_test`.
+ * memory. Its post-processor is a no-op, and h3.c's SentencePiece path
+ * reproduces those bare ids exactly -- checked against the reference
+ * `tokenizers` library in `h3_gemma_tokenizer_test`. The LTX pipeline then
+ * adds Gemma's leading BOS itself, just as the reference ComfyUI tokenizer
+ * does even when the embedded tokenizer JSON does not.
  *
  * The ids come back **bare**, not padded to the span, which is deliberate and
  * is the subtlest decision in this file. See `ltx_generate` below. */
@@ -228,12 +263,13 @@ static int tokenize(const h3_weight_store *encoder, const char *prompt,
         h3_tokenizer_ids_free(encoded);
         return fail(error, error_size, "the prompt tokenized to nothing");
     }
-    /* Truncate as the reference does, keeping the front. */
-    if (count > SPAN) count = SPAN;
-    for (size_t index = 0; index < count; index++)
-        ids[index] = (int32_t)encoded[index];
+    /* Add the pipeline-level BOS before truncating, keeping the front. */
+    const size_t prepared =
+        ltx_prompt_tokens_with_bos(encoded, count, ids, SPAN);
     h3_tokenizer_ids_free(encoded);
-    *tokens = (uint32_t)count;
+    if (!prepared)
+        return fail(error, error_size, "cannot prepare the LTX prompt tokens");
+    *tokens = (uint32_t)prepared;
     return 1;
 }
 
@@ -315,7 +351,7 @@ static int encode_conditioning(const ltx_request *request, h3_gpu *gpu,
 /* ------------------------------------------------------------------- entry */
 
 int ltx_generate(const ltx_request *request, float *video, float *audio,
-                 ltx_progress progress, void *context,
+                 ltx_progress progress, ltx_preview preview, void *context,
                  char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!request || !request->package || !request->prompt || !video || !audio)
@@ -331,7 +367,15 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
     const uint32_t cells_wide = (uint32_t)(request->width / SPATIAL);
     const uint32_t cells_high = (uint32_t)(request->height / SPATIAL);
     const uint32_t audio_rows = ltx_audio_rows_for(request->frames, fps);
-    relay report = { .progress = progress, .context = context };
+    relay report = {
+        .progress = progress,
+        .preview = preview,
+        .context = context,
+        .preview_latent_elements =
+            (size_t)latent_frames * cells_wide * cells_high * LTX_DIT_LATENT,
+        .preview_width = request->width,
+        .preview_height = request->height,
+    };
     char path[1200];
 
     h3_gpu *gpu = h3_gpu_create(request->shaders ? request->shaders
@@ -438,10 +482,37 @@ int ltx_generate(const ltx_request *request, float *video, float *audio,
             denoise.seed = request->seed;
             denoise.conditions = conditioning_count ? conditions : NULL;
             denoise.condition_count = (uint32_t)conditioning_count;
+            if (preview) {
+                char preview_error[512] = {0};
+                snprintf(path, sizeof(path), "%s/" TAE_PATH,
+                         request->package);
+                report.tae = ltx_tae_create(
+                    gpu, path, (int)cells_high, (int)cells_wide,
+                    preview_error, sizeof(preview_error));
+                if (report.tae)
+                    report.preview_rgb = malloc(
+                        (size_t)request->width * (size_t)request->height * 3 *
+                        sizeof(*report.preview_rgb));
+                if (!report.tae || !report.preview_rgb) {
+                    fprintf(stderr, "ltx: live previews unavailable: %s\n",
+                            preview_error[0] ? preview_error :
+                            "out of memory for the preview image");
+                    ltx_tae_release(report.tae);
+                    report.tae = NULL;
+                    free(report.preview_rgb);
+                    report.preview_rgb = NULL;
+                    report.preview_disabled = 1;
+                }
+            }
             ok = ltx_dit_sample(gpu, dit, &denoise, video_context,
                                 audio_context, SPAN, video_latent,
-                                audio_latent, denoise_tick, &report, error,
-                                error_size);
+                                audio_latent, denoise_tick, &report,
+                                preview ? denoise_preview : NULL, &report,
+                                error, error_size);
+            ltx_tae_release(report.tae);
+            report.tae = NULL;
+            free(report.preview_rgb);
+            report.preview_rgb = NULL;
         }
         h3_weight_store_free(dit);
     }

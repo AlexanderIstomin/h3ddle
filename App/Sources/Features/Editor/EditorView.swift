@@ -50,6 +50,17 @@ struct EditorView: View {
     } message: {
       Text(model.importErrorMessage ?? "")
     }
+    .alert(
+      "Couldn’t regenerate clip",
+      isPresented: Binding(
+        get: { model.regenerationErrorMessage != nil },
+        set: { if !$0 { model.regenerationErrorMessage = nil } }
+      )
+    ) {
+      Button("OK", role: .cancel) { model.regenerationErrorMessage = nil }
+    } message: {
+      Text(model.regenerationErrorMessage ?? "")
+    }
     .onKeyPress(.space) {
       guard model.activeGenerationKind == nil, !model.showsExport else { return .ignored }
       model.togglePlayback()
@@ -156,7 +167,8 @@ struct EditorView: View {
       ProgramTimelineView(
         model: model,
         appendMenu: $appendMenu,
-        clipMenu: $clipMenu
+        clipMenu: $clipMenu,
+        onClipMenuAction: performClipMenu
       )
     }
     .frame(maxWidth: .infinity)
@@ -318,7 +330,8 @@ struct EditorView: View {
         TimelineClipMenu.visualItems(
           item: item,
           kind: asset?.kind ?? .video,
-          canSplit: model.canSplit(.visual(id))
+          canSplit: model.canSplit(.visual(id)),
+          canRegenerate: model.canRegenerateVisual(id)
         )
       )
     case .audio(let id):
@@ -352,6 +365,8 @@ struct EditorView: View {
       switch action {
       case .duplicate:
         model.duplicateVisual(id)
+      case .regenerate:
+        model.presentRegeneration(forVisualClip: id)
       case .toggleEnabled:
         model.toggleVisual(id)
       case .toggleNativeAudio:
@@ -382,7 +397,8 @@ struct EditorView: View {
         model.split(.audio(id))
       case .remove:
         model.removeAudio(id)
-      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .resetTransform, .addText:
+      case .regenerate, .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate,
+        .resetTransform, .addText:
         break
       }
     case .text(let id):
@@ -398,7 +414,7 @@ struct EditorView: View {
         model.resetTextTransform(id)
       case .remove:
         model.removeText(id)
-      case .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .addText:
+      case .regenerate, .toggleNativeAudio, .coverCanvas, .fitToCanvas, .rotate, .addText:
         break
       }
     case .insertText:

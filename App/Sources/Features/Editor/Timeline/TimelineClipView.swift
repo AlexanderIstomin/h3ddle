@@ -19,6 +19,7 @@ struct TimelineClipView: View {
   var height: CGFloat
   var accentOverride: Color? = nil
   var showsFilmstrip: Bool = true
+  var showsRegenerationStatus: Bool = false
   var showsTrimHandles: Bool = false
   var onTrimChanged: ((TimelineTrimEdge, CGFloat) -> Void)?
   var onTrimEnded: (() -> Void)?
@@ -73,6 +74,20 @@ struct TimelineClipView: View {
               .foregroundStyle(isSelected ? H3Color.accent : accent.opacity(0.7))
           }
         }
+    }
+    .overlay(alignment: .topTrailing) {
+      if showsRegenerationStatus {
+        Label("Finalizing", systemImage: "sparkles")
+          .labelStyle(.iconOnly)
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(Color.white)
+          .padding(5)
+          .background(H3Color.accent.opacity(0.9))
+          .clipShape(Circle())
+          .padding(4)
+          .help("A regenerated version is running; this draft remains playable")
+          .accessibilityLabel("Regenerating final version")
+      }
     }
     .overlay {
       if !isEnabled {

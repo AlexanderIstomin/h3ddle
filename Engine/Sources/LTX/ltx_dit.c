@@ -1324,6 +1324,7 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                    const float *audio_context, uint32_t span,
                    float *video_latent, float *audio_latent,
                    ltx_dit_tick tick, void *tick_context,
+                   ltx_dit_preview preview, void *preview_context,
                    char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!gpu || !dit || !request || !video_context || !audio_context ||
@@ -1774,6 +1775,10 @@ int ltx_dit_sample(h3_gpu *gpu, const h3_weight_store *dit,
                      step + 1);
                 break;
             }
+        if (preview && !r.failed &&
+            !preview(step + 1, steps, working,
+                     (size_t)target_rows * LATENT, preview_context))
+            stop(&r);
     }
     if (tick && !r.failed &&
         !tick(steps * TOTAL_BLOCKS, steps * TOTAL_BLOCKS, tick_context))

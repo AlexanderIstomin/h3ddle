@@ -95,6 +95,13 @@ int ltx_plan(const ltx_request *request, ltx_shape *shape,
 typedef int (*ltx_progress)(const char *phase, int step, int steps,
                             void *context);
 
+/* A cheap representative still decoded after each denoising step. RGB is
+ * interleaved, full-canvas and in [0, 1]. Returning non-zero cancels, matching
+ * the public h3_frame callback convention. Preview failures are reported to
+ * stderr and disable later previews without failing the final clip. */
+typedef int (*ltx_preview)(const float *rgb, int width, int height,
+                           int step, int steps, void *context);
+
 /* `video` receives `shape.video_floats`, channel-major, in [-1, 1] — the range
  * the VAE works in. `audio` receives `shape.audio_floats`, interleaved stereo
  * in [-1, 1], already clamped as the vocoder's own tail does.
@@ -102,7 +109,7 @@ typedef int (*ltx_progress)(const char *phase, int step, int steps,
  * Returns 0 on failure with `error` set, and 0 with an empty `error` when the
  * caller cancelled. */
 int ltx_generate(const ltx_request *request, float *video, float *audio,
-                 ltx_progress progress, void *context,
+                 ltx_progress progress, ltx_preview preview, void *context,
                  char *error, size_t error_size);
 
 #endif

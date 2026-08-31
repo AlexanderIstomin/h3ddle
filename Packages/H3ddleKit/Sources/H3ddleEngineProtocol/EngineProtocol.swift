@@ -138,8 +138,8 @@ public struct EngineImageOptions: Hashable, Codable, Sendable {
 /// separates them. H3 is the resident engine the app is built around, with
 /// reference inputs, keyframes, previews and the whole quality ladder.
 /// LTX-2.5 is a 22B distilled model that renders markedly better motion in
-/// eight steps, and carries none of that machinery: no references, no
-/// keyframes, no previews, its own 38 GB package, and a fixed 24 fps.
+/// eight steps, with reference/keyframe conditioning and lightweight still
+/// previews, its own 38 GB package, and a fixed 24 fps.
 public enum EngineVideoModel: String, Codable, Sendable {
   case h3
   case ltx
@@ -551,9 +551,9 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   /// about 40% faster at standard step counts, trading exact reproduction for
   /// a different sample of the same quality. Replaces both reuse ladders.
   public var blockCache: Bool
-  /// Decode a representative still after every Euler step. Off by default
-  /// because each preview is a full VideoVAE pass and does not change the
-  /// final MP4.
+  /// Decode a representative still after every Euler step. Off by default;
+  /// preview decoders are deliberately small and do not change the final
+  /// full-VAE output.
   public var previewDenoise: Bool
   /// Space sigmas at Beta(0.6, 0.6) quantiles instead of the released linear
   /// grid. Step-distilled turbo checkpoints are trained against this spacing.
