@@ -8,12 +8,14 @@ struct H3ddleApp: App {
   @State private var model: AppModel = {
     let arguments = ProcessInfo.processInfo.arguments
     let activeQueueFixture = arguments.contains("-H3ddleUITestActiveQueueJob")
-    let generationProvider: any GenerationProvider =
-      activeQueueFixture
-      ? FakeGenerationProvider(stepDelay: .seconds(30))
-      : (arguments.contains("-H3ddleFastFakeGeneration")
-        ? FakeGenerationProvider(stepDelay: .milliseconds(20))
-        : FakeGenerationProvider())
+    let generationProvider: any GenerationProvider
+    if activeQueueFixture {
+      generationProvider = FakeGenerationProvider(stepDelay: .seconds(30))
+    } else if arguments.contains("-H3ddleFastFakeGeneration") {
+      generationProvider = FakeGenerationProvider(stepDelay: .milliseconds(20))
+    } else {
+      generationProvider = MissingModelGenerationProvider()
+    }
     let testQueueStore = GenerationQueueStore(
       rootURL: FileManager.default.temporaryDirectory.appendingPathComponent(
         "H3ddleUITestQueue-\(ProcessInfo.processInfo.processIdentifier)",

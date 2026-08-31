@@ -454,7 +454,7 @@ final class AppModel {
   private static let localAudioModelsKey = "H3ddle.localAudioModelBookmarks"
 
   init(
-    generationProvider: any GenerationProvider = FakeGenerationProvider(),
+    generationProvider: any GenerationProvider = MissingModelGenerationProvider(),
     engineExecutableURL: URL = EngineExecutableLocator.bundled(),
     engineSession: EngineSession? = nil,
     engineInspector: (any EngineInspecting)? = nil,
@@ -1277,7 +1277,7 @@ final class AppModel {
             }
           case .completed(let asset):
             generationProgressTracker.finish()
-            let stableAsset = persistGeneratedAsset(asset, for: generationID)
+            let stableAsset = try persistGeneratedAsset(asset, for: generationID)
             pendingStatistics?.clipSeconds = stableAsset.duration
             studioResults.insert(
               GenerationResult(
@@ -1390,26 +1390,31 @@ final class AppModel {
   private func persistGeneratedAsset(
     _ asset: AssetReference,
     for jobID: UUID
-  ) -> AssetReference {
-    do {
-      let destination = try generationQueueStore.stableOutputURL(
-        for: jobID, sourceURL: asset.url)
-      guard destination.standardizedFileURL != asset.url.standardizedFileURL else {
-        return asset
-      }
-      if FileManager.default.fileExists(atPath: destination.path) {
-        try FileManager.default.removeItem(at: destination)
-      }
-      try FileManager.default.moveItem(at: asset.url, to: destination)
-      var stable = asset
-      stable.url = destination
-      return stable
-    } catch {
-      Self.generationLog.error(
-        "Could not retain generated output: \(error.localizedDescription, privacy: .public)"
-      )
+  ) throws -> AssetReference {
+    guard Self.isNonemptyRegularFile(asset.url) else {
+      throw GenerationError.missingOutput
+    }
+    let destination = try generationQueueStore.stableOutputURL(
+      for: jobID, sourceURL: asset.url)
+    guard destination.standardizedFileURL != asset.url.standardizedFileURL else {
       return asset
     }
+    if FileManager.default.fileExists(atPath: destination.path) {
+      try FileManager.default.removeItem(at: destination)
+    }
+    try FileManager.default.moveItem(at: asset.url, to: destination)
+    guard Self.isNonemptyRegularFile(destination) else {
+      throw GenerationError.missingOutput
+    }
+    var stable = asset
+    stable.url = destination
+    return stable
+  }
+
+  private static func isNonemptyRegularFile(_ url: URL) -> Bool {
+    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+    else { return false }
+    return values.isRegularFile == true && (values.fileSize ?? 0) > 0
   }
 
   private func completeQueuedGeneration(
@@ -2938,6 +2943,13 @@ final class AppModel {
         && (!$0.generationProfile.isVideoOnly || kind == .video)
         && (kind != .image || $0.capability == .image
           || $0.videoEngine.supportsStillGeneration)
+    }
+  }
+
+  func hasSelectedInstalledModel(for kind: GenerationKind) -> Bool {
+    guard let selectedID = selectedModelID(for: kind) else { return false }
+    return installedModelChoices(for: kind).contains {
+      $0.id == selectedID && $0.directory != nil
     }
   }
 

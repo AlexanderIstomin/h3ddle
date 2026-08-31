@@ -81,19 +81,18 @@ jobs:
           "corrupted" warning is not expected—please report it instead of
           disabling Gatekeeper.
 
-          This update adds FastH3 VSA as a managed H3 video model: select it in
-          Models and H3ddle downloads and verifies the pinned package. Measured
-          end-to-end generation is 696 seconds for VSA versus 958 seconds for
-          the equivalent four-pass dense package, with comparable prompt and
-          audio adherence. Reference controls now follow each model's actual
-          capabilities, audio-design prompts persist, and active studio jobs
-          expose Cancel while queue pausing remains in the Queue panel.
+          This hotfix prevents an unavailable generation model from silently
+          falling back to a three-second fake result. Generate is now disabled
+          until an installed model is explicitly selected, and the shipped app
+          fails closed if its production provider cannot be configured.
 
-          The release also fixes the notification callback actor-isolation crash
-          reported on macOS 26, isolates inline video-preview state to the main
-          actor, and builds with the Xcode 26 SDK required by native
-          VideoToolbox super-resolution. Fast upscaling no longer probes an
-          optional neural scaler that it does not use.
+          Engine, queue, and project persistence paths now verify that a
+          completed generation produced a real, non-empty output file. Missing
+          output is reported as a failed job instead of creating a phantom
+          `Media/*.mp4` project entry that AVFoundation cannot open.
+
+          FastH3 VSA remains available as a managed H3 video model with the
+          notification and VideoToolbox compatibility fixes from v0.7.9.
 
           **Requirements:** Apple silicon and macOS 15 or later. FFmpeg is an
           optional fallback for containers the system frameworks cannot read.

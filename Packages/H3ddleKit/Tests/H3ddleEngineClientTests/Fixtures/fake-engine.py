@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
+from urllib.parse import unquote, urlparse
 
 HOLD_GENERATE = "--hold-generate" in sys.argv
 IGNORE_CANCEL = "--ignore-cancel" in sys.argv
@@ -9,6 +11,7 @@ SPAM_STDERR = "--spam-stderr" in sys.argv
 # Reports the generation block exactly as it arrived, so a test can assert
 # what crossed the protocol rather than what the caller meant to send.
 ECHO_GENERATE = "--echo-generate" in sys.argv
+OMIT_OUTPUT = "--omit-output" in sys.argv
 CRASH_ONCE_FILE = None
 if "--crash-once-file" in sys.argv:
     marker = sys.argv.index("--crash-once-file")
@@ -104,7 +107,15 @@ for raw in sys.stdin:
             echo["fractionComplete"] = 0
             emit(echo)
         completed = base(command, "completed")
-        completed["outputURL"] = generation.get("outputURL", "file:///tmp/out.mp4")
+        output_url = generation.get("outputURL", "file:///tmp/out.mp4")
+        if not OMIT_OUTPUT:
+            parsed = urlparse(output_url)
+            if parsed.scheme == "file":
+                output_path = unquote(parsed.path)
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                with open(output_path, "wb") as output_file:
+                    output_file.write(b"fake engine output")
+        completed["outputURL"] = output_url
         completed["outputDuration"] = 1
         emit(completed)
         active_generate = None

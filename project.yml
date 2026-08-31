@@ -58,7 +58,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.h3ddle.desktop
         PRODUCT_NAME: H3ddle
-        MARKETING_VERSION: 0.7.9
+        MARKETING_VERSION: 0.7.10
         CURRENT_PROJECT_VERSION: 1
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_CFBundleDisplayName: H3ddle

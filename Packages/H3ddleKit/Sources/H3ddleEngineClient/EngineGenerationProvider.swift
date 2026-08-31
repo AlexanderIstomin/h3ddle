@@ -293,6 +293,11 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
                       throwing: EngineGenerationProviderError.missingOutput)
                     return true
                   }
+                  guard Self.isNonemptyRegularFile(completedURL) else {
+                    continuation.finish(
+                      throwing: EngineGenerationProviderError.missingOutput)
+                    return true
+                  }
                   let displayName =
                     switch request.kind {
                     case .image: "Generated H3 Image"
@@ -359,5 +364,11 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
         task.cancel()
       }
     }
+  }
+
+  private static func isNonemptyRegularFile(_ url: URL) -> Bool {
+    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+    else { return false }
+    return values.isRegularFile == true && (values.fileSize ?? 0) > 0
   }
 }

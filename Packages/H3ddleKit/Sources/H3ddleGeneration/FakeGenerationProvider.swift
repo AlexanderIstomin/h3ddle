@@ -34,8 +34,21 @@ public struct FakeGenerationProvider: GenerationProvider {
           let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("h3ddle-fake-\(UUID().uuidString)")
             .appendingPathExtension(request.kind == .audio ? "wav" : request.kind == .image ? "png" : "mp4")
-          if request.kind == .audio {
+          switch request.kind {
+          case .audio:
             try FakeAudioFixture.writeTone(to: url, duration: duration)
+          case .image:
+            // A real one-pixel PNG keeps UI and persistence tests independent
+            // from model weights without manufacturing a missing result file.
+            let png = Data(
+              base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )!
+            try png.write(to: url, options: .atomic)
+          case .video:
+            // Visual fake tests do not decode the clip, but downstream code
+            // must still receive a concrete, non-empty artifact to retain.
+            try Data("H3ddle fake video fixture".utf8).write(to: url, options: .atomic)
           }
           let asset = AssetReference(
             kind: request.kind.mediaKind,
@@ -55,6 +68,21 @@ public struct FakeGenerationProvider: GenerationProvider {
       continuation.onTermination = { _ in
         task.cancel()
       }
+    }
+  }
+}
+
+/// Production's fail-closed fallback when no model directory resolved.
+/// Explicit UI fixtures inject `FakeGenerationProvider`; the shipped app must
+/// never turn a missing selection into a successful-looking fake result.
+public struct MissingModelGenerationProvider: GenerationProvider {
+  public init() {}
+
+  public func events(
+    for request: GenerationRequest
+  ) -> AsyncThrowingStream<GenerationEvent, any Error> {
+    AsyncThrowingStream { continuation in
+      continuation.finish(throwing: GenerationError.modelRequired)
     }
   }
 }
