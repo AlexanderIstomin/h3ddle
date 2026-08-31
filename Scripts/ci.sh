@@ -107,11 +107,22 @@ run_swift_test_targets() {
             if [ "$test_status" -eq 0 ]; then
                 break
             fi
-            if [ "$test_status" -ne 124 ] || [ "$attempt" -eq 2 ]; then
+            if [ "$attempt" -eq 2 ]; then
                 echo "Swift test target $test_target failed with status $test_status." >&2
                 return "$test_status"
             fi
-            echo "Swift test target $test_target timed out; retrying once in a fresh process." >&2
+            if [ "$test_status" -eq 124 ]; then
+                echo "Swift test target $test_target timed out; retrying once in a fresh process." >&2
+            elif [ "$test_target" = "H3ddleEngineClientTests" ] && [ "$test_status" -eq 1 ]; then
+                # Xcode 26 can surface teardown of this target's helper-process
+                # fixtures as signal 5, which `swift test` normalizes to status
+                # 1. Retry only this process-owning target; ordinary assertion
+                # failures remain deterministic and fail on the second run.
+                echo "Swift test target $test_target exited during process teardown; retrying once in a fresh process." >&2
+            else
+                echo "Swift test target $test_target failed with status $test_status." >&2
+                return "$test_status"
+            fi
             attempt=$((attempt + 1))
         done
     done
