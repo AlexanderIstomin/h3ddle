@@ -8,6 +8,7 @@
 #include "qwen_speaker.h"
 #include "ltx_audio.h"
 #include "ltx_generate.h"
+#include "ltx_resample.h"
 #include "h3_avwriter.h"
 #include "sa3_generate.h"
 
@@ -571,6 +572,9 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
 
 typedef struct {
     h3ddle_ltx_step on_step;
+    h3_frame_callback on_preview;
+    unsigned char *preview_rgb;
+    int frame_count;
     void *opaque;
 } ltx_bridge_context;
 
@@ -579,6 +583,31 @@ static int ltx_bridge_step(const char *phase, int step, int steps,
     ltx_bridge_context *bridge = context;
     if (!bridge->on_step) return 1;
     return bridge->on_step(phase, step, steps, bridge->opaque);
+}
+
+static int ltx_bridge_preview(const float *image, int width, int height,
+                              int step, int steps, void *context) {
+    ltx_bridge_context *bridge = context;
+    if (!bridge->on_preview || !bridge->preview_rgb) return 0;
+    const size_t values = (size_t)width * (size_t)height * 3;
+    for (size_t index = 0; index < values; index++) {
+        float value = image[index];
+        if (value < 0.0f) value = 0.0f;
+        if (value > 1.0f) value = 1.0f;
+        bridge->preview_rgb[index] =
+            (unsigned char)(value * 255.0f + 0.5f);
+    }
+    const h3_frame frame = {
+        .width = width,
+        .height = height,
+        .stride = width * 3,
+        .rgb = bridge->preview_rgb,
+        .frame_index = 0,
+        .frame_count = bridge->frame_count,
+        .denoise_step = step - 1,
+        .denoise_steps = steps,
+    };
+    return bridge->on_preview(&frame, bridge->opaque);
 }
 
 /* The vocoder makes 16 kHz and the system muxer's AAC encoder will not take
@@ -595,47 +624,7 @@ static int ltx_bridge_step(const char *phase, int step, int steps,
  * cheaper and would put a first-order hold's droop across the top of the band,
  * which on a track that is *already* band-limited to 8 kHz is exactly where
  * what little brightness it has lives. */
-enum { LTX_CONTAINER_RATE = 48000, LTX_RESAMPLE_TAPS = 32 };
-
-static float *resample_stereo(const float *in, uint32_t in_frames, int in_rate,
-                              int out_rate, uint32_t *out_frames) {
-    const double ratio = (double)out_rate / (double)in_rate;
-    const uint32_t frames = (uint32_t)((double)in_frames * ratio);
-    float *out = malloc((size_t)frames * 2 * sizeof(*out));
-    if (!out) return NULL;
-    for (uint32_t frame = 0; frame < frames; frame++) {
-        const double at = (double)frame / ratio;
-        const long centre = (long)floor(at);
-        double left = 0.0, right = 0.0, weight = 0.0;
-        for (long tap = -LTX_RESAMPLE_TAPS + 1; tap <= LTX_RESAMPLE_TAPS; tap++) {
-            const long index = centre + tap;
-            if (index < 0 || index >= (long)in_frames) continue;
-            const double distance = at - (double)index;
-            double kernel;
-            if (distance == 0.0) {
-                kernel = 1.0;
-            } else {
-                const double x = M_PI * distance;
-                /* Hann over the tap span, which is what keeps the stopband
-                 * from ringing across a transient. */
-                const double window =
-                    0.5 + 0.5 * cos(M_PI * distance / (double)LTX_RESAMPLE_TAPS);
-                kernel = sin(x) / x * window;
-            }
-            left += kernel * (double)in[(size_t)index * 2];
-            right += kernel * (double)in[(size_t)index * 2 + 1];
-            weight += kernel;
-        }
-        /* Normalizing by the realized weight rather than trusting the kernel
-         * sum keeps the first and last few frames from fading, where the
-         * window runs off the end of the signal. */
-        if (weight > 1e-9) { left /= weight; right /= weight; }
-        out[(size_t)frame * 2] = (float)left;
-        out[(size_t)frame * 2 + 1] = (float)right;
-    }
-    *out_frames = frames;
-    return out;
-}
+enum { LTX_CONTAINER_RATE = 48000 };
 
 int h3ddle_ltx_plan(int width, int height, int frames, int fps,
                     double *seconds, char *error, size_t error_size) {
@@ -661,7 +650,9 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
                         int steps, unsigned long long seed,
                         const char *first_frame, const char *last_frame,
                         const char *const *references, int reference_count,
-                        const char *output_path, h3ddle_ltx_step on_step,
+                        const char *output_path, int preview_denoise,
+                        h3ddle_ltx_step on_step,
+                        h3_frame_callback on_preview,
                         void *opaque, char *error, size_t error_size) {
     if (!output_path) {
         snprintf(error, error_size, "somewhere to put the clip is required");
@@ -716,12 +707,28 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
                  shape.frames, shape.width, shape.height);
         return 0;
     }
-    ltx_bridge_context bridge = {on_step, opaque};
-    if (!ltx_generate(&request, planes, audio, ltx_bridge_step, &bridge,
+    unsigned char *preview_rgb = NULL;
+    if (preview_denoise && on_preview) {
+        preview_rgb = malloc((size_t)shape.width * (size_t)shape.height * 3);
+        if (!preview_rgb)
+            fprintf(stderr, "ltx: live previews unavailable: out of memory "
+                            "for the 8-bit preview image\n");
+    }
+    ltx_bridge_context bridge = {
+        .on_step = on_step,
+        .on_preview = on_preview,
+        .preview_rgb = preview_rgb,
+        .frame_count = shape.frames,
+        .opaque = opaque,
+    };
+    if (!ltx_generate(&request, planes, audio, ltx_bridge_step,
+                      preview_rgb ? ltx_bridge_preview : NULL, &bridge,
                       error, error_size)) {
+        free(preview_rgb);
         free(planes); free(audio);
         return 0;
     }
+    free(preview_rgb);
 
     /* Channel-major [-1, 1] to tightly packed RGB24, which is what the muxer
      * takes. Same halve-centre-clamp as Z-Image's, and the same reason to
@@ -752,9 +759,9 @@ int h3ddle_ltx_generate(const char *package_directory, const char *shaders,
     /* The soundtrack is the point of this engine, so it is muxed in rather
      * than written beside the clip. */
     uint32_t track_frames = shape.audio_frames;
-    float *track = resample_stereo(audio, shape.audio_frames,
-                                   LTX_AUDIO_SAMPLE_RATE, LTX_CONTAINER_RATE,
-                                   &track_frames);
+    float *track = ltx_resample_stereo_to_channel_major(
+        audio, shape.audio_frames, LTX_AUDIO_SAMPLE_RATE, LTX_CONTAINER_RATE,
+        &track_frames);
     free(audio);
     if (!track) {
         free(rgb);

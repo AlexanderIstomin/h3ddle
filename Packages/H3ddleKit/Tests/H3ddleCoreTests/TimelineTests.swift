@@ -5,6 +5,65 @@ import Testing
 
 @Suite("Two-track timeline")
 struct TimelineTests {
+  @Test("Replacing one visual occurrence preserves its edit and leaves duplicates alone")
+  func replaceVisualOccurrence() throws {
+    let draft = videoAsset(name: "Draft", duration: 8)
+    let final = videoAsset(name: "Final", duration: 8)
+    var timeline = ProjectTimeline()
+    let selected = try timeline.appendVisual(draft)
+    let other = try timeline.appendVisual(draft)
+    timeline.setVisualTrim(
+      selected.id,
+      VisualTrim(duration: 3, sourceOffset: 2, gapBefore: 1)
+    )
+    timeline.setVisualCanvasTransform(
+      selected.id,
+      CanvasObjectTransform(
+        fit: .cover,
+        translationX: 0.2,
+        translationY: -0.1,
+        scale: 1.3,
+        rotationRadians: 0.4
+      )
+    )
+    timeline.setVisualIncludesNativeAudio(selected.id, includes: false)
+    _ = timeline.addVisualEffect(selected.id, kind: .filmGrain)
+
+    let replaced = try timeline.replaceVisualAsset(clipID: selected.id, with: final)
+
+    #expect(replaced.id == selected.id)
+    #expect(replaced.assetID == final.id)
+    #expect(replaced.duration == 3)
+    #expect(replaced.sourceOffset == 2)
+    #expect(replaced.gapBefore == 1)
+    #expect(replaced.canvasFit == .cover)
+    #expect(replaced.translationX == 0.2)
+    #expect(replaced.translationY == -0.1)
+    #expect(replaced.uniformScale == 1.3)
+    #expect(replaced.rotationRadians == 0.4)
+    #expect(!replaced.includesNativeAudio)
+    #expect(replaced.effects.map(\.kind) == [.filmGrain])
+    #expect(timeline.visualItems.first(where: { $0.id == other.id })?.assetID == draft.id)
+  }
+
+  @Test("A short replacement cannot ripple the ordered visual lane")
+  func shortReplacementIsRejected() throws {
+    let draft = videoAsset(name: "Draft", duration: 8)
+    let short = videoAsset(name: "Short", duration: 4.9)
+    var timeline = ProjectTimeline()
+    let selected = try timeline.appendVisual(draft)
+    timeline.setVisualTrim(
+      selected.id,
+      VisualTrim(duration: 3, sourceOffset: 2, gapBefore: 0)
+    )
+
+    #expect(throws: TimelineError.replacementTooShort(required: 5, available: 4.9)) {
+      try timeline.replaceVisualAsset(clipID: selected.id, with: short)
+    }
+    #expect(timeline.visualItems[0].assetID == draft.id)
+    #expect(timeline.visualItems[0].duration == 3)
+  }
+
   @Test("Visual assets append in program order")
   func appendsVisualAssets() throws {
     var timeline = ProjectTimeline()

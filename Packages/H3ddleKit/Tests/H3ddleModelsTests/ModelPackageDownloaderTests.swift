@@ -77,7 +77,7 @@ struct ModelPackageDownloaderTests {
     )
 
     #expect(manifest.revision == "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f")
-    #expect(manifest.totalByteCount == 38_694_140_224)
+    #expect(manifest.totalByteCount == 38_717_671_520)
     #expect(transformer.byteCount == 21_504_034_388)
     #expect(
       transformer.sha256
@@ -94,6 +94,30 @@ struct ModelPackageDownloaderTests {
         == "https://huggingface.co/PulpCut/LTX-2.5-INT8-ConvRot-safetensors/resolve/"
           + "7597fb305b4cab9e7ff2c1d1e9551279c2932f0f/"
           + "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+    )
+  }
+
+  @Test("LTX carries an immutable tiny live-preview decoder")
+  func ltxPreviewDecoder() throws {
+    let manifest = ModelCatalog.ltx25
+    let preview = try #require(
+      manifest.files.first { $0.role == .previewDecoder }
+    )
+
+    #expect(preview.path == "vae_approx/taeltx2_3.safetensors")
+    #expect(preview.byteCount == 23_531_296)
+    #expect(
+      preview.sha256
+        == "f0773b4e3e57318e6aa4dd4a35e1d16213a5f160fbc0376163f06888bbcbe246"
+    )
+    #expect(preview.sourceRepository == "Kijai/LTX2.3_comfy")
+    #expect(preview.sourceRevision == "c2bd6be6d52e2b1beb2117171adff45a2feb9c66")
+    #expect(preview.sourcePath == "vae/taeltx2_3.safetensors")
+    #expect(
+      manifest.downloadURL(for: preview).absoluteString
+        == "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/"
+          + "c2bd6be6d52e2b1beb2117171adff45a2feb9c66/"
+          + "vae/taeltx2_3.safetensors"
     )
   }
 

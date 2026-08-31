@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     double began = now();
-    if (!ltx_generate(&request, video, audio, report, &began, error,
+    if (!ltx_generate(&request, video, audio, report, NULL, &began, error,
                       sizeof(error))) {
         fprintf(stderr, error[0] ? "FAIL: %s\n" : "cancelled\n", error);
         return 1;

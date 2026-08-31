@@ -51,6 +51,10 @@ public struct GenerationQueueJob: Identifiable, Hashable, Codable, Sendable {
   public var errorMessage: String?
   public var result: AssetReference?
   public var statistics: GenerationStatistics?
+  /// Optional clip-local destination. The generated asset is always retained
+  /// in the library; this target only controls an additional safe swap.
+  public var replacementTarget: GenerationReplacementTarget?
+  public var replacementMessage: String?
 
   public init(
     id: UUID = UUID(),
@@ -74,7 +78,9 @@ public struct GenerationQueueJob: Identifiable, Hashable, Codable, Sendable {
     projectedDuration: TimeInterval? = nil,
     errorMessage: String? = nil,
     result: AssetReference? = nil,
-    statistics: GenerationStatistics? = nil
+    statistics: GenerationStatistics? = nil,
+    replacementTarget: GenerationReplacementTarget? = nil,
+    replacementMessage: String? = nil
   ) {
     self.id = id
     self.request = request
@@ -98,6 +104,8 @@ public struct GenerationQueueJob: Identifiable, Hashable, Codable, Sendable {
     self.errorMessage = errorMessage
     self.result = result
     self.statistics = statistics
+    self.replacementTarget = replacementTarget
+    self.replacementMessage = replacementMessage
   }
 
   /// Checkpoint support is decided by the exact request. An H3 model with an

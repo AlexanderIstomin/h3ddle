@@ -66,7 +66,8 @@ struct TimelineClipMenu: View {
   static func visualItems(
     item: VisualItem,
     kind: MediaKind,
-    canSplit: Bool
+    canSplit: Bool,
+    canRegenerate: Bool
   ) -> [TimelineClipMenuItem] {
     var rows: [TimelineClipMenuItem] = [
       TimelineClipMenuItem(
@@ -74,6 +75,13 @@ struct TimelineClipMenu: View {
         label: "Duplicate",
         symbol: "plus.square.on.square",
         action: .duplicate
+      ),
+      TimelineClipMenuItem(
+        id: "regenerate",
+        label: "Regenerate…",
+        symbol: "arrow.triangle.2.circlepath",
+        action: .regenerate,
+        isEnabled: canRegenerate
       ),
       TimelineClipMenuItem(
         id: "enable",
@@ -231,8 +239,37 @@ struct TimelineClipMenu: View {
   }
 }
 
+/// The timeline uses the system context-menu presenter so secondary clicks,
+/// control-clicks, trackpads, and accessibility alternatives all follow the
+/// macOS event path. The custom floating menu remains available to canvas
+/// interactions that need an explicit screen position.
+struct TimelineNativeClipMenu: View {
+  var items: [TimelineClipMenuItem]
+  var onSelect: (TimelineClipMenuItem) -> Void
+
+  var body: some View {
+    ForEach(items) { item in
+      if item.isSeparator {
+        Divider()
+      } else {
+        Button(
+          role: item.isDestructive ? .destructive : nil,
+          action: { onSelect(item) }
+        ) {
+          Label(
+            item.label,
+            systemImage: item.isSelected ? "checkmark" : item.symbol
+          )
+        }
+        .disabled(!item.isEnabled)
+      }
+    }
+  }
+}
+
 enum TimelineClipMenuAction: Equatable {
   case duplicate
+  case regenerate
   case toggleEnabled
   case toggleNativeAudio
   case split

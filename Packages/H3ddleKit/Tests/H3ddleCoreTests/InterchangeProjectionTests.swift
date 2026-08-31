@@ -17,6 +17,27 @@ struct InterchangeProjectionTests {
     #expect(restored.id == project.id)
   }
 
+  @Test("Asset generation metadata round-trips as namespaced interchange data")
+  func assetMetadataRoundTrips() throws {
+    let metadata: JSONValue = .object([
+      "version": .int(1),
+      "displayPrompt": .string("A woman walking through rain"),
+    ])
+    let asset = AssetReference(
+      kind: .video,
+      displayName: "Draft",
+      url: URL(fileURLWithPath: "/tmp/draft.mp4"),
+      duration: 5,
+      metadata: [AssetMetadataKey.generationRecipe: metadata]
+    )
+    var project = H3ddleProject(name: "Recipes")
+    project.addAsset(asset)
+
+    let restored = try roundTrip(project)
+
+    #expect(restored.assets[0].metadata[AssetMetadataKey.generationRecipe] == metadata)
+  }
+
   @Test("A rich program round-trips assets, timing, text, effects, and transitions")
   func richProjectRoundTrips() throws {
     var project = H3ddleProject(

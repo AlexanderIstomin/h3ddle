@@ -159,11 +159,9 @@ struct ModelSettingsView: View {
           ForEach(choices) { choice in
             ModelChoiceRow(
               choice: choice,
-              isSelected: model.selectedModelID(for: capability) == choice.id,
               status: managedStatus(for: choice),
               blockedBy: blockingPackageName(for: choice),
               installedMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
-              select: { model.selectModel(choice.id) },
               install: {
                 if case .managed(let manifest) = choice.source {
                   manifestPendingDownload = manifest
@@ -241,14 +239,12 @@ struct ModelSettingsView: View {
 /// rather than in a footer that could only ever name one of them.
 private struct ModelChoiceRow: View {
   var choice: ModelChoice
-  var isSelected: Bool
   var status: ManagedPackageStatus?
   /// Name of the package already downloading in this category, which this
   /// one has to wait for.
   var blockedBy: String?
   /// This Mac's unified memory, compared against what the package asks for.
   var installedMemoryBytes: Int64
-  var select: () -> Void
   var install: () -> Void
   var pause: () -> Void
   var discard: (() -> Void)?
@@ -332,17 +328,14 @@ private struct ModelChoiceRow: View {
         .padding(.bottom, 10)
       }
     }
-    .contentShape(Rectangle())
-    .onTapGesture(perform: selectIfPossible)
     .background(
       H3Color.canvas,
       in: RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: H3Radius.medium, style: .continuous)
-        .strokeBorder(isSelected ? H3Color.accent.opacity(0.5) : H3Color.line, lineWidth: 1)
+        .strokeBorder(H3Color.line, lineWidth: 1)
     }
-    .animation(.easeOut(duration: 0.18), value: isSelected)
   }
 
   /// Installed packages confirm themselves; everything else shows its price,
@@ -350,15 +343,15 @@ private struct ModelChoiceRow: View {
   @ViewBuilder
   private var trailingBadge: some View {
     if choice.isInstalled {
-      Text(isSelected ? "In use" : "Installed")
+      Text("Installed")
         .font(.system(size: 10, weight: .semibold))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(
-          isSelected ? H3Color.accent.opacity(0.18) : H3Color.controlFill,
+          H3Color.controlFill,
           in: Capsule()
         )
-        .foregroundStyle(isSelected ? H3Color.accent : H3Color.textSecondary)
+        .foregroundStyle(H3Color.textSecondary)
     } else if choice.downloadBytes > 0 {
       Text(byteText(choice.downloadBytes))
         .font(.system(size: 11, weight: .medium))
@@ -398,12 +391,6 @@ private struct ModelChoiceRow: View {
 
   private func byteText(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-  }
-
-  private func selectIfPossible() {
-    if choice.isInstalled {
-      select()
-    }
   }
 
   @ViewBuilder

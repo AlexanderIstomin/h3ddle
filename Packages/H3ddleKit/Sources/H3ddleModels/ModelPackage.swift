@@ -491,7 +491,7 @@ public enum ModelCatalog {
   /// plain URL with no token. The complete Community License Agreement travels
   /// with the weights in the mirror, which is what Section 3.2 requires.
   ///
-  /// Deliberately a subset: 38.69 GB against upstream's ~180. The BF16 and
+  /// Deliberately a subset: 38.72 GB against upstream's ~180. The BF16 and
   /// NVFP4 transformers, the non-distilled `dev` checkpoint, the LoRA, the
   /// latent upscalers and the duration head are all absent, because the app
   /// runs the distilled checkpoint at eight steps and has no stage-2 ladder.
@@ -512,7 +512,7 @@ public enum ModelCatalog {
     )!,
     // Measured, not estimated: a 2.7-second clip at 512² peaks at 5.23 GB of
     // physical footprint (5.05 GB RSS — the two agreeing is what says Metal's
-    // unified buffers are counted). The package weighs 38.69 GB and never has
+    // unified buffers are counted). The package weighs 38.72 GB and never has
     // more than one 388 MB transformer block resident, because the tower and
     // the DiT cannot both fit and are loaded, run and freed in turn. 16 GB
     // leaves the app and the system room around that.
@@ -560,6 +560,15 @@ public enum ModelCatalog {
         path: "vae/ltx-2.5-audio-vae-bf16.safetensors",
         byteCount: 364_866_540,
         sha256: "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5"
+      ),
+      ModelPackageFile(
+        role: .previewDecoder,
+        path: "vae_approx/taeltx2_3.safetensors",
+        byteCount: 23_531_296,
+        sha256: "f0773b4e3e57318e6aa4dd4a35e1d16213a5f160fbc0376163f06888bbcbe246",
+        sourceRepository: "Kijai/LTX2.3_comfy",
+        sourceRevision: "c2bd6be6d52e2b1beb2117171adff45a2feb9c66",
+        sourcePath: "vae/taeltx2_3.safetensors"
       ),
     ]
   )

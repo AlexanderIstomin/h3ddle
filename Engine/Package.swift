@@ -73,11 +73,15 @@ let package = Package(
         // outright: every kernel it needs already existed, including the
         // alias-free snakebeta the vocoder is built on.
         "Sources/LTX/ltx_audio.c",
+        "Sources/LTX/ltx_resample.c",
         "Sources/LTX/ltx_tiling.c",
         "Sources/LTX/ltx_video.c",
         "Sources/LTX/ltx_connector.c",
+        "Sources/LTX/ltx_prompt.c",
         "Sources/LTX/ltx_text.c",
         "Sources/LTX/ltx_dit.c",
+        "Sources/LTX/ltx_tae.c",
+        "Sources/LTX/ltx_tae_geometry.c",
         "Sources/LTX/ltx_generate.c",
         "Sources/H3Native/H3NativeAudio.m",
       ],

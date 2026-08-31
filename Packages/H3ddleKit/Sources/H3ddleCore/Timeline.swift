@@ -351,6 +351,7 @@ public enum TimelineError: Error, Equatable, Sendable {
   case expectedVisualAsset
   case expectedAudioAsset
   case missingAsset
+  case replacementTooShort(required: TimeInterval, available: TimeInterval)
 }
 
 public struct ProjectTimeline: Hashable, Codable, Sendable {
@@ -498,6 +499,49 @@ public struct ProjectTimeline: Hashable, Codable, Sendable {
   public mutating func setVisualEnabled(_ id: UUID, isEnabled: Bool) {
     guard let index = visualItems.firstIndex(where: { $0.id == id }) else { return }
     visualItems[index].isEnabled = isEnabled
+  }
+
+  /// Rebinds one timeline occurrence while retaining every editorial choice
+  /// made on that occurrence. Other clips using the old library asset are not
+  /// touched. Video replacements must cover the existing source in/out range;
+  /// failing instead of clamping avoids silently rippling the ordered lane.
+  @discardableResult
+  public mutating func replaceVisualAsset(
+    clipID: UUID,
+    with asset: AssetReference
+  ) throws -> VisualItem {
+    guard asset.kind.isVisual else { throw TimelineError.expectedVisualAsset }
+    guard let index = visualItems.firstIndex(where: { $0.id == clipID }) else {
+      throw TimelineError.missingAsset
+    }
+    let item = visualItems[index]
+    let requiredDuration = item.sourceOffset + item.duration
+    if asset.kind == .video, asset.duration + 0.000_001 < requiredDuration {
+      throw TimelineError.replacementTooShort(
+        required: requiredDuration,
+        available: asset.duration
+      )
+    }
+    let replacement = VisualItem(
+      id: item.id,
+      assetID: asset.id,
+      duration: item.duration,
+      isEnabled: item.isEnabled,
+      includesNativeAudio: item.includesNativeAudio && asset.kind == .video,
+      sourceOffset: asset.kind == .video ? item.sourceOffset : 0,
+      gapBefore: item.gapBefore,
+      canvasFit: item.canvasFit,
+      rotationTurns: item.rotationTurns,
+      translationX: item.translationX,
+      translationY: item.translationY,
+      uniformScale: item.uniformScale,
+      rotationRadians: item.rotationRadians,
+      transition: item.transition,
+      effects: item.effects
+    )
+    visualItems[index] = replacement
+    sanitizeVisualTransitions()
+    return replacement
   }
 
   public mutating func setVisualTrim(_ id: UUID, _ trim: VisualTrim) {

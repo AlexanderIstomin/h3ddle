@@ -133,12 +133,18 @@ public enum MediaImport {
     let probed = try await probe(source)
     guard lane.accepts(probed.kind) else { throw MediaImportError.wrongLane }
     let stored = try copy(source, into: directory)
-    let asset = AssetReference(
+    var asset = AssetReference(
       kind: probed.kind,
       displayName: probed.displayName,
       url: stored,
       duration: probed.duration
     )
+    if let data = try? EmbeddedGenerationMetadata.read(from: stored),
+      let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+      value.object != nil
+    {
+      asset.metadata[AssetMetadataKey.generationRecipe] = value
+    }
     return ImportedMedia(
       asset: asset,
       includesNativeAudio: probed.kind == .video && probed.hasNativeAudio

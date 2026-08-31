@@ -142,7 +142,8 @@ private func interchangeAsset(
     kind: asset.kind.rawValue,
     src: mediaLocator(asset),
     name: asset.displayName,
-    duration: asset.duration
+    duration: asset.duration,
+    extras: asset.metadata
   )
 }
 
@@ -158,7 +159,8 @@ private func projectAsset(_ asset: InterchangeAsset, url: URL) throws -> AssetRe
     kind: kind,
     displayName: asset.name ?? url.deletingPathExtension().lastPathComponent,
     url: url,
-    duration: max(0, asset.duration ?? 0)
+    duration: max(0, asset.duration ?? 0),
+    metadata: asset.extras
   )
 }
 

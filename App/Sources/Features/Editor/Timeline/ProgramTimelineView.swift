@@ -9,6 +9,7 @@ struct ProgramTimelineView: View {
   @Bindable var model: AppModel
   @Binding var appendMenu: AppendMenuPlacement?
   @Binding var clipMenu: ClipMenuPlacement?
+  var onClipMenuAction: (TimelineClipMenuItem, ClipMenuPlacement.Target) -> Void
   @State private var playheadDragOrigin: TimeInterval?
   @State private var appendButtonFrames: [String: CGRect] = [:]
   @State private var timelineScrollPosition = ScrollPosition(edge: .leading)
@@ -263,17 +264,14 @@ struct ProgramTimelineView: View {
         .onTapGesture {
           model.selectTimelineClip(.text(item.id))
         }
-        .overlay {
-          GeometryReader { proxy in
-            SecondaryClickProbe { local in
-              presentClipMenu(
-                .text(item.id),
-                at: CGPoint(
-                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
-                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
-                )
-              )
-            }
+        .contextMenu {
+          TimelineNativeClipMenu(
+            items: TimelineClipMenu.textItems(
+              item: item,
+              canSplit: model.canSplit(.text(item.id))
+            )
+          ) { menuItem in
+            onClipMenuAction(menuItem, .text(item.id))
           }
         }
       }
@@ -314,6 +312,7 @@ struct ProgramTimelineView: View {
           isSelected: model.selectedTimelineItem == .visual(placement.item.id),
           metrics: metrics,
           height: TimelineChrome.visualLaneHeight,
+          showsRegenerationStatus: model.isRegeneratingVisual(placement.item.id),
           showsTrimHandles: model.selectedTimelineItem == .visual(placement.item.id)
             && visualMove == nil,
           onTrimChanged: { edge, translation in
@@ -334,17 +333,16 @@ struct ProgramTimelineView: View {
         .onTapGesture {
           model.selectTimelineClip(.visual(placement.item.id))
         }
-        .overlay {
-          GeometryReader { proxy in
-            SecondaryClickProbe { local in
-              presentClipMenu(
-                .visual(placement.item.id),
-                at: CGPoint(
-                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
-                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
-                )
-              )
-            }
+        .contextMenu {
+          TimelineNativeClipMenu(
+            items: TimelineClipMenu.visualItems(
+              item: placement.item,
+              kind: asset?.kind ?? .video,
+              canSplit: model.canSplit(.visual(placement.item.id)),
+              canRegenerate: model.canRegenerateVisual(placement.item.id)
+            )
+          ) { menuItem in
+            onClipMenuAction(menuItem, .visual(placement.item.id))
           }
         }
         if visualMove == nil, model.project.timeline.canApplyVisualTransition(placement.item.id) {
@@ -444,17 +442,14 @@ struct ProgramTimelineView: View {
         .onTapGesture {
           model.selectTimelineClip(.audio(item.id))
         }
-        .overlay {
-          GeometryReader { proxy in
-            SecondaryClickProbe { local in
-              presentClipMenu(
-                .audio(item.id),
-                at: CGPoint(
-                  x: proxy.frame(in: .named(editorSpace)).minX + local.x,
-                  y: proxy.frame(in: .named(editorSpace)).minY + local.y
-                )
-              )
-            }
+        .contextMenu {
+          TimelineNativeClipMenu(
+            items: TimelineClipMenu.audioItems(
+              item: item,
+              canSplit: model.canSplit(.audio(item.id))
+            )
+          ) { menuItem in
+            onClipMenuAction(menuItem, .audio(item.id))
           }
         }
       }
