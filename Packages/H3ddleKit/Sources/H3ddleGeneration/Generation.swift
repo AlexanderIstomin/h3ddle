@@ -264,11 +264,17 @@ public protocol GenerationProvider: Sendable {
 
 public enum GenerationError: LocalizedError, Equatable, Sendable {
   case emptyPrompt
+  case modelRequired
+  case missingOutput
 
   public var errorDescription: String? {
     switch self {
     case .emptyPrompt:
       "Describe what you want to generate."
+    case .modelRequired:
+      "Choose an installed model before starting generation."
+    case .missingOutput:
+      "Generation completed without writing an output file."
     }
   }
 }

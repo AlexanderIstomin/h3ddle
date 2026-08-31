@@ -187,6 +187,26 @@ struct EngineClientTests {
     #expect(EngineGenerationProvider.outputExtension(for: .image) == "png")
   }
 
+  @Test("A completed protocol event without a file is rejected")
+  func completedEventRequiresOutputFile() async {
+    let session = fakeEngineSession(arguments: ["--omit-output"])
+    defer { session.shutdown() }
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "H3ddleMissingOutput-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let provider = EngineGenerationProvider(
+      session: session,
+      modelDirectory: URL(fileURLWithPath: "/tmp/model", isDirectory: true),
+      outputDirectory: root
+    )
+
+    await #expect(throws: EngineGenerationProviderError.missingOutput) {
+      for try await _ in provider.events(
+        for: GenerationRequest(kind: .video, prompt: "Missing output", duration: 1)
+      ) {}
+    }
+  }
+
   @Test("A helper process is reused across handshake and inspection")
   func sessionReusesHelperProcess() async throws {
     let session = fakeEngineSession()

@@ -1963,6 +1963,7 @@ struct GenerationStudioView: View {
     let inpaintingIsReady = !supportsVideoInpainting || !model.studioHasInpaintingInput
       || (model.studioVideoInpainting != nil && !model.studioReferenceImages.isEmpty)
     return !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && model.hasSelectedInstalledModel(for: kind)
       && inpaintingIsReady
   }
 
@@ -2315,7 +2316,7 @@ private struct ModelDropdown: View {
   var onFrameChange: (CGRect) -> Void
 
   private var selected: ModelChoice? {
-    choices.first { $0.id == selectedID } ?? choices.first
+    choices.first { $0.id == selectedID }
   }
 
   var body: some View {

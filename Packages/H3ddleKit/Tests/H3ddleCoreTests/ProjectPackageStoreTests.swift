@@ -56,6 +56,33 @@ struct ProjectPackageStoreTests {
     #expect(again.project.id == opened.project.id)
   }
 
+  @Test("A missing source cannot become a phantom project media entry")
+  func missingSourceIsRejected() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("H3ddleProjectStore-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ProjectPackageStore(rootURL: root)
+    let created = try store.create(name: "No phantom media")
+    var project = created.project
+    let missing = FileManager.default.temporaryDirectory
+      .appendingPathComponent("missing-\(UUID().uuidString).mp4")
+    project.addAsset(
+      AssetReference(kind: .video, displayName: "Missing", url: missing, duration: 1)
+    )
+
+    #expect(throws: ProjectPackageStoreError.missingMedia(missing.standardizedFileURL)) {
+      _ = try store.save(project, session: created.session)
+    }
+    let reloaded = try store.load(id: project.id)
+    #expect(reloaded.project.assets.isEmpty)
+    #expect(
+      (try FileManager.default.contentsOfDirectory(
+        at: store.mediaDirectory(for: project.id),
+        includingPropertiesForKeys: nil
+      )).isEmpty
+    )
+  }
+
   @Test("Relative media still resolves after the package directory is moved")
   func relativeMediaSurvivesMove() throws {
     let root = FileManager.default.temporaryDirectory

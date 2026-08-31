@@ -36,6 +36,17 @@ private struct ProjectIndex: Codable, Sendable {
   var recents: [ProjectIndexEntry]
 }
 
+public enum ProjectPackageStoreError: LocalizedError, Equatable, Sendable {
+  case missingMedia(URL)
+
+  public var errorDescription: String? {
+    switch self {
+    case .missingMedia(let url):
+      "The media file does not exist: \(url.lastPathComponent)"
+    }
+  }
+}
+
 /// App-managed project packages: `Projects/{id}/project.json` + `Media/`.
 public struct ProjectPackageStore: Sendable {
   public static let documentName = "project.json"
@@ -165,12 +176,13 @@ public struct ProjectPackageStore: Sendable {
       let destination = mediaFileURL(for: asset, in: mediaRoot)
       let source = asset.url.standardizedFileURL
       if source != destination.standardizedFileURL {
-        if FileManager.default.fileExists(atPath: source.path) {
-          if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-          }
-          try FileManager.default.copyItem(at: source, to: destination)
+        guard FileManager.default.fileExists(atPath: source.path) else {
+          throw ProjectPackageStoreError.missingMedia(source)
         }
+        if FileManager.default.fileExists(atPath: destination.path) {
+          try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: source, to: destination)
       }
       adopted.url = destination
       next.append(adopted)
