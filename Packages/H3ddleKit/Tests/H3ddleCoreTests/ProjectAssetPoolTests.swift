@@ -80,6 +80,30 @@ struct ProjectAssetPoolTests {
     #expect(project.assets.map(\.id) == [first.id, second.id, audio.id])
   }
 
+  @Test("Generation inputs persist without appearing in Media bins")
+  func generationInputsStayHidden() {
+    var project = H3ddleProject()
+    let visible = AssetReference(
+      kind: .image,
+      displayName: "Visible",
+      url: URL(fileURLWithPath: "/tmp/visible.png"),
+      duration: 3
+    )
+    let dependency = AssetReference(
+      kind: .image,
+      displayName: "Reference",
+      url: URL(fileURLWithPath: "/tmp/reference.png"),
+      duration: 3,
+      metadata: [AssetMetadataKey.generationInput: .bool(true)]
+    )
+
+    project.addAsset(visible)
+    project.addAsset(dependency)
+
+    #expect(project.libraryAssets(kind: .image).map(\.id) == [visible.id])
+    #expect(project.asset(id: dependency.id) == dependency)
+  }
+
   @Test("Registering twice does not duplicate")
   func addAssetIsIdempotent() {
     var project = H3ddleProject()
