@@ -145,6 +145,7 @@ public struct GenerationRecipe: Hashable, Codable, Sendable {
     }
 
     self.init(
+      id: job.id,
       createdAt: job.finishedAt ?? job.createdAt,
       parentAssetID: parentAssetID,
       modelID: job.modelID,
@@ -159,7 +160,10 @@ public struct GenerationRecipe: Hashable, Codable, Sendable {
     )
   }
 
-  public func resolvedRequest(projectAssets: [AssetReference]) throws -> GenerationRequest {
+  public func resolvedRequest(
+    projectAssets: [AssetReference],
+    fallbackRequest: GenerationRequest? = nil
+  ) throws -> GenerationRequest {
     var resolved = request
     resolved.recovery = nil
 
@@ -177,13 +181,20 @@ public struct GenerationRecipe: Hashable, Codable, Sendable {
         }
         return url
       }
-      guard let assetID = input.assetID,
+      if let assetID = input.assetID,
         let asset = projectAssets.first(where: { $0.id == assetID }),
         FileManager.default.fileExists(atPath: asset.url.path)
-      else {
-        throw GenerationRecipeError.missingInput(input.fileName)
+      {
+        return asset.url
       }
-      return asset.url
+      if let fallbackRequest,
+        let fallback = Self.inputURL(for: input, in: fallbackRequest),
+        fallback.lastPathComponent == input.fileName,
+        FileManager.default.fileExists(atPath: fallback.path)
+      {
+        return fallback
+      }
+      throw GenerationRecipeError.missingInput(input.fileName)
     }
 
     resolved.firstFrameURL = try resolve(request.firstFrameURL)
@@ -205,6 +216,24 @@ public struct GenerationRecipe: Hashable, Codable, Sendable {
       resolved.speech = speech
     }
     return resolved
+  }
+
+  /// Reconnects a path-free recipe to project-owned input assets after an
+  /// older queue job supplied the concrete URLs needed for migration.
+  public func rebindingInputs(
+    to resolvedRequest: GenerationRequest,
+    projectAssets: [AssetReference]
+  ) -> GenerationRecipe {
+    var rebound = self
+    for index in rebound.inputs.indices {
+      guard let url = Self.inputURL(for: rebound.inputs[index], in: resolvedRequest),
+        let asset = projectAssets.first(where: {
+          $0.url.standardizedFileURL == url.standardizedFileURL
+        })
+      else { continue }
+      rebound.inputs[index].assetID = asset.id
+    }
+    return rebound
   }
 
   public func attaching(to asset: AssetReference) throws -> AssetReference {
@@ -237,6 +266,29 @@ public struct GenerationRecipe: Hashable, Codable, Sendable {
 
   private static func portableURL(for id: UUID) -> URL {
     URL(string: "\(inputScheme)://\(id.uuidString.lowercased())")!
+  }
+
+  private static func inputURL(
+    for input: GenerationRecipeInput,
+    in request: GenerationRequest
+  ) -> URL? {
+    switch input.role {
+    case .firstFrame:
+      request.firstFrameURL
+    case .lastFrame:
+      request.lastFrameURL
+    case .referenceImage:
+      request.referenceImageURLs.indices.contains(input.index)
+        ? request.referenceImageURLs[input.index] : nil
+    case .inpaintingSource:
+      request.videoInpainting?.sourceVideoURL
+    case .inpaintingMask:
+      request.videoInpainting?.maskURL
+    case .speechReference:
+      request.speech?.referenceAudioURL
+    case .voiceEmbedding:
+      request.speech?.voiceEmbeddingURL
+    }
   }
 }
 

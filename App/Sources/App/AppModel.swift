@@ -1023,6 +1023,13 @@ final class AppModel {
       referenceImageURLs: acceptsImageInputs ? studioReferenceImages.map(\.url) : [],
       allowsLTXMemoryOvercommit: allowsLTXMemoryOvercommit
     )
+    do {
+      request = try preservingGenerationInputs(in: request)
+    } catch {
+      errorMessage = "A generation input could not be saved in the project: "
+        + error.localizedDescription
+      return nil
+    }
     // The audio models, Z-Image and LTX all load their own packages; the H3
     // directory would be the wrong tree entirely.
     let nativeModelDirectory =
@@ -1086,6 +1093,89 @@ final class AppModel {
     persistGenerationQueue()
     if scheduled { advanceGenerationQueue() }
     return jobID
+  }
+
+  /// Makes picker-only inputs durable before the queue outlives the current
+  /// studio session. Dependency assets remain in the project but are hidden
+  /// from Media; recipes can therefore use stable asset IDs without storing
+  /// an absolute source path.
+  private func preservingGenerationInputs(
+    in request: GenerationRequest
+  ) throws -> GenerationRequest {
+    var preserved = request
+    var additions: [AssetReference] = []
+    var copiedURLs: [URL] = []
+    var replacements: [URL: URL] = [:]
+    let directory = projectStore.mediaDirectory(for: project.id)
+
+    func preserve(_ original: URL, kindHint: MediaKind) throws -> URL {
+      let source = original.standardizedFileURL
+      if let replacement = replacements[source] { return replacement }
+      if let asset = project.assets.first(where: {
+        $0.url.standardizedFileURL == source
+          && FileManager.default.fileExists(atPath: $0.url.path)
+      }) {
+        replacements[source] = asset.url
+        return asset.url
+      }
+
+      let accessed = source.startAccessingSecurityScopedResource()
+      defer {
+        if accessed { source.stopAccessingSecurityScopedResource() }
+      }
+      let stored = try MediaImport.copy(source, into: directory)
+      let kind = MediaImport.kind(for: source) ?? kindHint
+      let dependency = AssetReference(
+        kind: kind,
+        displayName: source.deletingPathExtension().lastPathComponent,
+        url: stored,
+        duration: kind == .image ? MediaImport.stillDuration : 0,
+        metadata: [AssetMetadataKey.generationInput: .bool(true)]
+      )
+      additions.append(dependency)
+      copiedURLs.append(stored)
+      replacements[source] = stored
+      return stored
+    }
+
+    do {
+      preserved.firstFrameURL = try request.firstFrameURL.map {
+        try preserve($0, kindHint: .image)
+      }
+      preserved.lastFrameURL = try request.lastFrameURL.map {
+        try preserve($0, kindHint: .image)
+      }
+      preserved.referenceImageURLs = try request.referenceImageURLs.map {
+        try preserve($0, kindHint: .image)
+      }
+      if var inpainting = request.videoInpainting {
+        inpainting.sourceVideoURL = try preserve(
+          inpainting.sourceVideoURL,
+          kindHint: .video
+        )
+        inpainting.maskURL = try preserve(inpainting.maskURL, kindHint: .image)
+        preserved.videoInpainting = inpainting
+      }
+      if var speech = request.speech {
+        speech.referenceAudioURL = try speech.referenceAudioURL.map {
+          try preserve($0, kindHint: .audio)
+        }
+        speech.voiceEmbeddingURL = try speech.voiceEmbeddingURL.map {
+          try preserve($0, kindHint: .audio)
+        }
+        preserved.speech = speech
+      }
+    } catch {
+      for url in copiedURLs {
+        try? FileManager.default.removeItem(at: url)
+      }
+      throw error
+    }
+
+    guard !additions.isEmpty else { return preserved }
+    for asset in additions { project.addAsset(asset) }
+    scheduleProjectSave()
+    return preserved
   }
 
   private func advanceGenerationQueue() {
@@ -2535,11 +2625,29 @@ final class AppModel {
       return
     }
     do {
-      guard let recipe = try GenerationRecipe.recipe(from: asset) else {
+      guard var recipe = try GenerationRecipe.recipe(from: asset) else {
         regenerationErrorMessage = "This asset does not contain generation parameters."
         return
       }
-      let request = try recipe.resolvedRequest(projectAssets: project.assets)
+      let sourceJob = generationQueue.jobs.first {
+        $0.id == recipe.id || $0.result?.id == asset.id
+      }
+      let recoveredRequest = try recipe.resolvedRequest(
+        projectAssets: project.assets,
+        fallbackRequest: sourceJob?.request
+      )
+      let request = try preservingGenerationInputs(in: recoveredRequest)
+      let rebound = recipe.rebindingInputs(
+        to: request,
+        projectAssets: project.assets
+      )
+      if rebound != recipe,
+        let assetIndex = project.assets.firstIndex(where: { $0.id == asset.id })
+      {
+        project.assets[assetIndex] = try rebound.attaching(to: project.assets[assetIndex])
+        recipe = rebound
+        scheduleProjectSave()
+      }
       let target = GenerationReplacementTarget(
         projectID: project.id,
         clipID: clipID,

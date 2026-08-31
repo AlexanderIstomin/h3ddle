@@ -87,7 +87,9 @@ settings. The project copy is authoritative; H3ddle also embeds the same
 sanitized JSON in PNG, WAV, and MP4/MOV output so a copied file can recover its
 parameters when it is imported into another project. Absolute model, media,
 checkpoint, and temporary paths are never embedded. Reference inputs are
-recorded by project asset identity and must still be present to regenerate.
+copied into the project as hidden dependencies and recorded by project asset
+identity, so they remain available without cluttering the Media bins. They
+must still be present in the project package to regenerate.
 
 Right-click a generated visual clip and choose **Regenerate…**. Generation
 Studio restores its recipe, selects an installed non-FastH3 model when one is

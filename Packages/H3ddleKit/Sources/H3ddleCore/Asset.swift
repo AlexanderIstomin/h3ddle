@@ -32,6 +32,11 @@ public enum AssetMetadataKey {
   /// The value is deliberately untyped here so H3ddleCore stays independent
   /// from the generation module while project interchange can round-trip it.
   public static let generationRecipe = "h3ddleGeneration"
+
+  /// Project-owned media retained only because a generation recipe depends on
+  /// it. These assets participate in persistence and recipe resolution but do
+  /// not clutter the user's visible Media bins.
+  public static let generationInput = "h3ddleGenerationInput"
 }
 
 public struct AssetReference: Identifiable, Hashable, Codable, Sendable {

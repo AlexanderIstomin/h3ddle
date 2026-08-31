@@ -43,7 +43,9 @@ public struct H3ddleProject: Identifiable, Hashable, Codable, Sendable {
   /// Library bins list newest registrations first. `assets` stays append order
   /// so interchange and timeline references are unchanged.
   public func libraryAssets(kind: MediaKind) -> [AssetReference] {
-    Array(assets.reversed().filter { $0.kind == kind })
+    Array(assets.reversed().filter {
+      $0.kind == kind && $0.metadata[AssetMetadataKey.generationInput]?.bool != true
+    })
   }
 
   public mutating func addAsset(_ asset: AssetReference) {

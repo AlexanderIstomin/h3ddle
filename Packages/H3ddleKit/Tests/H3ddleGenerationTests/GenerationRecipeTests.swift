@@ -58,6 +58,7 @@ struct GenerationRecipeTests {
     #expect(text.contains("private-reference.png"))
     #expect(recipe.parentAssetID == target.expectedAssetID)
     #expect(recipe.modelID == "fast-h3-vsa")
+    #expect(recipe.id == job.id)
     #expect(recipe.displayPrompt == "A woman walking through rain")
     #expect(recipe.soundscape == "rain")
     #expect(recipe.music == "none")
@@ -107,5 +108,51 @@ struct GenerationRecipeTests {
     #expect(throws: GenerationRecipeError.missingInput("reference.png")) {
       try recipe.resolvedRequest(projectAssets: [])
     }
+  }
+
+  @Test("An older recipe can recover and bind an input from its queue job")
+  func queueFallbackRepairsMissingAssetIdentity() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("H3ddleRecipeFallback-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = root.appendingPathComponent("reference.jpg")
+    try Data([1, 2, 3]).write(to: original)
+    let sourceJob = GenerationQueueJob(
+      request: GenerationRequest(
+        kind: .video,
+        prompt: "reference",
+        duration: 5,
+        referenceImageURLs: [original]
+      ),
+      displayPrompt: "reference",
+      settingsDescription: "video",
+      studioSettings: .makeDefault(seed: 9),
+      aspectRatio: "16:9"
+    )
+    let recipe = GenerationRecipe(job: sourceJob, projectAssets: [])
+
+    let recovered = try recipe.resolvedRequest(
+      projectAssets: [],
+      fallbackRequest: sourceJob.request
+    )
+    #expect(recovered.referenceImageURLs == [original])
+
+    let dependency = AssetReference(
+      kind: .image,
+      displayName: "Reference",
+      url: original,
+      duration: 3,
+      metadata: [AssetMetadataKey.generationInput: .bool(true)]
+    )
+    let repaired = recipe.rebindingInputs(
+      to: recovered,
+      projectAssets: [dependency]
+    )
+    #expect(repaired.inputs.first?.assetID == dependency.id)
+    #expect(
+      try repaired.resolvedRequest(projectAssets: [dependency]).referenceImageURLs
+        == [original]
+    )
   }
 }
