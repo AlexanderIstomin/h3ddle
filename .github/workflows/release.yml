@@ -81,18 +81,16 @@ jobs:
           "corrupted" warning is not expected—please report it instead of
           disabling Gatekeeper.
 
-          This hotfix prevents an unavailable generation model from silently
-          falling back to a three-second fake result. Generate is now disabled
-          until an installed model is explicitly selected, and the shipped app
-          fails closed if its production provider cannot be configured.
+          YuE2-3B is now available in the downloadable Audio model catalog.
+          Generate music with optional lyrics and 8, 16 or 32 synthesis steps,
+          using the native C/Metal engine with no Python installation required.
+          The model download is about 7.8 GB and uses CC BY-NC 4.0 (non-commercial).
 
-          Engine, queue, and project persistence paths now verify that a
-          completed generation produced a real, non-empty output file. Missing
-          output is reported as a failed job instead of creating a phantom
-          `Media/*.mp4` project entry that AVFoundation cannot open.
-
-          FastH3 VSA remains available as a managed H3 video model with the
-          notification and VideoToolbox compatibility fixes from v0.7.9.
+          YuE2 shows estimated remaining time from the start and updates it from
+          measured synthesis speed. Progress covers planning, token generation,
+          synthesis and decoding, with completion only after the audio is saved.
+          Native prefix caching improves inference speed, and cancellation and
+          helper shutdown no longer leave the app waiting on a finished process.
 
           **Requirements:** Apple silicon and macOS 15 or later. FFmpeg is an
           optional fallback for containers the system frameworks cannot read.

@@ -179,12 +179,18 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
         )
       }
 
-      leftover.append(data)
-      while let newline = leftover.firstIndex(of: 0x0A) {
-        let line = leftover[..<newline]
+      lock.withLock { leftover.append(data) }
+      // Shutdown can clear the response buffer while this reader is active.
+      // Extract each complete line under the same lock, then invoke callbacks
+      // outside it so cancellation can still enter the session.
+      while let line = lock.withLock({ () -> Data? in
+        guard let newline = leftover.firstIndex(of: 0x0A) else { return nil }
+        let line = Data(leftover[..<newline])
         leftover.removeSubrange(...newline)
+        return line
+      }) {
         guard
-          let event = try? EngineLineCodec.decode(EngineEvent.self, from: Data(line)),
+          let event = try? EngineLineCodec.decode(EngineEvent.self, from: line),
           event.requestID == command.requestID
         else {
           continue
@@ -258,7 +264,7 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
     }
     guard let process, process.isRunning else { return }
     kill(process.processIdentifier, SIGKILL)
-    process.waitUntilExit()
+    waitForTermination(of: process)
   }
 
   private func escalateIfNeeded(jobID: UUID) {
@@ -345,14 +351,25 @@ public final class EngineSession: EngineInspecting, @unchecked Sendable {
     }
     guard wait else { return }
     if process.isRunning, !escalateToKill {
-      let deadline = Date().addingTimeInterval(1)
-      while process.isRunning, Date() < deadline {
+      let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+      while process.isRunning, ContinuousClock.now < deadline {
         Thread.sleep(forTimeInterval: 0.02)
       }
       if process.isRunning {
         kill(process.processIdentifier, SIGKILL)
       }
     }
-    process.waitUntilExit()
+    waitForTermination(of: process)
+  }
+
+  private func waitForTermination(of process: Process) {
+    // Foundation's waitUntilExit can remain in its run loop after a helper has
+    // exited when cancellation runs on a cooperative Swift thread. Both call
+    // sites have already sent SIGKILL if needed. Bound the observation period;
+    // Foundation remains responsible for reaping the process.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    while process.isRunning, ContinuousClock.now < deadline {
+      Thread.sleep(forTimeInterval: 0.02)
+    }
   }
 }

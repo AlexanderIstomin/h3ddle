@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import H3ddleEngineProtocol
 import H3ddleGeneration
@@ -7,6 +8,59 @@ import Testing
 
 @Suite("Engine process client")
 struct EngineClientTests {
+  @Test("YuE2 provider sends music options and the selected synthesis budget")
+  func yue2RequestCrossesTheProtocol() async throws {
+    let session = fakeEngineSession(arguments: ["--echo-generate"])
+    defer { session.shutdown() }
+    let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: output) }
+    let provider = EngineGenerationProvider(
+      session: session, modelDirectory: output, outputDirectory: output)
+    for steps in YuE2SynthesisSteps.allCases {
+      let request = GenerationRequest(
+        kind: .audio, audioEngine: .yue2, music: EngineMusicOptions(lyrics: "[Verse]\nHello sea"),
+        prompt: "Folk", duration: 10, denoisingSteps: steps.rawValue)
+      var echoed: EngineGenerationRequest?
+      var completed = false
+      for try await event in provider.events(for: request) {
+        if case .progress(let phase, _) = event, phase.hasPrefix("{") {
+          echoed = try JSONDecoder().decode(EngineGenerationRequest.self, from: Data(phase.utf8))
+        }
+        if case .completed = event { completed = true }
+      }
+      #expect(completed)
+      #expect(echoed?.kind == .music)
+      #expect(echoed?.music == request.music)
+      #expect(echoed?.denoisingSteps == steps.rawValue)
+    }
+  }
+
+  @Test("Optional native YuE2 Metal engine writes music through the production Swift provider",
+        .enabled(if: ProcessInfo.processInfo.environment["H3DDLE_YUE2_SMOKE_PACKAGE"] != nil))
+  func yue2RealWorkerSmoke() async throws {
+    let package = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["H3DDLE_YUE2_SMOKE_PACKAGE"]))
+    var repository = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 { repository.deleteLastPathComponent() }
+    let executable = repository.appendingPathComponent("DerivedData/Build/Products/Debug/H3ddle.app/Contents/Helpers/H3ddleEngineService")
+    let session = EngineSession(executableURL: executable)
+    defer { session.shutdown() }
+    #expect(try await session.capabilities().supports(.musicGeneration))
+    let output = FileManager.default.temporaryDirectory.appendingPathComponent("YuE2SwiftSmoke-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: output) }
+    let provider = EngineGenerationProvider(session: session, modelDirectory: package, outputDirectory: output)
+    var completed = false
+    for try await event in provider.events(for: GenerationRequest(
+      kind: .audio, audioEngine: .yue2, music: EngineMusicOptions(lyrics: "[Verse]\nMorning light across the bay"),
+      prompt: "Gentle acoustic folk, warm singing voice, guitar", duration: 1,
+      denoisingSteps: 8, seed: 831001)) {
+      if case .completed(let asset) = event {
+        #expect(asset.kind == .audio)
+        completed = true
+      }
+    }
+    #expect(completed)
+  }
+
   @Test("Recovery manifests survive a fresh store and explicit discard removes them")
   func recoveryManifestRoundTrip() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -276,6 +330,15 @@ struct EngineClientTests {
     generation.cancel()
     await generation.value
     #expect(session.processIdentifier == first)
+    let shutdownStart = ContinuousClock.now
+    let helperPID = try #require(first)
+    session.shutdown()
+    #expect(shutdownStart.duration(to: .now) < .seconds(3))
+    #expect(session.processIdentifier == nil)
+    let signalResult = kill(helperPID, 0)
+    let signalError = errno
+    #expect(signalResult == -1)
+    #expect(signalError == ESRCH)
   }
 
   @Test("Inspection fails immediately while a generation is running")

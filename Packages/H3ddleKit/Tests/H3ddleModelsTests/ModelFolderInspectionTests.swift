@@ -5,6 +5,23 @@ import Testing
 
 @Suite("Model folder inspection")
 struct ModelFolderInspectionTests {
+  @Test("YuE2 joins Audio from weights without any Python runtime")
+  func yue2Package() throws {
+    let directory = try folder()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for name in ModelFolderInspection.yue2Names {
+      let url = directory.appendingPathComponent(name)
+      try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try Data().write(to: url)
+    }
+    #expect(ModelFolderInspection.holdsYuE2(at: directory))
+    #expect(ModelFolderInspection.matches(.audio, at: directory))
+    #expect(!ModelFolderInspection.matches(.video, at: directory))
+    #expect(!ModelFolderInspection.matches(.image, at: directory))
+    try FileManager.default.removeItem(at: directory.appendingPathComponent("model/qwen.tiktoken"))
+    #expect(!ModelFolderInspection.holdsYuE2(at: directory))
+  }
+
   /// Writes a file shaped like safetensors: an 8-byte little-endian header
   /// length, then that many bytes of JSON.
   private func writeSafetensors(

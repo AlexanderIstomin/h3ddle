@@ -26,6 +26,7 @@ public enum GenerationKind: String, CaseIterable, Codable, Identifiable, Sendabl
 public enum AudioGenerationEngine: String, Codable, Sendable {
   case h3
   case stableAudio
+  case yue2
   case speech
 
   /// Whether this engine loads a package of its own rather than the H3 tree.
@@ -127,6 +128,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
   /// Required when `audioEngine` is `.speech`, ignored otherwise: the line to
   /// speak travels in `prompt`, and everything else about the voice here.
   public var speech: EngineSpeechOptions?
+  public var music: EngineMusicOptions?
   public var prompt: String
   public var duration: TimeInterval
   public var quality: EngineGenerationQuality
@@ -179,6 +181,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     videoEngine: VideoGenerationEngine = .h3,
     videoInpainting: EngineVideoInpaintingOptions? = nil,
     speech: EngineSpeechOptions? = nil,
+    music: EngineMusicOptions? = nil,
     prompt: String,
     duration: TimeInterval,
     quality: EngineGenerationQuality = .preview,
@@ -206,6 +209,7 @@ public struct GenerationRequest: Hashable, Codable, Sendable {
     self.videoEngine = videoEngine
     self.videoInpainting = videoInpainting
     self.speech = speech
+    self.music = music
     self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     self.duration = max(0, duration)
     self.quality = quality

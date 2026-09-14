@@ -2,6 +2,57 @@ import XCTest
 
 final class H3ddleUITests: XCTestCase {
 
+  @MainActor
+  func testYuE2StepsSurviveQueuedJobEditing() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleUITestYuE2"]
+    app.launch()
+    let steps = app.descendants(matching: .any)["generation-yue2-steps"].firstMatch
+    XCTAssertTrue(steps.waitForExistence(timeout: 30))
+    let balanced = steps.radioButtons["16"]
+    XCTAssertTrue(balanced.exists)
+    balanced.click()
+    XCTAssertEqual((balanced.value as? NSNumber)?.intValue, 1)
+    // SwiftUI propagates the studio card's identifier to its footer buttons.
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add to Queue")).firstMatch.click()
+    let edit = app.buttons["Edit"].firstMatch
+    XCTAssertTrue(edit.waitForExistence(timeout: 8))
+    edit.click()
+    XCTAssertTrue(steps.waitForExistence(timeout: 8))
+    XCTAssertEqual((balanced.value as? NSNumber)?.intValue, 1)
+    XCTAssertTrue(app.textViews["generation-yue2-lyrics"].value as? String == "[Verse]\nMorning light across the bay")
+    XCTAssertFalse(app.buttons["generation-yue2-reset"].exists)
+    steps.radioButtons["32"].click()
+    XCTAssertEqual((steps.radioButtons["32"].value as? NSNumber)?.intValue, 1)
+    steps.radioButtons["8"].click()
+    XCTAssertEqual((steps.radioButtons["8"].value as? NSNumber)?.intValue, 1)
+  }
+
+  @MainActor
+  func testYuE2CanQueueInstrumentalMusic() {
+    let app = XCUIApplication()
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-H3ddleUITestYuE2"]
+    app.launch()
+    let lyrics = app.textViews["generation-yue2-lyrics"]
+    XCTAssertTrue(lyrics.waitForExistence(timeout: 30))
+    let length = app.sliders["Maximum music length"]
+    XCTAssertTrue(length.exists)
+    length.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    XCTAssertGreaterThan((length.value as? NSNumber)?.doubleValue ?? 0, 30)
+    lyrics.click()
+    lyrics.typeKey("a", modifierFlags: .command)
+    lyrics.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+    let queue = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add to Queue")).firstMatch
+    XCTAssertTrue(queue.isEnabled)
+    queue.click()
+    let edit = app.buttons["Edit"].firstMatch
+    XCTAssertTrue(edit.waitForExistence(timeout: 8))
+    edit.click()
+    XCTAssertTrue(lyrics.waitForExistence(timeout: 8))
+    XCTAssertEqual(lyrics.value as? String, "")
+    XCTAssertGreaterThan((length.value as? NSNumber)?.doubleValue ?? 0, 30)
+  }
+
   /// Clicks a lane-wide control near its left edge. These span the entire
   /// timeline, so the centre XCUITest would otherwise aim at lies outside the
   /// visible scroll area.

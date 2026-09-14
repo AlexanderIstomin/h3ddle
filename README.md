@@ -15,6 +15,53 @@ into Application Support.
 from GitHub Releases. The newest development build is listed first; see its
 release notes for macOS first-launch instructions.
 
+## Supported models
+
+These models are available in the app's downloadable catalog. Links point to
+upstream model pages; H3ddle installs pinned packages adapted for its native
+Metal engine. Model licenses apply separately from the app's license.
+
+### Video
+
+| Model | Description | Official page |
+|---|---|---|
+| MiniMax H3 · INT8 + Hybrid References | Video with synchronized audio from text, start/end frames, or reference images. | [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) |
+| MiniMax H3 · Turbo + Hybrid References | Eight-pass H3 variant for faster video generation with reference support. | [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) |
+| FastH3 · VSA | Four-pass text-to-video with synchronized audio and learned sparse attention. No image references or still generation. | [MiniMax H3 base model](https://huggingface.co/MiniMaxAI/MiniMax-H3) |
+| LTX-2.5 · Distilled | Video with synchronized audio from a prompt or image. | [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) |
+
+Turbo and FastH3 are adapted H3 variants; their upstream link identifies the
+base model. The catalog records the exact checkpoint used by each variant.
+
+### Images
+
+| Model | Description | Official page |
+|---|---|---|
+| Z-Image · Turbo | Still-image generation from text or a source image. | [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) |
+| MiniMax H3 · INT8 / Turbo + Hybrid References | Still generation using the same H3 packages as video, with prompt and reference-image controls. | [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) |
+
+### Music
+
+| Model | Description | Official page |
+|---|---|---|
+| Stable Audio 3 Small · Music | Instrumental music and ambient beds from text, at 44.1 kHz stereo. | [Stable Audio 3 Small Music](https://huggingface.co/stabilityai/stable-audio-3-small-music) |
+| YuE2-3B · Music | Music with optional lyrics, 48 kHz stereo, and 8/16/32 synthesis steps. Runs natively without Python; weights use CC BY-NC 4.0. | [YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) |
+
+### Sound effects
+
+| Model | Description | Official page |
+|---|---|---|
+| Stable Audio 3 Small · Sound Effects | Sound effects, Foley, and environmental ambience from text. | [Stable Audio 3 Small SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) |
+
+### Speech
+
+| Model | Description | Official page |
+|---|---|---|
+| Qwen3-TTS 12Hz 0.6B Base · Speech | Speech generation with a voice cloned from a short reference recording. | [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base) |
+
+AuK is currently a development experiment, with no app backend or downloadable
+catalog entry. See the [feasibility notes](docs/experiments/2026-09-13-auk-mac.md).
+
 ## Current state
 
 Generation, on the local Metal engine:
@@ -23,6 +70,7 @@ Generation, on the local Metal engine:
   keyframe, reference-image, and reference-audio workflows;
 - Z-Image-Turbo stills from a prompt or source image, plus H3 still generation;
 - Stable Audio 3 music, sound effects, and ambience;
+- [YuE2 music with optional lyrics and 8/16/32 synthesis steps](docs/yue2.md);
 - Qwen3-TTS speech in a voice cloned from a short reference recording;
 - model-specific aspect ratios, resolutions, durations, and sampling controls;
 - managed model packages pinned by revision and SHA-256, downloaded only when

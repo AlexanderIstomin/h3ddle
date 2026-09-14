@@ -278,7 +278,7 @@ struct GenerationStudioView: View {
 
   private var promptPane: some View {
     VStack(alignment: .leading, spacing: 18) {
-      Text("PROMPT")
+      Text(isYuE2 ? "STYLE" : "PROMPT")
         .font(.system(size: 9, weight: .bold, design: .monospaced))
         .tracking(1.6)
         .foregroundStyle(H3Color.textSecondary.opacity(0.75))
@@ -335,6 +335,23 @@ struct GenerationStudioView: View {
               .font(.system(size: 10))
               .foregroundStyle(H3Color.textSecondary)
               .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if isYuE2 {
+            labeled("LYRICS (OPTIONAL)") {
+              TextEditor(text: $model.studioYuE2Lyrics)
+                .font(.system(size: 12))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 100)
+                .background(H3Color.chrome)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Lyrics")
+                .accessibilityIdentifier("generation-yue2-lyrics")
+              Text("Leave blank for instrumental music and describe the instruments in your prompt. For vocals, add lyrics with [Verse] and [Chorus] sections.")
+                .font(.system(size: 10))
+                .foregroundStyle(H3Color.textSecondary)
+            }
           }
 
           if kind == .audio, model.audioMode == .speech {
@@ -976,7 +993,11 @@ struct GenerationStudioView: View {
           if hasModelSettings, kind == .audio,
             model.audioMode == .music || model.audioMode == .soundEffects
           {
-            soundEffectControls
+            if isYuE2 {
+              yue2Controls
+            } else {
+              soundEffectControls
+            }
           }
 
           if hasModelSettings, kind == .audio, model.audioMode == .speech {
@@ -1083,7 +1104,7 @@ struct GenerationStudioView: View {
   private var durationSection: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
-        Text(kind == .image ? "DISPLAY DURATION" : "DURATION")
+        Text(isYuE2 ? "MAXIMUM LENGTH" : (kind == .image ? "DISPLAY DURATION" : "DURATION"))
           .font(.system(size: 9, weight: .bold, design: .monospaced))
           .tracking(1.6)
           .foregroundStyle(H3Color.textSecondary.opacity(0.75))
@@ -1124,6 +1145,7 @@ struct GenerationStudioView: View {
           in: minimumDuration...maximumDuration
         )
         .tint(H3Color.accent)
+        .accessibilityLabel(isYuE2 ? "Maximum music length" : "Duration")
       }
       if kind == .video, model.videoEngine == .h3, alignedSeconds > 3 {
         Text("Long H3 clips increase transformer work sharply. Start short on M1-class Macs.")
@@ -1406,9 +1428,26 @@ struct GenerationStudioView: View {
     .accessibilityIdentifier("image-passes")
   }
 
-  /// The one knob this model has. It is distilled to eight passes, so this
-  /// is for finding out what that trade actually costs rather than a
-  /// quality ladder to climb.
+  private var isYuE2: Bool { kind == .audio && model.audioEngine == .yue2 }
+
+  private var yue2Controls: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      labeled("SYNTHESIS STEPS") {
+        Picker("Synthesis steps", selection: $model.studioYuE2Steps) {
+          ForEach(YuE2SynthesisSteps.allCases, id: \.rawValue) { steps in
+            Text("\(steps.rawValue)").tag(steps)
+          }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("generation-yue2-steps")
+        Text("8 is fastest · 16 balances speed · 32 is the reference")
+          .font(.system(size: 10))
+          .foregroundStyle(H3Color.textSecondary)
+      }
+      seedControls
+    }
+  }
+
   private var soundEffectControls: some View {
     labeled("PASSES") {
       HStack(spacing: 10) {
@@ -2016,6 +2055,7 @@ struct GenerationStudioView: View {
     return !model.generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && model.hasSelectedInstalledModel(for: kind)
       && inpaintingIsReady
+      && (!isYuE2 || (model.studioYuE2Lyrics.count <= 5000 && model.generationPrompt.count <= 4000))
   }
 
   private var submittedJobState: GenerationJobState? {
@@ -2117,7 +2157,7 @@ struct GenerationStudioView: View {
       // A ceiling rather than a length: speech stops when the line is spoken,
       // so this only decides how long a runaway is allowed to run.
       case .speech: .speechCeiling
-      case .music, .soundEffects: .stableAudio
+      case .music, .soundEffects: isYuE2 ? .yue2 : .stableAudio
       }
     }
   }
