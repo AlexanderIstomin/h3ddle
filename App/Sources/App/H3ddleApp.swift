@@ -1,4 +1,5 @@
 import AppKit
+import H3ddleCore
 import H3ddleGeneration
 import H3ddleModels
 import SwiftUI
@@ -24,6 +25,17 @@ struct H3ddleApp: App {
     )
 
     #if DEBUG
+      if arguments.contains("-H3ddleUITestYuE2") {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+          "H3ddleYuE2UITest-\(ProcessInfo.processInfo.processIdentifier)")
+        let defaults = UserDefaults(suiteName: "H3ddle.YuE2UITest.\(ProcessInfo.processInfo.processIdentifier)")!
+        let model = AppModel(
+          generationProvider: generationProvider,
+          generationQueueStore: testQueueStore,
+          projectStore: ProjectPackageStore(rootURL: root), userDefaults: defaults)
+        model.prepareYuE2StudioFixture()
+        return model
+      }
       if activeQueueFixture {
         let model = AppModel(
           generationProvider: generationProvider,

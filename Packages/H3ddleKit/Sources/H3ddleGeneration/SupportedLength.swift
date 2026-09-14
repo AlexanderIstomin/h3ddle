@@ -93,6 +93,10 @@ public struct SupportedLength: Equatable, Sendable {
   public static let stableAudio = SupportedLength(
     minimumSeconds: 1, maximumSeconds: 120, stepSeconds: 1)
 
+  /// YuE2’s reference semantic budget is 9000 frames at 25 Hz (six minutes).
+  public static let yue2 = SupportedLength(
+    minimumSeconds: 1, maximumSeconds: 360, stepSeconds: 1)
+
   /// Speech has no length to choose: the line decides, and the number is a
   /// ceiling on a runaway rather than a target.
   public static let speechCeiling = SupportedLength(

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum H3ddleEngineProtocol {
-  public static let currentVersion = 18
+  public static let currentVersion = 19
 }
 
 public enum EngineCommandKind: String, Codable, Sendable {
@@ -19,6 +19,8 @@ public enum EngineGenerationKind: String, Codable, Sendable {
   /// Stable Audio 3 rather than H3: sound effects and ambience, which
   /// H3's dialogue-trained audio branch will not produce.
   case soundEffect
+  /// YuE2 runs in its own versioned local worker.
+  case music
   /// Qwen3-TTS: a written line spoken in a voice cloned from a reference
   /// clip. H3's audio branch produces dialogue, but not chosen words in a
   /// chosen voice.
@@ -299,6 +301,7 @@ public enum EngineFeature: String, CaseIterable, Codable, Sendable {
   case ltxGeneration
   case standaloneAudioGeneration
   case soundEffectGeneration
+  case musicGeneration
   case speechGeneration
   case embeddedAudio
   case cancellation
@@ -587,6 +590,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public static let audioCanvasSize = 32
   /// Required by `.speech` and ignored by every other kind.
   public var speech: EngineSpeechOptions?
+  public var music: EngineMusicOptions?
   /// Which model renders a still, and its own settings. Absent keeps H3.
   public var image: EngineImageOptions?
   /// Which model renders a clip, and its own settings. Absent keeps H3.
@@ -607,6 +611,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
   public var requiresExclusiveModelMemory: Bool {
     (kind == .image && image?.model == .zImage)
       || (kind == .video && video?.model == .ltx)
+      || kind == .music
   }
 
   public init(
@@ -630,6 +635,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     lastFrameURL: URL? = nil,
     referenceImageURLs: [URL] = [],
     speech: EngineSpeechOptions? = nil,
+    music: EngineMusicOptions? = nil,
     image: EngineImageOptions? = nil,
     video: EngineVideoOptions? = nil,
     allowsLTXMemoryOvercommit: Bool = false,
@@ -657,6 +663,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     self.lastFrameURL = lastFrameURL
     self.referenceImageURLs = Array(referenceImageURLs.prefix(Self.referenceImageLimit))
     self.speech = speech
+    self.music = music
     self.image = image
     self.video = video
     self.allowsLTXMemoryOvercommit = allowsLTXMemoryOvercommit
@@ -686,6 +693,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     case lastFrameURL
     case referenceImageURLs
     case speech
+    case music
     case image
     case video
     case allowsLTXMemoryOvercommit
@@ -725,6 +733,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
     referenceImageURLs =
       try container.decodeIfPresent([URL].self, forKey: .referenceImageURLs) ?? []
     speech = try container.decodeIfPresent(EngineSpeechOptions.self, forKey: .speech)
+    music = try container.decodeIfPresent(EngineMusicOptions.self, forKey: .music)
     image = try container.decodeIfPresent(EngineImageOptions.self, forKey: .image)
     video = try container.decodeIfPresent(EngineVideoOptions.self, forKey: .video)
     allowsLTXMemoryOvercommit =
@@ -761,6 +770,7 @@ public struct EngineGenerationRequest: Hashable, Codable, Sendable {
       try container.encode(referenceImageURLs, forKey: .referenceImageURLs)
     }
     try container.encodeIfPresent(speech, forKey: .speech)
+    try container.encodeIfPresent(music, forKey: .music)
     try container.encodeIfPresent(image, forKey: .image)
     try container.encodeIfPresent(video, forKey: .video)
     if allowsLTXMemoryOvercommit {

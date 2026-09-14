@@ -830,6 +830,157 @@ public enum ModelCatalog {
     )
   }
 
+  public static let yue2Music = ModelPackageManifest(
+    id: "h3ddle-yue2-3b-v1",
+    displayName: "YuE2-3B · Music",
+    detail: "Native music generation with optional lyrics, 48 kHz stereo, and 8, 16 or 32 synthesis steps.",
+    repository: "m-a-p/YuE2-3B",
+    revision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+    licenseName: "CC BY-NC 4.0",
+    licenseURL: URL(string: "https://huggingface.co/m-a-p/YuE2-3B/blob/29b3558dd46954a0cd9021dc76d5c91864a0f1c7/LICENSE")!,
+    minimumUnifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
+    compatibility: .ready,
+    capability: .audio,
+    audioRole: .music,
+    files: [
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/LICENSE",
+        byteCount: 20309,
+        sha256: "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "LICENSE"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/THIRD_PARTY_NOTICES.md",
+        byteCount: 793,
+        sha256: "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "THIRD_PARTY_NOTICES.md"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/config.json",
+        byteCount: 959,
+        sha256: "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "config.json"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/licenses/SnakeBeta-NVIDIA-MIT.txt",
+        byteCount: 1076,
+        sha256: "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "licenses/SnakeBeta-NVIDIA-MIT.txt"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/licenses/stable-audio-tools-MIT.txt",
+        byteCount: 1069,
+        sha256: "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "licenses/stable-audio-tools-MIT.txt"
+      ),
+      ModelPackageFile(
+        role: .transformer,
+        path: "model/model.safetensors",
+        byteCount: 7261441640,
+        sha256: "1d55c42c1a9875c34f5d736e15078449992b044e807ce2a138e6cf289a1e59e9",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "model.safetensors"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/qwen.tiktoken",
+        byteCount: 2561218,
+        sha256: "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "qwen.tiktoken"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "model/weights_manifest.json",
+        byteCount: 179,
+        sha256: "2296f82c29dcb11aeefde07e216403a32fc86c8f6da2ec15a70102abfd936a93",
+        sourceRepository: "m-a-p/YuE2-3B",
+        sourceRevision: "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+        sourcePath: "weights_manifest.json"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/LICENSE",
+        byteCount: 20309,
+        sha256: "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "LICENSE"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/THIRD_PARTY_NOTICES.md",
+        byteCount: 793,
+        sha256: "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "THIRD_PARTY_NOTICES.md"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/config.json",
+        byteCount: 1378,
+        sha256: "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "config.json"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/licenses/SnakeBeta-NVIDIA-MIT.txt",
+        byteCount: 1076,
+        sha256: "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "licenses/SnakeBeta-NVIDIA-MIT.txt"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/licenses/stable-audio-tools-MIT.txt",
+        byteCount: 1069,
+        sha256: "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "licenses/stable-audio-tools-MIT.txt"
+      ),
+      ModelPackageFile(
+        role: .audioVAE,
+        path: "vae/model.safetensors",
+        byteCount: 530512720,
+        sha256: "807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "model.safetensors"
+      ),
+      ModelPackageFile(
+        role: .runtimeMetadata,
+        path: "vae/weights_manifest.json",
+        byteCount: 178,
+        sha256: "017d64a4d288217a43fcac3866a0e1d55f796fa891d4dfb6de0bd170ab750026",
+        sourceRepository: "m-a-p/YuE2-Vae",
+        sourceRevision: "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        sourcePath: "weights_manifest.json"
+      ),
+    ]
+  )
+
   public static let stableAudio3SmallMusic = ModelPackageManifest(
     id: "h3ddle-stable-audio-3-small-music-v1",
     displayName: "Stable Audio 3 Small · Music",

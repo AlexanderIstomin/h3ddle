@@ -6,6 +6,7 @@ import Foundation
 public enum GenerationProgressProfile: Equatable, Sendable {
   case standard
   case ltx
+  case yue2
   case singlePhase
 }
 
@@ -62,6 +63,10 @@ public struct GenerationProgressTracker: Equatable, Sendable {
     elapsed: TimeInterval
   ) {
     self.phase = phase
+    if profile == .yue2 {
+      recordMusic(phase: phase, fraction: phaseFraction, elapsed: elapsed)
+      return
+    }
     let reached: Double
     if profile == .ltx, phase == "video VAE" {
       if videoVAEStartedElapsed == nil {
@@ -96,6 +101,29 @@ public struct GenerationProgressTracker: Equatable, Sendable {
     overall = max(overall, reached)
   }
 
+  /// YuE2 plans a score, samples semantic tokens, then synthesizes audio.
+  /// These bands indicate completed work, not a prediction of wall-clock time.
+  private mutating func recordMusic(phase: String, fraction: Double, elapsed: TimeInterval) {
+    let fraction = fraction.isFinite ? min(1, max(0, fraction)) : 0
+    let band: (Double, Double)
+    switch phase {
+    case "Loading YuE2": band = (0, 0.02)
+    case "Preparing score context": band = (0.02, 0.04)
+    case "Planning melody and chords": band = (0.04, 0.12)
+    case "Preparing token context": band = (0.12, 0.14)
+    case "Generating music tokens": band = (0.14, 0.30)
+    case "Preparing audio context": band = (0.30, 0.35)
+    case "Synthesizing audio":
+      band = (0.35, 0.97)
+      if denoise == nil { preparationElapsed = elapsed }
+      denoise = fraction
+    case "Decoding audio": band = (0.97, 0.99)
+    case "Saving audio": band = (0.99, 0.99)
+    default: return
+    }
+    overall = max(overall, band.0 + (band.1 - band.0) * fraction)
+  }
+
   /// Seconds left. A pre-run end-to-end projection supplies the initial
   /// countdown; as soon as this run has enough phase progress, its measured
   /// pace takes over. During denoising, the pre-run estimate still supplies
@@ -105,6 +133,20 @@ public struct GenerationProgressTracker: Equatable, Sendable {
     elapsed: TimeInterval,
     projectedTotal: TimeInterval? = nil
   ) -> TimeInterval? {
+    if profile == .yue2 {
+      guard !isFinishing else { return nil }
+      let validTotal = projectedTotal.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+      // Keep an estimate available through planning and token generation. If
+      // those overrun the baseline, reserve the still-unstarted synthesis work.
+      let projected = validTotal.map {
+        max($0 - max(0, elapsed), $0 * (denoise == nil ? 0.35 : 0.02))
+      }
+      guard phase == "Synthesizing audio", let denoise,
+        let measured = GenerationRemaining.estimate(
+          elapsed: elapsed - preparationElapsed, progress: denoise)
+      else { return projected }
+      return measured + (validTotal ?? 0) * 0.02
+    }
     let projected = GenerationRemaining.projected(
       total: projectedTotal, elapsed: elapsed)
     if profile == .ltx, phase == "video VAE",
@@ -140,6 +182,7 @@ public struct GenerationProgressTracker: Equatable, Sendable {
 
   /// Whether the passes are done and only the decoder is left.
   public var isFinishing: Bool {
+    if profile == .yue2 { return phase == "Decoding audio" || phase == "Saving audio" }
     if profile == .ltx, phase == "video VAE", (videoVAE ?? 0) < 1 {
       return false
     }

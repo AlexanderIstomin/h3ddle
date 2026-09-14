@@ -23,6 +23,7 @@ Generation, on the local Metal engine:
   keyframe, reference-image, and reference-audio workflows;
 - Z-Image-Turbo stills from a prompt or source image, plus H3 still generation;
 - Stable Audio 3 music, sound effects, and ambience;
+- optional [YuE2 music with lyrics and 8/16/32 synthesis steps](docs/yue2.md);
 - Qwen3-TTS speech in a voice cloned from a short reference recording;
 - model-specific aspect ratios, resolutions, durations, and sampling controls;
 - managed model packages pinned by revision and SHA-256, downloaded only when
