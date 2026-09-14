@@ -520,6 +520,19 @@ public enum GenerationDurationEstimate {
     return max(3, 2 + duration * (0.15 + 0.35 * Double(denoisingSteps) / 8))
   }
 
+  /// Initial native YuE2 projection from the measured 120-second, eight-step
+  /// run: 112s loading/planning, 267s semantic tokens, 189s synthesis, 10s decode.
+  /// This is a starting estimate; measured synthesis pace replaces it in flight.
+  public static func yue2(
+    duration: TimeInterval,
+    denoisingSteps: Int
+  ) -> TimeInterval? {
+    guard duration.isFinite, (1...360).contains(duration),
+      [8, 16, 32].contains(denoisingSteps)
+    else { return nil }
+    return 112 + duration * (2.225 + 1.575 * Double(denoisingSteps) / 8 + 0.085)
+  }
+
   /// Speech is also faster than realtime. The line's expected spoken length,
   /// rather than its generous runaway ceiling, is the useful starting point.
   public static func speech(characterCount: Int) -> TimeInterval? {

@@ -117,7 +117,7 @@ private let engineCapabilities = EngineCapabilities(
       .videoInpainting,
       .generationCheckpointing,
       .standaloneAudioGeneration, .soundEffectGeneration, .speechGeneration,
-      .zImageGeneration, .ltxGeneration,
+      .zImageGeneration, .ltxGeneration, .musicGeneration,
     ]
   }()
 )
@@ -608,6 +608,20 @@ private func ltxStepCallback(
     ? 1 : 0
 }
 
+private func yue2StepCallback(
+  _ phase: UnsafePointer<CChar>?,
+  _ completed: Int32,
+  _ total: Int32,
+  _ opaque: UnsafeMutableRawPointer?
+) -> Int32 {
+  guard let opaque else { return 1 }
+  let context = Unmanaged<GenerationCallbackContext>.fromOpaque(opaque)
+    .takeUnretainedValue()
+  let name = phase.map { String(cString: $0) } ?? "denoise"
+  return context.progress(phase: name, completed: completed, total: total) == 0
+    ? 1 : 0
+}
+
 private func soundEffectStepCallback(
   _ completed: Int32,
   _ total: Int32,
@@ -680,6 +694,19 @@ private final class EngineRuntime: @unchecked Sendable {
     case .audio:
       guard engineCapabilities.supports(.standaloneAudioGeneration) else {
         EngineOutput.fail(command, message: "This engine cannot generate standalone audio")
+        return
+      }
+    case .music:
+      guard (request.music?.lyrics.count ?? 0) <= 5000,
+        !request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        request.prompt.count <= 4000,
+        request.duration.isFinite, (1...360).contains(request.duration),
+        YuE2SynthesisSteps(rawValue: request.denoisingSteps ?? 32) != nil,
+        request.firstFrameURL == nil, request.lastFrameURL == nil,
+        request.referenceImageURLs.isEmpty, request.checkpoint == nil,
+        !request.blockCache, !request.useBetaSchedule
+      else {
+        EngineOutput.fail(command, message: "YuE2 needs style, optional lyrics, 1–360 seconds and 8/16/32 steps, without H3 reference or sampling options")
         return
       }
     case .soundEffect:
@@ -893,6 +920,29 @@ private final class EngineRuntime: @unchecked Sendable {
   /// Stable Audio 3 keeps none of H3's machinery: no shared model cache, no
   /// preview decoder, no container to mux. It loads its package, denoises,
   /// and writes a WAV.
+  private func runMusic(
+    _ request: EngineGenerationRequest, command: EngineCommand,
+    packageDirectory: URL, callbackContext: GenerationCallbackContext
+  ) {
+    var error = [CChar](repeating: 0, count: 512)
+    var duration = 0.0
+    let opaque = Unmanaged.passUnretained(callbackContext).toOpaque()
+    let wrote = h3ddle_yue2_generate(
+      packageDirectory.path, "h3_shaders.metal", request.prompt,
+      request.music?.lyrics ?? "", request.duration,
+      Int32(request.denoisingSteps ?? 32), request.seed ?? 831001,
+      request.outputURL.path, yue2StepCallback, opaque, &duration, &error, error.count)
+    if callbackContext.isCancelled {
+      try? FileManager.default.removeItem(at: request.outputURL)
+      EngineOutput.emit(EngineEvent(requestID: command.requestID, jobID: command.jobID, kind: .cancelled))
+    } else if wrote == 0 {
+      EngineOutput.fail(command, message: String(cString: error))
+    } else {
+      EngineOutput.emit(EngineEvent(requestID: command.requestID, jobID: command.jobID,
+        kind: .completed, outputURL: request.outputURL, outputDuration: duration))
+    }
+  }
+
   private func runSoundEffect(
     _ request: EngineGenerationRequest,
     command: EngineCommand,
@@ -1297,6 +1347,12 @@ private final class EngineRuntime: @unchecked Sendable {
       EngineModelStore.shared.release()
       h3ddle_sa3_release()
       h3ddle_qwen_release()
+    }
+
+    if request.kind == .music {
+      runMusic(request, command: command, packageDirectory: modelDirectory,
+        callbackContext: callbackContext)
+      return
     }
 
     if request.kind == .soundEffect {

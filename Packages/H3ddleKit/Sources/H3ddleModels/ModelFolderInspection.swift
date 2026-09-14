@@ -178,6 +178,18 @@ extension ModelFolderInspection {
   /// a sound-effect package has a DiT where a speech one has a talker — so a
   /// hand-added folder does not have to be filed by hand. Sound effects and
   /// music still cannot be told apart, because they are the same layout.
+  public static let yue2Names = [
+    "model/model.safetensors", "model/config.json", "model/qwen.tiktoken",
+    "model/weights_manifest.json", "vae/model.safetensors", "vae/config.json",
+    "vae/weights_manifest.json",
+  ]
+
+  public static func holdsYuE2(at directory: URL) -> Bool {
+    yue2Names.allSatisfy {
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
+    }
+  }
+
   public static func holdsSpeech(at directory: URL) -> Bool {
     let manager = FileManager.default
     return speechNames.allSatisfy {
@@ -207,6 +219,7 @@ extension ModelFolderInspection {
     switch capability {
     case .audio:
       return soundEffectNames.allSatisfy(exists) || speechNames.allSatisfy(exists)
+        || holdsYuE2(at: directory)
     case .video:
       return videoMarkers.contains(where: exists) || Self.holdsLTX(at: directory)
     case .image:

@@ -67,6 +67,13 @@ int h3ddle_zimage_generate(const char *package_directory, const char *shaders,
                            h3ddle_zimage_step on_step,
                            h3_frame_callback on_preview, void *opaque,
                            char *error, size_t error_size);
+/* Native YuE2 music; no external interpreter or Python runtime. */
+int h3ddle_yue2_generate(const char *package_directory, const char *shaders,
+                         const char *style, const char *lyrics, double seconds,
+                         int steps, unsigned long long seed, const char *output,
+                         h3ddle_zimage_step callback, void *opaque,
+                         double *duration, char *error, size_t error_size);
+
 /* Whether this build renders this frame. Both sides must be a multiple of 16
  * and their token count a multiple of 32 — the reference pads instead, and
  * this path refuses rather than renders wrongly. */

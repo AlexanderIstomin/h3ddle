@@ -41,6 +41,9 @@ let package = Package(
         "Vendor/h3.c/h3_tokenizer.m",
         // Stable Audio 3, kept outside the vendored engine so upstream merges
         // stay clean while still reaching its headers and GPU layer.
+        "Sources/YuE2/yue2.c",
+        "Sources/YuE2/yue2_bridge.c",
+        "Sources/YuE2/yue2_tokenizer.m",
         "Sources/SA3/sa3_generate.c",
         "Sources/SA3/sa3_text.c",
         "Sources/SA3/sa3_dit.c",
@@ -90,6 +93,7 @@ let package = Package(
         .define("_DARWIN_C_SOURCE"),
         .headerSearchPath("Vendor/h3.c"),
         .headerSearchPath("Sources/SA3"),
+        .headerSearchPath("Sources/YuE2"),
         .headerSearchPath("Sources/Qwen3TTS"),
         .headerSearchPath("Sources/ZImage"),
         .headerSearchPath("Sources/LTX"),

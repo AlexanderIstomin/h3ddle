@@ -1,10 +1,105 @@
 import Foundation
+import H3ddleEngineProtocol
 import Testing
 
 @testable import H3ddleGeneration
 
 @Suite("Generation progress tracker")
 struct GenerationProgressTrackerTests {
+  @Test("YuE2 estimates from startup and hands off to measured synthesis")
+  func musicEarlyEstimate() throws {
+    let total = try #require(GenerationDurationEstimate.yue2(duration: 120, denoisingSteps: 8))
+    #expect(abs(total - 578.2) < 0.01)
+    var tracker = GenerationProgressTracker(profile: .yue2)
+    #expect(tracker.remaining(elapsed: 0, projectedTotal: total) == total)
+    for (phase, elapsed) in [("Loading YuE2", 10.0), ("Planning melody and chords", 90),
+      ("Generating music tokens", 250), ("Preparing audio context", 350)] {
+      tracker.record(phase: phase, phaseFraction: 0.5, elapsed: elapsed)
+      #expect(tracker.remaining(elapsed: elapsed, projectedTotal: total) != nil)
+    }
+    #expect(tracker.remaining(elapsed: total + 100, projectedTotal: total)! > 0)
+    tracker.record(phase: "Synthesizing audio", phaseFraction: 0, elapsed: 360)
+    #expect(tracker.remaining(elapsed: 360, projectedTotal: total) != nil)
+    tracker.record(phase: "Synthesizing audio", phaseFraction: 0.5, elapsed: 460)
+    #expect(tracker.remaining(elapsed: 460, projectedTotal: total) == 100 + total * 0.02)
+    tracker.record(phase: "Decoding audio", phaseFraction: 0, elapsed: 560)
+    #expect(tracker.remaining(elapsed: 560, projectedTotal: total) == nil)
+    #expect(tracker.isFinishing)
+  }
+
+  @Test("YuE2 initial time follows length and selected synthesis steps")
+  func musicDurationEstimate() throws {
+    let short = try #require(GenerationDurationEstimate.yue2(duration: 30, denoisingSteps: 8))
+    let long = try #require(GenerationDurationEstimate.yue2(duration: 120, denoisingSteps: 8))
+    let detailed = try #require(GenerationDurationEstimate.yue2(duration: 120, denoisingSteps: 32))
+    #expect(short < long)
+    #expect(long < detailed)
+    #expect(GenerationDurationEstimate.yue2(duration: .infinity, denoisingSteps: 8) == nil)
+    #expect(GenerationDurationEstimate.yue2(duration: 0, denoisingSteps: 8) == nil)
+    #expect(GenerationDurationEstimate.yue2(duration: 361, denoisingSteps: 8) == nil)
+    #expect(GenerationDurationEstimate.yue2(duration: 30, denoisingSteps: 4) == nil)
+  }
+
+  @Test("YuE2 token completion cannot fill the song's progress bar")
+  func musicStages() {
+    var tracker = GenerationProgressTracker(profile: .yue2)
+    tracker.record(phase: "Preparing score context", phaseFraction: 0.97, elapsed: 20)
+    #expect(tracker.overall < 0.04)
+    tracker.record(phase: "Planning melody and chords", phaseFraction: 0.99, elapsed: 180)
+    #expect(tracker.overall < 0.12)
+    tracker.record(phase: "Generating music tokens", phaseFraction: 2999.0 / 3000, elapsed: 300)
+    #expect(tracker.overall < 0.30)
+    #expect(!tracker.isFinishing)
+    #expect(tracker.remaining(elapsed: 300) == nil)
+    tracker.record(phase: "Preparing audio context", phaseFraction: 1, elapsed: 350)
+    tracker.record(phase: "Synthesizing audio", phaseFraction: 0, elapsed: 360)
+    #expect(tracker.overall == 0.35)
+    tracker.record(phase: "Synthesizing audio", phaseFraction: 0.5, elapsed: 460)
+    #expect(abs(tracker.overall - 0.66) < 1e-9)
+    #expect(tracker.remaining(elapsed: 460) == 100)
+    // A later chunk's context replay must not reset the synthesis band.
+    tracker.record(phase: "Preparing audio context", phaseFraction: 1, elapsed: 465)
+    #expect(abs(tracker.overall - 0.66) < 1e-9)
+    tracker.record(phase: "Synthesizing audio", phaseFraction: 1, elapsed: 560)
+    #expect(tracker.overall == 0.97)
+    #expect(!tracker.isFinishing)
+    tracker.record(phase: "Decoding audio", phaseFraction: 1, elapsed: 570)
+    tracker.record(phase: "Saving audio", phaseFraction: 1, elapsed: 571)
+    #expect(tracker.overall == 0.99)
+    #expect(tracker.isFinishing)
+    tracker.finish()
+    #expect(tracker.overall == 1)
+  }
+
+  @Test("A recorded native YuE2 run has advancing sub-step progress and completes",
+        .enabled(if: ProcessInfo.processInfo.environment["H3DDLE_YUE2_PROGRESS_TRACE"] != nil))
+  func recordedMusicProgress() throws {
+    struct Trace: Decodable { let elapsed: Double; let event: EngineEvent }
+    let path = try #require(ProcessInfo.processInfo.environment["H3DDLE_YUE2_PROGRESS_TRACE"])
+    let lines = try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n")
+    var tracker = GenerationProgressTracker(profile: .yue2)
+    var last = 0.0, acousticUpdates = 0
+    var completed = false
+    for line in lines {
+      let trace = try JSONDecoder().decode(Trace.self, from: Data(line.utf8))
+      if trace.event.kind == .progress {
+        let phase = trace.event.phase ?? ""
+        tracker.record(phase: phase, phaseFraction: trace.event.fractionComplete ?? 0, elapsed: trace.elapsed)
+        #expect(tracker.overall >= last)
+        #expect(tracker.overall <= 0.99)
+        if phase == "Generating music tokens" { #expect(tracker.overall <= 0.30) }
+        if phase == "Synthesizing audio" { acousticUpdates += 1 }
+        last = tracker.overall
+      } else if trace.event.kind == .completed {
+        tracker.finish()
+        completed = true
+      }
+    }
+    #expect(completed)
+    #expect(acousticUpdates >= 448)
+    #expect(tracker.overall == 1)
+  }
+
   /// The exact phase sequence a Z-Image render emits, taken from a recorded
   /// 512-pixel run: 35 encoder layers, the transformer, eight passes, the
   /// decoder. Fractions are phase-local, which is the whole difficulty —

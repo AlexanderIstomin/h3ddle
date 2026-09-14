@@ -6,6 +6,14 @@ import H3ddleEngineProtocol
 
 @Suite("Supported length")
 struct SupportedLengthTests {
+  @Test("YuE2 supports whole seconds through its six-minute token budget")
+  func yue2Range() {
+    #expect(SupportedLength.yue2.options.count == 360)
+    #expect(SupportedLength.yue2.resolved(31) == 31)
+    #expect(SupportedLength.yue2.resolved(120) == 120)
+    #expect(SupportedLength.yue2.resolved(1000) == 360)
+  }
+
   /// The numbers the released pipeline documents as trained, expressed as
   /// seconds so a control can offer them directly.
   /// LTX's grid is 8k+1 frames, a third of a second apart at 24 fps, from 17

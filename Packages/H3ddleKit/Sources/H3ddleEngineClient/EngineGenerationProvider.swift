@@ -171,6 +171,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           switch request.audioEngine {
           case .h3: .audio
           case .stableAudio: .soundEffect
+          case .yue2: .music
           case .speech: .speech
           }
         case .video: .video
@@ -206,6 +207,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
           lastFrameURL: request.lastFrameURL,
           referenceImageURLs: request.referenceImageURLs,
           speech: request.speech,
+          music: request.music,
           image: request.kind == .image && request.imageEngine == .zImage
             ? EngineImageOptions(model: .zImage, steps: request.denoisingSteps)
             : nil,
@@ -301,7 +303,7 @@ public struct EngineGenerationProvider: GenerationProvider, Sendable {
                   let displayName =
                     switch request.kind {
                     case .image: "Generated H3 Image"
-                    case .audio: "Generated H3 Audio"
+                    case .audio: request.audioEngine == .yue2 ? "Generated YuE2 Music" : "Generated H3 Audio"
                     case .video: "Generated H3 Video"
                     }
                   continuation.yield(

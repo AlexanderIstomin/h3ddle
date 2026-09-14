@@ -100,6 +100,11 @@ struct ModelChoice: Identifiable, Equatable {
   /// only the package does, which is why this is resolved from the folder and
   /// carried rather than asked for while drawing.
   var videoEngine: VideoGenerationEngine = .h3
+  var isYuE2 = false
+
+  var audioEngine: AudioGenerationEngine {
+    isYuE2 ? .yue2 : (audioRole == .speech ? .speech : .stableAudio)
+  }
   /// What the download costs, shown before the choice is made rather than
   /// in the confirmation that follows it. Zero for a folder already on disk.
   var downloadBytes: Int64
@@ -140,6 +145,12 @@ final class AppModel {
   /// joint soundtrack; the other two are the same Stable Audio transformer
   /// trained on different material.
   var audioMode: AudioGenerationMode = .speech
+  var studioYuE2Steps: YuE2SynthesisSteps = .reference {
+    didSet { userDefaults.set(studioYuE2Steps.rawValue, forKey: "H3ddle.yue2.steps") }
+  }
+  var studioYuE2Lyrics = "" {
+    didSet { userDefaults.set(studioYuE2Lyrics, forKey: "H3ddle.yue2.lyrics") }
+  }
   /// Which model the image lane draws with. Unlike audio's three modes this
   /// is not a choice beside the model: H3 and Z-Image are two models that
   /// both make a still, so the picker holds the decision and the engine is
@@ -203,6 +214,7 @@ final class AppModel {
     ModelCatalog.minimaxH3Ref2VATurboInt8,
     ModelCatalog.stableAudio3SmallSFX,
     ModelCatalog.stableAudio3SmallMusic,
+    ModelCatalog.yue2Music,
     ModelCatalog.qwen3TTSSpeech,
     ModelCatalog.zImageTurbo,
     ModelCatalog.ltx25,
@@ -482,6 +494,8 @@ final class AppModel {
     generationQueue.prepareForRelaunch()
     generationPrompt = userDefaults.string(forKey: Self.generationPromptKey) ?? ""
     studioSoundscape = userDefaults.string(forKey: Self.studioSoundscapeKey) ?? ""
+    studioYuE2Steps = YuE2SynthesisSteps(rawValue: userDefaults.integer(forKey: "H3ddle.yue2.steps")) ?? .reference
+    studioYuE2Lyrics = userDefaults.string(forKey: "H3ddle.yue2.lyrics") ?? ""
     studioMusic = userDefaults.string(forKey: Self.studioMusicKey) ?? ""
     if userDefaults.object(forKey: Self.previewDenoiseKey) != nil {
       previewDenoise = userDefaults.bool(forKey: Self.previewDenoiseKey)
@@ -566,6 +580,9 @@ final class AppModel {
     coreReuse: Int? = nil,
     previewDenoise: Bool = false
   ) -> String {
+    if kind == .audio, audioEngine == .yue2 {
+      return "Local YuE2 · Metal · \(studioYuE2Steps.rawValue) synthesis steps"
+    }
     if usesNativeEngine(for: kind) {
       let canvas = kind == .audio ? Self.audioCanvasLabel : "\(quality.canvasSize)×\(quality.canvasSize)"
       let steps = denoisingSteps ?? quality.denoisingSteps
@@ -766,7 +783,15 @@ final class AppModel {
     guard let kind = activeGenerationKind else { return nil }
     GenerationNotifier.requestAuthorizationIfNeeded()
     errorMessage = nil
-    let audioEngine = kind == .audio ? audioMode.engine : .h3
+    let audioEngine = kind == .audio ? self.audioEngine : .h3
+    if audioEngine == .yue2 {
+      guard studioYuE2Lyrics.count <= 5000, generationPrompt.count <= 4000,
+        (1...360).contains(duration)
+      else {
+        errorMessage = "YuE2 allows optional lyrics (up to 5000 characters), a style prompt (up to 4000), and a maximum length of 1–360 seconds."
+        return nil
+      }
+    }
     let imageEngine: ImageGenerationEngine = kind == .image ? self.imageEngine : .h3
     let videoEngine: VideoGenerationEngine = kind == .video ? self.videoEngine : .h3
     let usesVideoInpainting = kind == .video && videoEngine == .h3
@@ -785,9 +810,10 @@ final class AppModel {
     // the process boundary.
     let usesFastH3 = kind == .video && videoEngine == .h3
       && h3GenerationProfile == .fastH3
-    let effectiveDenoisingSteps = usesFastH3 ? 4 : denoisingSteps
+    let effectiveDenoisingSteps: Int? = audioEngine == .yue2
+      ? studioYuE2Steps.rawValue : (usesFastH3 ? 4 : denoisingSteps)
     let effectiveActiveDiTLayers = usesFastH3 ? 50 : activeDiTLayers
-    let exactH3Path = usesVideoInpainting || usesFastH3
+    let exactH3Path = usesVideoInpainting || usesFastH3 || audioEngine == .yue2
     let effectiveCoreReuse = exactH3Path ? 1 : coreReuse
     let effectiveBlockCache = exactH3Path ? false : blockCache
     let h3ModelProfile: EngineH3ModelProfile =
@@ -812,8 +838,7 @@ final class AppModel {
       kind == .image
       ? (selectedImageModelChoice?.displayName ?? "an image model")
       : (audioEngine.usesOwnPackage
-        ? (modelChoices.first { $0.isInstalled && $0.audioRole == audioMode.audioRole }?
-          .displayName ?? "an audio model")
+        ? (selectedAudioModelChoice?.displayName ?? "an audio model")
         : (selectedModelChoice?.displayName ?? "a local model folder"))
     // The audio mode is still `.speech` while the image and video studios are
     // open. It only describes an own-package run when this is actually audio;
@@ -852,6 +877,7 @@ final class AppModel {
       switch (kind, audioEngine, imageEngine, videoEngine) {
       case (.audio, .speech, _, _): nil
       case (.audio, .stableAudio, _, _): denoisingSteps ?? Self.soundEffectDefaultSteps
+      case (.audio, .yue2, _, _): effectiveDenoisingSteps ?? 32
       case (.image, _, .zImage, _): denoisingSteps ?? Self.imageModelDefaultSteps
       case (.video, _, _, .ltx): denoisingSteps ?? 8
       default: effectiveDenoisingSteps ?? quality.denoisingSteps
@@ -906,6 +932,9 @@ final class AppModel {
           duration: duration,
           denoisingSteps: resolvedSteps
         )
+      case (.audio, .yue2, _, _):
+        return GenerationDurationEstimate.yue2(
+          duration: duration, denoisingSteps: resolvedSteps ?? 32)
       case (.audio, .speech, _, _):
         let characters = prompt.trimmingCharacters(in: .whitespacesAndNewlines).count
         return GenerationDurationEstimate.speech(characterCount: characters)
@@ -994,6 +1023,7 @@ final class AppModel {
           temperature: studioSpeechTemperature
         )
         : nil,
+      music: audioEngine == .yue2 ? EngineMusicOptions(lyrics: studioYuE2Lyrics) : nil,
       prompt: composedPrompt,
       duration: duration,
       quality: quality,
@@ -1262,6 +1292,11 @@ final class AppModel {
     errorMessage = nil
     generationElapsed = 0
     generationProjectedDuration = job.projectedDuration
+      ?? (job.request.audioEngine == .yue2
+        ? GenerationDurationEstimate.yue2(
+          duration: job.request.duration,
+          denoisingSteps: job.request.denoisingSteps ?? 32)
+        : nil)
     generationPreviewImage = nil
     generationProgress = 0
     generationPhase = job.phase
@@ -1314,20 +1349,18 @@ final class AppModel {
   ) {
     let kind = request.kind
     let clock = ContinuousClock()
-    let provider: any GenerationProvider =
-      if let modelDirectory {
-        EngineGenerationProvider(
-          session: engineSession,
-          modelDirectory: modelDirectory
-        )
-      } else {
-        generationProvider
-      }
     generationTask = Task { [weak self] in
       guard let self else { return }
       var completedAsset: AssetReference?
       var failureMessage: String?
       do {
+        let provider: any GenerationProvider
+        if let modelDirectory {
+          let session = engineSession
+          provider = EngineGenerationProvider(session: session, modelDirectory: modelDirectory)
+        } else {
+          provider = generationProvider
+        }
         for try await event in provider.events(for: request) {
           switch event {
           case .progress(let phase, let fractionComplete):
@@ -1420,6 +1453,7 @@ final class AppModel {
     for request: GenerationRequest
   ) -> GenerationProgressProfile {
     if request.kind == .video, request.videoEngine == .ltx { return .ltx }
+    if request.kind == .audio, request.audioEngine == .yue2 { return .yue2 }
     if request.kind == .audio, request.audioEngine != .h3 { return .singlePhase }
     return .standard
   }
@@ -2369,12 +2403,7 @@ final class AppModel {
   /// than the manifests means a folder added by hand counts too, which it
   /// previously did not — it could be selected but never generated from.
   var audioPackageDirectory: URL? {
-    let role = audioMode.audioRole
-    let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == role }
-    if let chosen = usable.first(where: { $0.id == selectedAudioModelID }) {
-      return chosen.directory
-    }
-    return usable.first?.directory
+    selectedAudioModelChoice?.directory
   }
 
   func cancelGeneration() {
@@ -2586,6 +2615,10 @@ final class AppModel {
     studioInpaintMaskURL = request.videoInpainting?.maskURL
     studioInpaintMaskKind = request.videoInpainting?.maskKind ?? .still
     studioPreservesInpaintAudio = request.videoInpainting?.preserveSourceAudio ?? true
+    if request.audioEngine == .yue2 {
+      studioYuE2Steps = YuE2SynthesisSteps(rawValue: request.denoisingSteps ?? 32) ?? .reference
+      studioYuE2Lyrics = request.music?.lyrics ?? ""
+    }
     studioSpeechLanguage = request.speech?.language ?? .english
     studioSpeechTemperature = request.speech?.temperature
       ?? EngineSpeechOptions.defaultTemperature
@@ -2935,6 +2968,24 @@ final class AppModel {
   }
 
   #if DEBUG
+    func prepareYuE2StudioFixture() {
+      statusRefreshTask?.cancel()
+      let directory = FileManager.default.temporaryDirectory.appendingPathComponent("YuE2UIFixture")
+      let manifest = ModelCatalog.yue2Music
+      managedStatuses[manifest.id] = ManagedPackageStatus(
+        state: .installed, progress: 1, completedBytes: manifest.totalByteCount,
+        message: "UI test fixture", installedURL: directory)
+      refreshModelChoices()
+      modelChoices = modelChoices.filter { $0.id == manifest.id }
+      audioMode = .music
+      selectedAudioModelID = manifest.id
+      generationPrompt = "Acoustic folk"
+      studioYuE2Lyrics = "[Verse]\nMorning light across the bay"
+      studioYuE2Steps = .reference
+      studioSettings.duration = 10
+      activeGenerationKind = .audio
+    }
+
     /// Reproduces cancellation while the queue is already visible, without
     /// model weights or an engine helper. Its long fake phase leaves enough
     /// time for XCUITest to observe and cancel the active row.
@@ -3086,6 +3137,7 @@ final class AppModel {
           managedStatuses[manifest.id]?.message = error.localizedDescription
         }
       }
+      guard !Task.isCancelled else { return }
       self?.refreshModelChoices()
       self?.restoreSelectedModelIfNeeded()
       self?.managedModelStatusRefreshCompleted = true
@@ -3158,7 +3210,12 @@ final class AppModel {
   }
 
   var selectedAudioModelChoice: ModelChoice? {
-    modelChoices.first { $0.id == selectedAudioModelID }
+    let usable = modelChoices.filter { $0.isInstalled && $0.audioRole == audioMode.audioRole }
+    return usable.first { $0.id == selectedAudioModelID } ?? usable.first
+  }
+
+  var audioEngine: AudioGenerationEngine {
+    selectedAudioModelChoice?.audioEngine ?? audioMode.engine
   }
 
   /// Which model draws a still, resolved rather than merely stored. A choice
@@ -3217,7 +3274,7 @@ final class AppModel {
     switch kind {
     case .video: selectedModelID
     case .image: selectedImageModelChoice?.id
-    case .audio: selectedAudioModelID
+    case .audio: selectedAudioModelChoice?.id
     }
   }
 
@@ -3232,7 +3289,9 @@ final class AppModel {
     case .audio: selectedAudioModelID
     }
     guard let rememberedID else { return nil }
-    return modelChoices.first { $0.id == rememberedID }
+    return modelChoices.first {
+      $0.id == rememberedID && (kind != .audio || $0.audioRole == audioMode.audioRole)
+    }
   }
 
   func unavailableSelectedModelMessage(for kind: GenerationKind) -> String? {
@@ -3289,7 +3348,8 @@ final class AppModel {
   /// What a freshly picked model should start at, where it knows better than
   /// the quality preset. Nil leaves the preset's own count alone.
   func defaultDenoisingSteps(for choice: ModelChoice) -> Int? {
-    choice.capability == .image
+    if choice.isYuE2 { return nil }
+    return choice.capability == .image
       ? Self.imageModelDefaultSteps : choice.generationProfile.defaultDenoisingSteps
   }
 
@@ -3307,6 +3367,8 @@ final class AppModel {
       // Audio packages are read by their own engine path, so this must
       // not become the directory the H3 loader is pointed at.
       selectedAudioModelID = id
+      audioMode = choice.audioRole == .music ? .music
+        : (choice.audioRole == .speech ? .speech : .soundEffects)
     case .image:
       // Likewise its own path: an image package is not an H3 tree.
       selectedImageModelID = id
@@ -3416,6 +3478,7 @@ final class AppModel {
         generationProfile: manifest.generationProfile,
         capability: manifest.capability,
         videoEngine: manifest.id == ModelCatalog.ltx25.id ? .ltx : .h3,
+        isYuE2: manifest.id == ModelCatalog.yue2Music.id,
         downloadBytes: pendingDownloadBytes(for: manifest),
         requiredMemoryBytes: manifest.minimumUnifiedMemoryBytes,
         installedBytes: manifest.totalByteCount,
@@ -3457,6 +3520,7 @@ final class AppModel {
             // to validate it as an H3 tree and say so unhelpfully.
             videoEngine: capability == .video
               && ModelFolderInspection.holdsLTX(at: url) ? .ltx : .h3,
+            isYuE2: capability == .audio && ModelFolderInspection.holdsYuE2(at: url),
             downloadBytes: 0,
             requiredMemoryBytes: 0,
             installedBytes: 0,
@@ -3465,10 +3529,12 @@ final class AppModel {
             // Music cannot be told from sound effects — same layout — so a
             // Stable Audio folder lands under sound effects.
             audioRole: capability == .audio
-              ? (ModelFolderInspection.holdsSpeech(at: url) ? .speech : .soundEffects)
+              ? (ModelFolderInspection.holdsYuE2(at: url) ? .music
+                : (ModelFolderInspection.holdsSpeech(at: url) ? .speech : .soundEffects))
               : nil,
-            licenseName: nil,
-            licenseURL: nil
+            licenseName: ModelFolderInspection.holdsYuE2(at: url) ? "CC BY-NC 4.0" : nil,
+            licenseURL: ModelFolderInspection.holdsYuE2(at: url)
+              ? URL(string: "https://huggingface.co/m-a-p/YuE2-3B/blob/29b3558dd46954a0cd9021dc76d5c91864a0f1c7/LICENSE") : nil
           )
         )
       }

@@ -10,6 +10,32 @@ import Testing
 /// intermittently, and only once both cache tests existed.
 @Suite("Managed model packages", .serialized)
 struct ModelPackageDownloaderTests {
+  @Test("YuE2 downloads the complete native layout from immutable repositories")
+  func yue2Manifest() throws {
+    let manifest = ModelCatalog.yue2Music
+    #expect(manifest.capability == .audio)
+    #expect(manifest.audioRole == .music)
+    #expect(manifest.compatibility == .ready)
+    #expect(manifest.licenseName == "CC BY-NC 4.0")
+    #expect(manifest.files.count == 15)
+    #expect(Set(manifest.files.map(\.path)).count == 15)
+    let required = ["model/model.safetensors", "model/config.json", "model/qwen.tiktoken",
+      "model/weights_manifest.json", "vae/model.safetensors", "vae/config.json",
+      "vae/weights_manifest.json", "model/LICENSE", "vae/LICENSE"]
+    for path in required { #expect(manifest.files.contains { $0.path == path }) }
+    for file in manifest.files {
+      let vae = file.path.hasPrefix("vae/")
+      let revision = vae ? "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a" : manifest.revision
+      let repo = vae ? "m-a-p/YuE2-Vae" : "m-a-p/YuE2-3B"
+      #expect(file.sourceRepository == repo)
+      #expect(file.sourceRevision == revision)
+      #expect(file.sha256.count == 64)
+      #expect(file.byteCount > 0)
+      #expect(manifest.downloadURL(for: file).absoluteString ==
+        "https://huggingface.co/\(repo)/resolve/\(revision)/\(file.sourcePath!)")
+    }
+  }
+
   @Test("The curated INT8 package is immutable and selective")
   func curatedManifest() throws {
     let manifest = ModelCatalog.minimaxH3Ref2VAInt8
